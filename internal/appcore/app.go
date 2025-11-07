@@ -784,16 +784,15 @@ func (s *appState) pasteClipboard() {
 		s.status = "Clipboard empty"
 		return
 	}
-	start, end, ok := s.visualSelectionRange()
+	start, _, ok := s.visualSelectionRange()
 	if !ok {
-		s.status = "No selection to paste"
+		s.status = "Select destination in VISUAL mode"
 		return
 	}
 	lines := append([]string(nil), s.clipLines...)
-	s.buffer.DeleteLines(start, end)
 	s.buffer.InsertLines(start, lines)
 	s.exitVisualMode()
-	s.setCursorStatus(fmt.Sprintf("Pasted %d line(s)", len(lines)))
+	s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
 }
 
 func (s *appState) insertText(text string) {
