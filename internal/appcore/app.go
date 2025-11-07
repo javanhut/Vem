@@ -1,0 +1,841 @@
+package appcore
+
+import (
+	"fmt"
+	"image"
+	"image/color"
+	"math"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"gioui.org/app"
+	"gioui.org/font"
+	"gioui.org/font/gofont"
+	"gioui.org/io/event"
+	"gioui.org/io/key"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/text"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
+
+	"github.com/javanhut/ProjectVem/internal/editor"
+)
+
+type mode string
+
+const (
+	modeNormal mode = "NORMAL"
+	modeInsert mode = "INSERT"
+	modeVisual mode = "VISUAL"
+	modeDelete mode = "DELETE"
+)
+
+const caretBlinkInterval = 600 * time.Millisecond
+
+var (
+	highlightColor = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x55}
+	selectionColor = color.NRGBA{R: 0x1c, G: 0x39, B: 0x60, A: 0x99}
+	background     = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
+	statusBg       = color.NRGBA{R: 0x12, G: 0x17, B: 0x22, A: 0xff}
+	headerColor    = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
+	cursorColor    = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+)
+
+type appState struct {
+	theme        *material.Theme
+	buffer       *editor.Buffer
+	mode         mode
+	status       string
+	lastKey      string
+	focusTag     *int
+	pendingCount int
+	pendingGoto  bool
+	visualStart  int
+	visualActive bool
+	skipNextEdit bool
+	caretVisible bool
+	nextBlink    time.Time
+	caretReset   bool
+	clipLines    []string
+}
+
+func Run(w *app.Window) error {
+	state := newAppState()
+	return state.run(w)
+}
+
+func (s *appState) run(w *app.Window) error {
+	var ops op.Ops
+	for {
+		switch e := w.Event().(type) {
+		case app.DestroyEvent:
+			return e.Err
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			s.layout(gtx)
+			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+func newAppState() *appState {
+	theme := material.NewTheme()
+	theme.Shaper = text.NewShaper(
+		text.NoSystemFonts(),
+		text.WithCollection(gofont.Collection()),
+	)
+	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
+	return &appState{
+		theme:        theme,
+		buffer:       buf,
+		mode:         modeNormal,
+		status:       "Ready",
+		focusTag:     new(int),
+		visualStart:  -1,
+		visualActive: false,
+		caretVisible: true,
+	}
+}
+
+func (s *appState) layout(gtx layout.Context) layout.Dimensions {
+	s.handleEvents(gtx)
+	s.updateCaretBlink(gtx)
+
+	canvas := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, background)
+	canvas.Pop()
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawHeader(gtx)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			return s.drawBuffer(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawStatusBar(gtx)
+		}),
+	)
+}
+
+func (s *appState) handleEvents(gtx layout.Context) {
+	event.Op(gtx.Ops, s.focusTag)
+	if s.mode == modeInsert {
+		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
+		gtx.Execute(key.SoftKeyboardCmd{Show: true})
+	} else {
+		gtx.Execute(key.SoftKeyboardCmd{Show: false})
+	}
+	gtx.Execute(key.FocusCmd{Tag: s.focusTag})
+	for {
+		ev, ok := gtx.Event(
+			key.FocusFilter{Target: s.focusTag},
+			key.Filter{Focus: s.focusTag},
+		)
+		if !ok {
+			break
+		}
+		switch e := ev.(type) {
+		case key.FocusEvent:
+			if e.Focus {
+				s.status = "Ready"
+			}
+		case key.Event:
+			s.handleKey(e)
+		case key.EditEvent:
+			if s.mode != modeInsert || e.Text == "" {
+				continue
+			}
+			if s.skipNextEdit {
+				s.skipNextEdit = false
+				continue
+			}
+			s.insertText(e.Text)
+		}
+	}
+}
+
+func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
+	label := material.H5(s.theme, "ProjectVem · Gio Rendering Spike")
+	label.Color = headerColor
+	label.Font.Weight = font.Bold
+	inset := layout.Inset{
+		Top:    unit.Dp(12),
+		Right:  unit.Dp(16),
+		Bottom: unit.Dp(4),
+		Left:   unit.Dp(16),
+	}
+	return inset.Layout(gtx, label.Layout)
+}
+
+func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
+	lines := s.buffer.LineCount()
+	list := layout.List{Axis: layout.Vertical}
+	cursorLine := s.buffer.Cursor().Line
+	selStart, selEnd, hasSel := s.visualSelectionRange()
+	cursorCol := s.buffer.Cursor().Col
+	inset := layout.Inset{
+		Top:    unit.Dp(8),
+		Right:  unit.Dp(16),
+		Bottom: unit.Dp(8),
+		Left:   unit.Dp(16),
+	}
+	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return list.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
+			lineText := fmt.Sprintf("%4d  %s", index+1, s.buffer.Line(index))
+			label := material.Body1(s.theme, lineText)
+			label.Font.Typeface = "GoMono"
+			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+			macro := op.Record(gtx.Ops)
+			dims := label.Layout(gtx)
+			call := macro.Stop()
+
+			if hasSel && index >= selStart && index <= selEnd {
+				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+				paint.Fill(gtx.Ops, selectionColor)
+				rect.Pop()
+			}
+			if index == cursorLine {
+				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+				paint.Fill(gtx.Ops, highlightColor)
+				rect.Pop()
+			}
+
+			call.Add(gtx.Ops)
+
+			if index == cursorLine {
+				gutter := fmt.Sprintf("%4d  ", index+1)
+				prefix := s.buffer.LinePrefix(index, cursorCol)
+				charUnder := s.getCharAtCursor(index, cursorCol)
+				s.drawCursor(gtx, gutter, prefix, charUnder, dims.Size.Y)
+			}
+			return dims
+		})
+	})
+}
+
+func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
+	cur := s.buffer.Cursor()
+	status := fmt.Sprintf("MODE %s | CURSOR %d:%d | LAST %s | %s",
+		s.mode, cur.Line+1, cur.Col+1, s.lastKey, s.status,
+	)
+	label := material.Body2(s.theme, status)
+	label.Font.Typeface = "GoMono"
+
+	macro := op.Record(gtx.Ops)
+	dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, label.Layout)
+	call := macro.Stop()
+
+	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, statusBg)
+	rect.Pop()
+
+	call.Add(gtx.Ops)
+	return layout.Dimensions{
+		Size: image.Pt(gtx.Constraints.Max.X, dims.Size.Y),
+	}
+}
+
+func (s *appState) handleKey(ev key.Event) {
+	if ev.State != key.Press {
+		return
+	}
+	s.lastKey = describeKey(ev)
+	switch s.mode {
+	case modeNormal:
+		if s.handleNormalMode(ev) {
+			return
+		}
+	case modeInsert:
+		if s.handleInsertMode(ev) {
+			return
+		}
+	case modeDelete:
+		if s.handleDeleteMode(ev) {
+			return
+		}
+	case modeVisual:
+		if s.handleVisualMode(ev) {
+			return
+		}
+	}
+	s.status = "Waiting for motion"
+}
+
+func (s *appState) handleNormalMode(ev key.Event) bool {
+	switch ev.Name {
+	case key.NameEscape:
+		s.exitVisualMode()
+		s.resetCount()
+		s.status = "Staying in NORMAL"
+		return true
+	case key.NameLeftArrow:
+		s.moveCursor("left")
+		return true
+	case key.NameRightArrow:
+		s.moveCursor("right")
+		return true
+	case key.NameDownArrow:
+		s.moveCursor("down")
+		return true
+	case key.NameUpArrow:
+		s.moveCursor("up")
+		return true
+	}
+	if r, ok := printableKey(ev.Name); ok {
+		if unicode.IsDigit(r) {
+			if s.handleCountDigit(int(r - '0')) {
+				return true
+			}
+		}
+		if s.pendingGoto {
+			if s.handleGotoSequence(r) {
+				return true
+			}
+			s.pendingGoto = false
+		}
+		switch r {
+		case 'G':
+			s.gotoLineWithCount()
+			return true
+		case 'g':
+			s.startGotoSequence()
+			return true
+		}
+		switch unicode.ToLower(r) {
+		case 'i':
+			s.enterInsertMode()
+			return true
+		case 'v':
+			s.enterVisualLine()
+			return true
+		case 'd':
+			s.enterDeleteMode()
+			return true
+		case 'h':
+			s.moveCursor("left")
+			return true
+		case 'j':
+			s.moveCursor("down")
+			return true
+		case 'k':
+			s.moveCursor("up")
+			return true
+		case 'l':
+			s.moveCursor("right")
+			return true
+		case '0':
+			if s.buffer.JumpLineStart() {
+				s.setCursorStatus("Line start")
+			} else {
+				s.status = "Already at line start"
+			}
+			return true
+		case '$':
+			if s.buffer.JumpLineEnd() {
+				s.setCursorStatus("Line end")
+			} else {
+				s.status = "Already at line end"
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appState) handleInsertMode(ev key.Event) bool {
+	switch ev.Name {
+	case key.NameEscape:
+		s.mode = modeNormal
+		s.skipNextEdit = false
+		s.resetCount()
+		s.status = "Back to NORMAL"
+		return true
+	case key.NameReturn, key.NameEnter:
+		s.insertText("\n")
+		return true
+	case key.NameSpace:
+		s.insertText(" ")
+		return true
+	case key.NameDeleteBackward:
+		if s.buffer.DeleteBackward() {
+			s.setCursorStatus("Backspace")
+		} else {
+			s.status = "Start of buffer"
+		}
+		return true
+	case key.NameDeleteForward:
+		if s.buffer.DeleteForward() {
+			s.setCursorStatus("Delete")
+		} else {
+			s.status = "End of buffer"
+		}
+		return true
+	case key.NameLeftArrow:
+		s.moveCursor("left")
+		return true
+	case key.NameRightArrow:
+		s.moveCursor("right")
+		return true
+	case key.NameUpArrow:
+		s.moveCursor("up")
+		return true
+	case key.NameDownArrow:
+		s.moveCursor("down")
+		return true
+	}
+	if _, ok := printableKey(ev.Name); ok {
+		// Text insertion is driven by key.EditEvent to avoid double characters.
+		return true
+	}
+	return false
+}
+
+func (s *appState) handleDeleteMode(ev key.Event) bool {
+	switch ev.Name {
+	case key.NameEscape:
+		s.exitDeleteMode()
+		return true
+	}
+	if r, ok := printableKey(ev.Name); ok {
+		if unicode.IsDigit(r) {
+			s.handleCountDigit(int(r - '0'))
+			if s.pendingCount > 0 {
+				s.status = fmt.Sprintf("DELETE line %d (pending)", s.pendingCount)
+			} else {
+				s.status = "DELETE mode"
+			}
+			return true
+		}
+		if unicode.ToLower(r) == 'd' {
+			s.executeDeleteCommand()
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appState) handleVisualMode(ev key.Event) bool {
+	switch ev.Name {
+	case key.NameEscape:
+		s.exitVisualMode()
+		s.resetCount()
+		s.status = "Exited VISUAL"
+		return true
+	case key.NameLeftArrow:
+		s.moveCursor("left")
+		return true
+	case key.NameRightArrow:
+		s.moveCursor("right")
+		return true
+	case key.NameDownArrow:
+		s.moveCursor("down")
+		return true
+	case key.NameUpArrow:
+		s.moveCursor("up")
+		return true
+	}
+	if r, ok := printableKey(ev.Name); ok {
+		if unicode.IsDigit(r) && s.handleCountDigit(int(r-'0')) {
+			return true
+		}
+		if s.pendingGoto {
+			if s.handleGotoSequence(r) {
+				return true
+			}
+			s.pendingGoto = false
+		}
+		switch r {
+		case 'G':
+			s.gotoLineWithCount()
+			return true
+		case 'g':
+			s.startGotoSequence()
+			return true
+		}
+		switch unicode.ToLower(r) {
+		case 'c':
+			s.copyVisualSelection()
+			return true
+		case 'd':
+			s.deleteVisualSelection()
+			return true
+		case 'p':
+			s.pasteClipboard()
+			return true
+		case 'v':
+			s.exitVisualMode()
+			return true
+		case 'h':
+			s.moveCursor("left")
+			return true
+		case 'j':
+			s.moveCursor("down")
+			return true
+		case 'k':
+			s.moveCursor("up")
+			return true
+		case 'l':
+			s.moveCursor("right")
+			return true
+		case '0':
+			if s.buffer.JumpLineStart() {
+				s.setCursorStatus("Line start")
+			}
+			return true
+		case '$':
+			if s.buffer.JumpLineEnd() {
+				s.setCursorStatus("Line end")
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appState) moveCursor(direction string) {
+	var moved bool
+	switch direction {
+	case "left":
+		moved = s.buffer.MoveLeft()
+	case "right":
+		moved = s.buffer.MoveRight()
+	case "up":
+		moved = s.buffer.MoveUp()
+	case "down":
+		moved = s.buffer.MoveDown()
+	default:
+		return
+	}
+	if moved {
+		s.setCursorStatus(fmt.Sprintf("Moved %s", direction))
+	} else {
+		s.status = fmt.Sprintf("Hit %s boundary", direction)
+	}
+}
+
+func (s *appState) setCursorStatus(action string) {
+	cur := s.buffer.Cursor()
+	s.status = fmt.Sprintf("%s → %d:%d", action, cur.Line+1, cur.Col+1)
+	s.caretReset = true
+}
+
+func (s *appState) enterInsertMode() {
+	if s.mode == modeInsert {
+		return
+	}
+	s.mode = modeInsert
+	s.skipNextEdit = true
+	s.resetCount()
+	s.status = "Switched to INSERT"
+	s.caretReset = true
+}
+
+func (s *appState) getCharAtCursor(lineIdx, col int) string {
+	line := s.buffer.Line(lineIdx)
+	if col >= len([]rune(line)) {
+		return " "
+	}
+	runes := []rune(line)
+	return string(runes[col])
+}
+
+func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder string, height int) {
+	if !s.caretVisible {
+		return
+	}
+
+	full := gutter + prefix
+	x := s.measureTextWidth(gtx, full)
+
+	if s.mode == modeInsert {
+		// Thin line cursor for INSERT mode
+		width := gtx.Dp(unit.Dp(2))
+		if width < 2 {
+			width = 2
+		}
+		rect := image.Rect(x, 0, x+width, height)
+		stack := clip.Rect(rect).Push(gtx.Ops)
+		paint.Fill(gtx.Ops, cursorColor)
+		stack.Pop()
+	} else {
+		// Block cursor for NORMAL/VISUAL/DELETE modes
+		charWidth := s.measureTextWidth(gtx, charUnder)
+		if charWidth < 8 {
+			charWidth = 8
+		}
+		rect := image.Rect(x, 0, x+charWidth, height)
+		stack := clip.Rect(rect).Push(gtx.Ops)
+		paint.Fill(gtx.Ops, cursorColor)
+		stack.Pop()
+
+		// Draw the character on top of the cursor in contrasting color
+		label := material.Body1(s.theme, charUnder)
+		label.Font.Typeface = "GoMono"
+		label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
+		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+		label.Layout(gtx)
+		offset.Pop()
+	}
+}
+
+func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
+	label := material.Body1(s.theme, txt)
+	label.Font.Typeface = "GoMono"
+	measureGtx := gtx
+	measureGtx.Constraints = layout.Constraints{
+		Min: image.Point{},
+		Max: image.Point{X: math.MaxInt32, Y: math.MaxInt32},
+	}
+	macro := op.Record(measureGtx.Ops)
+	dims := label.Layout(measureGtx)
+	macro.Stop()
+	return dims.Size.X
+}
+
+func (s *appState) updateCaretBlink(gtx layout.Context) {
+	if s.caretReset {
+		s.caretVisible = true
+		s.nextBlink = gtx.Now.Add(caretBlinkInterval)
+		s.caretReset = false
+	}
+	if s.mode != modeInsert {
+		s.caretVisible = true
+		return
+	}
+	if s.nextBlink.IsZero() {
+		s.nextBlink = gtx.Now.Add(caretBlinkInterval)
+	}
+	if !s.nextBlink.After(gtx.Now) {
+		s.caretVisible = !s.caretVisible
+		s.nextBlink = gtx.Now.Add(caretBlinkInterval)
+	}
+	gtx.Execute(op.InvalidateCmd{At: s.nextBlink})
+}
+
+func (s *appState) handleCountDigit(d int) bool {
+	if s.mode == modeInsert {
+		return false
+	}
+	if d == 0 && s.pendingCount == 0 {
+		return false
+	}
+	s.pendingCount = s.pendingCount*10 + d
+	s.status = fmt.Sprintf("Count %d", s.pendingCount)
+	return true
+}
+
+func (s *appState) consumeCount(defaultVal int) int {
+	if s.pendingCount > 0 {
+		val := s.pendingCount
+		s.pendingCount = 0
+		return val
+	}
+	return defaultVal
+}
+
+func (s *appState) resetCount() {
+	s.pendingCount = 0
+	s.pendingGoto = false
+}
+
+func (s *appState) gotoLine(target int) {
+	total := s.buffer.LineCount()
+	if total == 0 {
+		return
+	}
+	if target <= 0 {
+		target = total
+	}
+	if target > total {
+		target = total
+	}
+	s.buffer.MoveToLine(target - 1)
+	s.setCursorStatus(fmt.Sprintf("Goto line %d", target))
+}
+
+func (s *appState) gotoLineWithCount() {
+	target := s.consumeCount(-1)
+	if target <= 0 {
+		target = s.buffer.LineCount()
+	}
+	s.gotoLine(target)
+}
+
+func (s *appState) enterDeleteMode() {
+	s.mode = modeDelete
+	s.pendingCount = 0
+	s.pendingGoto = false
+	s.status = "DELETE mode: type line # and press d"
+}
+
+func (s *appState) exitDeleteMode() {
+	if s.mode == modeDelete {
+		s.mode = modeNormal
+	}
+	s.resetCount()
+	s.status = "Back to NORMAL"
+}
+
+func (s *appState) executeDeleteCommand() {
+	target := s.pendingCount
+	if target <= 0 {
+		target = s.buffer.Cursor().Line + 1
+	}
+	total := s.buffer.LineCount()
+	if target < 1 || target > total {
+		s.status = fmt.Sprintf("Line %d out of range", target)
+		s.exitDeleteMode()
+		return
+	}
+	s.buffer.DeleteLines(target-1, target-1)
+	s.setCursorStatus(fmt.Sprintf("Deleted line %d", target))
+	s.exitDeleteMode()
+}
+
+func (s *appState) startGotoSequence() {
+	s.pendingGoto = true
+	s.status = "goto line: awaiting g/G"
+}
+
+func (s *appState) handleGotoSequence(r rune) bool {
+	if !s.pendingGoto {
+		return false
+	}
+	s.pendingGoto = false
+	switch r {
+	case 'g':
+		target := s.consumeCount(1)
+		s.gotoLine(target)
+		return true
+	case 'G':
+		target := s.consumeCount(s.buffer.LineCount())
+		if target <= 0 {
+			target = s.buffer.LineCount()
+		}
+		s.gotoLine(target)
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *appState) enterVisualLine() {
+	s.mode = modeVisual
+	s.visualActive = true
+	s.visualStart = s.buffer.Cursor().Line
+	s.resetCount()
+	s.status = "VISUAL (line)"
+}
+
+func (s *appState) exitVisualMode() {
+	if s.mode == modeVisual {
+		s.mode = modeNormal
+	}
+	s.visualActive = false
+	s.visualStart = -1
+}
+
+func (s *appState) visualSelectionRange() (int, int, bool) {
+	if !s.visualActive || s.visualStart < 0 {
+		return 0, 0, false
+	}
+	cur := s.buffer.Cursor().Line
+	start := s.visualStart
+	if cur < start {
+		return cur, start, true
+	}
+	return start, cur, true
+}
+
+func (s *appState) deleteVisualSelection() {
+	start, end, ok := s.visualSelectionRange()
+	if !ok {
+		s.status = "No selection"
+		return
+	}
+	s.buffer.DeleteLines(start, end)
+	s.exitVisualMode()
+	s.setCursorStatus("Deleted selection")
+}
+
+func (s *appState) copyVisualSelection() {
+	start, end, ok := s.visualSelectionRange()
+	if !ok {
+		s.status = "No selection to copy"
+		return
+	}
+	lines := s.buffer.LinesRange(start, end)
+	if len(lines) == 0 {
+		s.status = "No selection to copy"
+		return
+	}
+	s.clipLines = append([]string(nil), lines...)
+	s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
+}
+
+func (s *appState) pasteClipboard() {
+	if len(s.clipLines) == 0 {
+		s.status = "Clipboard empty"
+		return
+	}
+	start, end, ok := s.visualSelectionRange()
+	if !ok {
+		s.status = "No selection to paste"
+		return
+	}
+	lines := append([]string(nil), s.clipLines...)
+	s.buffer.DeleteLines(start, end)
+	s.buffer.InsertLines(start, lines)
+	s.exitVisualMode()
+	s.setCursorStatus(fmt.Sprintf("Pasted %d line(s)", len(lines)))
+}
+
+func (s *appState) insertText(text string) {
+	if text == "" {
+		return
+	}
+	s.buffer.InsertText(text)
+	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
+	s.skipNextEdit = false
+}
+
+func printableKey(name key.Name) (rune, bool) {
+	str := string(name)
+	r, size := utf8.DecodeRuneInString(str)
+	if r == utf8.RuneError || r == 0 || size == 0 {
+		return 0, false
+	}
+	if unicode.IsControl(r) {
+		return 0, false
+	}
+	return r, true
+}
+
+func describeKey(ev key.Event) string {
+	if ev.Name != "" {
+		return string(ev.Name)
+	}
+	return "key"
+}
+
+const sampleBuffer = `
+Goal: Build a NeoVim inspired text editor that runs anywhere.
+
+Constraints:
+  - Written in Go with a modern GPU UI (Gio spike).
+  - Ships fonts + dependencies, zero extra setup.
+  - Extensible with Lua, Python, Carrion scripting.
+  - Needs Vim motions, macros, and LSP plumbing.
+
+Next steps after spike:
+  1. Solidify architecture doc.
+  2. Validate rendering + text metrics decisions.
+  3. Expand buffer representation for edits.
+  4. Prove plugin host boundary + config flow.
+`
