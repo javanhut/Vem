@@ -238,3 +238,54 @@ func (node *TreeNode) ClearChildren() {
 func (node *TreeNode) IsRoot() bool {
 	return node.Parent == nil
 }
+
+// ChangeRoot changes the root directory of the tree to a new path.
+func (ft *FileTree) ChangeRoot(newPath string) error {
+	absPath, err := filepath.Abs(newPath)
+	if err != nil {
+		return err
+	}
+
+	root := &TreeNode{
+		Path:     absPath,
+		Name:     filepath.Base(absPath),
+		IsDir:    true,
+		Expanded: true,
+		Depth:    0,
+	}
+
+	ft.Root = root
+	ft.selectedIndex = 0
+	ft.needsRebuild = true
+
+	return nil
+}
+
+// NavigateToParent changes the root to the parent directory.
+func (ft *FileTree) NavigateToParent() error {
+	parentPath := filepath.Dir(ft.Root.Path)
+	
+	// Check if we're already at root (e.g., "/" or "C:\")
+	if parentPath == ft.Root.Path {
+		return nil // Already at filesystem root
+	}
+
+	return ft.ChangeRoot(parentPath)
+}
+
+// CurrentPath returns the current root path.
+func (ft *FileTree) CurrentPath() string {
+	if ft.Root == nil {
+		return ""
+	}
+	return ft.Root.Path
+}
+
+// IsAtFilesystemRoot returns true if we're at the filesystem root.
+func (ft *FileTree) IsAtFilesystemRoot() bool {
+	if ft.Root == nil {
+		return false
+	}
+	parentPath := filepath.Dir(ft.Root.Path)
+	return parentPath == ft.Root.Path
+}

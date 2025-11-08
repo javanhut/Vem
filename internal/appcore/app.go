@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -375,6 +376,20 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 	// Draw background
 	macro := op.Record(gtx.Ops)
 	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// Header showing current path
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			currentPath := s.fileTree.CurrentPath()
+			pathLabel := material.Body2(s.theme, currentPath)
+			pathLabel.Font.Typeface = "GoMono"
+			pathLabel.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
+			
+			return layout.Inset{
+				Top:    unit.Dp(4),
+				Right:  unit.Dp(8),
+				Bottom: unit.Dp(4),
+				Left:   unit.Dp(8),
+			}.Layout(gtx, pathLabel.Layout)
+		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			nodes := s.fileTree.GetFlatList()
 			selectedIndex := s.fileTree.SelectedIndex()
@@ -810,6 +825,15 @@ func (s *appState) handleExplorerMode(ev key.Event) bool {
 				s.status = "Tree refreshed"
 			}
 			return true
+		case 'u':
+			// Navigate to parent directory
+			if err := s.fileTree.NavigateToParent(); err != nil {
+				s.status = fmt.Sprintf("Error navigating up: %v", err)
+			} else {
+				s.fileTree.LoadInitial()
+				s.status = fmt.Sprintf("Up to %s", s.fileTree.CurrentPath())
+			}
+			return true
 		case 'q':
 			s.exitExplorerMode()
 			return true
@@ -1085,7 +1109,7 @@ func (s *appState) enterExplorerMode() {
 	s.mode = modeExplorer
 	s.explorerVisible = true
 	s.explorerFocused = true
-	s.status = "EXPLORER (j/k navigate, Enter open, Esc exit, Ctrl+T toggle)"
+	s.status = "EXPLORER (j/k nav, Enter open, u up-dir, r refresh, Esc exit, Ctrl+T toggle)"
 }
 
 func (s *appState) exitExplorerMode() {
@@ -1121,6 +1145,17 @@ func (s *appState) openSelectedNode() {
 	}
 
 	if node.IsDir {
+		// Special handling for ".." parent directory
+		if node.Name == ".." {
+			if err := s.fileTree.ChangeRoot(node.Path); err != nil {
+				s.status = fmt.Sprintf("Error navigating to parent: %v", err)
+			} else {
+				s.fileTree.LoadInitial()
+				s.status = fmt.Sprintf("Changed to %s", s.fileTree.CurrentPath())
+			}
+			return
+		}
+
 		// Toggle directory expansion
 		if node.Expanded {
 			s.fileTree.Collapse()
@@ -1278,6 +1313,10 @@ func (s *appState) executeCommandLine() {
 		s.handleListBuffersCommand()
 	case "ex", "explore":
 		s.toggleExplorer()
+	case "cd":
+		s.handleChangeDirectoryCommand(strings.TrimSpace(args))
+	case "pwd":
+		s.handlePrintWorkingDirectoryCommand()
 	default:
 		s.status = fmt.Sprintf("Unknown command: %s", name)
 	}
@@ -1345,6 +1384,64 @@ func (s *appState) handleBufferDeleteCommand(force bool) {
 func (s *appState) handleListBuffersCommand() {
 	buffers := s.bufferMgr.ListBuffers()
 	s.status = fmt.Sprintf("Buffers: %s", strings.Join(buffers, " | "))
+}
+
+func (s *appState) handleChangeDirectoryCommand(path string) {
+	if path == "" {
+		// No argument - go to home directory
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			s.status = fmt.Sprintf("Error getting home directory: %v", err)
+			return
+		}
+		path = homeDir
+	} else if path == "~" {
+		// Expand ~ to home directory
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			s.status = fmt.Sprintf("Error getting home directory: %v", err)
+			return
+		}
+		path = homeDir
+	} else if strings.HasPrefix(path, "~/") {
+		// Expand ~/path to home/path
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			s.status = fmt.Sprintf("Error getting home directory: %v", err)
+			return
+		}
+		path = filepath.Join(homeDir, path[2:])
+	}
+
+	if s.fileTree == nil {
+		s.status = "File tree not initialized"
+		return
+	}
+
+	if err := s.fileTree.ChangeRoot(path); err != nil {
+		s.status = fmt.Sprintf("Error changing directory: %v", err)
+		return
+	}
+
+	if err := s.fileTree.LoadInitial(); err != nil {
+		s.status = fmt.Sprintf("Error loading directory: %v", err)
+		return
+	}
+
+	s.status = fmt.Sprintf("Changed directory to %s", s.fileTree.CurrentPath())
+	
+	// Show explorer if not already visible
+	if !s.explorerVisible {
+		s.explorerVisible = true
+	}
+}
+
+func (s *appState) handlePrintWorkingDirectoryCommand() {
+	if s.fileTree == nil {
+		s.status = "File tree not initialized"
+		return
+	}
+	s.status = fmt.Sprintf("Current directory: %s", s.fileTree.CurrentPath())
 }
 
 func (s *appState) insertText(text string) {

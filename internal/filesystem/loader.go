@@ -20,6 +20,18 @@ func (ft *FileTree) LoadDirectory(node *TreeNode) error {
 	// Clear existing children
 	node.ClearChildren()
 
+	// Add ".." parent directory entry if not at root AND this is the tree root
+	if node == ft.Root && !ft.IsAtFilesystemRoot() {
+		parentPath := filepath.Dir(node.Path)
+		parentNode := &TreeNode{
+			Path:     parentPath,
+			Name:     "..",
+			IsDir:    true,
+			Expanded: false,
+		}
+		node.AddChild(parentNode)
+	}
+
 	for _, entry := range entries {
 		name := entry.Name()
 		
