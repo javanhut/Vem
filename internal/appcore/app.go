@@ -267,7 +267,8 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	}
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return list.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
-			lineText := fmt.Sprintf("%4d  %s", index+1, s.activeBuffer().Line(index))
+			lineContent := expandTabs(s.activeBuffer().Line(index), 4)
+			lineText := fmt.Sprintf("%4d  %s", index+1, lineContent)
 			label := material.Body1(s.theme, lineText)
 			label.Font.Typeface = "GoMono"
 			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
@@ -1499,6 +1500,27 @@ func describeKey(ev key.Event) string {
 		return string(ev.Name)
 	}
 	return "key"
+}
+
+// expandTabs converts tab characters to spaces.
+// tabWidth specifies how many spaces each tab should expand to.
+func expandTabs(s string, tabWidth int) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	var result strings.Builder
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			spaces := tabWidth - (col % tabWidth)
+			result.WriteString(strings.Repeat(" ", spaces))
+			col += spaces
+		} else {
+			result.WriteRune(r)
+			col++
+		}
+	}
+	return result.String()
 }
 
 const sampleBuffer = `
