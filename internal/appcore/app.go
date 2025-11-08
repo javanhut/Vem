@@ -236,17 +236,17 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				log.Printf("[ALT_TRACK] Alt key event received, state=%v", e.State)
 				continue
 			}
-			
+
 			// Platform quirk: ev.Modifiers is ALWAYS empty on this platform!
 			// We must rely ONLY on our tracked modifier state (ctrlPressed, shiftPressed)
 			log.Printf("[PLATFORM_QUIRK] ev.Modifiers=%v (platform never sets this)", e.Modifiers)
-			
+
 			// Save modifier state before handling key
 			hadCtrl := s.ctrlPressed
 			hadShift := s.shiftPressed
-			
+
 			s.handleKey(e)
-			
+
 			// Smart reset: If modifiers are still set after handleKey and we're in certain modes,
 			// it likely means the user released the modifier but platform didn't send Release event.
 			// Reset modifiers after successful command execution to prevent them from sticking.
@@ -601,25 +601,25 @@ func (s *appState) handleKey(ev key.Event) {
 func (s *appState) formatModifiers(mods key.Modifiers) string {
 	var parts []string
 	var tracked []string
-	
+
 	if mods.Contain(key.ModCtrl) {
 		parts = append(parts, "Ctrl")
 	}
 	if s.ctrlPressed && !mods.Contain(key.ModCtrl) {
 		tracked = append(tracked, "Ctrl")
 	}
-	
+
 	if mods.Contain(key.ModShift) {
 		parts = append(parts, "Shift")
 	}
 	if s.shiftPressed && !mods.Contain(key.ModShift) {
 		tracked = append(tracked, "Shift")
 	}
-	
+
 	if mods.Contain(key.ModAlt) {
 		parts = append(parts, "Alt")
 	}
-	
+
 	result := strings.Join(parts, "+")
 	if len(tracked) > 0 {
 		if result != "" {
@@ -627,14 +627,12 @@ func (s *appState) formatModifiers(mods key.Modifiers) string {
 		}
 		result += strings.Join(tracked, "+") + "(tracked)"
 	}
-	
+
 	if result == "" {
 		return "none"
 	}
 	return result
 }
-
-
 
 func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 	if s.isColonKey(ev) {
@@ -666,16 +664,12 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 	return false
 }
 
-
-
 func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
 	if _, ok := printableKey(ev); ok {
 		return true
 	}
 	return false
 }
-
-
 
 func (s *appState) handleDeleteModeSpecial(ev key.Event) bool {
 	if r, ok := printableKey(ev); ok {
@@ -695,8 +689,6 @@ func (s *appState) handleDeleteModeSpecial(ev key.Event) bool {
 	}
 	return false
 }
-
-
 
 func (s *appState) handleVisualModeSpecial(ev key.Event) bool {
 	if s.isColonKey(ev) {
@@ -725,12 +717,6 @@ func (s *appState) handleVisualModeSpecial(ev key.Event) bool {
 	}
 	return false
 }
-
-
-
-
-
-
 
 func (s *appState) moveCursor(direction string) {
 	var moved bool
@@ -1429,18 +1415,4 @@ func expandTabs(s string, tabWidth int) string {
 	return result.String()
 }
 
-const sampleBuffer = `
-Goal: Build a NeoVim inspired text editor that runs anywhere.
-
-Constraints:
-  - Written in Go with a modern GPU UI (Gio spike).
-  - Ships fonts + dependencies, zero extra setup.
-  - Extensible with Lua, Python, Carrion scripting.
-  - Needs Vim motions, macros, and LSP plumbing.
-
-Next steps after spike:
-  1. Solidify architecture doc.
-  2. Validate rendering + text metrics decisions.
-  3. Expand buffer representation for edits.
-  4. Prove plugin host boundary + config flow.
-`
+const sampleBuffer = ``
