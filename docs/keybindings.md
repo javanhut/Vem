@@ -234,11 +234,18 @@ EXPLORER mode is for navigating the file tree.
 | `←` | Collapse | Same as `h` |
 | `→` | Expand | Same as `l` |
 
+### File Operations
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `r` | Rename | Rename selected file or directory |
+| `d` | Delete | Delete selected file or directory (with confirmation) |
+| `n` | New File | Create a new file |
+
 ### Directory Operations
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `r` | Refresh | Reload file tree from disk |
 | `u` | Navigate Up | Change to parent directory |
 
 ## Special Sequences

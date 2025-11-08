@@ -55,6 +55,9 @@ const (
 	ActionExpandNode
 	ActionRefreshTree
 	ActionNavigateUp
+	ActionRenameFile
+	ActionDeleteFile
+	ActionCreateFile
 
 	// Buffer management
 	ActionNextBuffer
@@ -143,7 +146,9 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "k", Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: "h", Modes: nil, Action: ActionCollapseNode},
 		{Modifiers: 0, Key: "l", Modes: nil, Action: ActionExpandNode},
-		{Modifiers: 0, Key: "r", Modes: nil, Action: ActionRefreshTree},
+		{Modifiers: 0, Key: "r", Modes: nil, Action: ActionRenameFile},
+		{Modifiers: 0, Key: "d", Modes: nil, Action: ActionDeleteFile},
+		{Modifiers: 0, Key: "n", Modes: nil, Action: ActionCreateFile},
 		{Modifiers: 0, Key: "u", Modes: nil, Action: ActionNavigateUp},
 		{Modifiers: 0, Key: "q", Modes: nil, Action: ActionExitMode},
 	},
@@ -206,8 +211,8 @@ func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 	// Build the actual modifiers state
 	// PLATFORM QUIRK: ev.Modifiers is ALWAYS empty on some platforms!
 	// We MUST rely on tracked state from explicit Press/Release events
-	ctrlHeld := s.ctrlPressed   // Trust tracked state, not ev.Modifiers
-	shiftHeld := s.shiftPressed // Trust tracked state, not ev.Modifiers
+	ctrlHeld := s.ctrlPressed                   // Trust tracked state, not ev.Modifiers
+	shiftHeld := s.shiftPressed                 // Trust tracked state, not ev.Modifiers
 	altHeld := ev.Modifiers.Contain(key.ModAlt) // Alt not tracked yet
 
 	// Check if required modifiers are present
@@ -260,10 +265,10 @@ func (s *appState) matchPrintableKey(ev key.Event, target rune) bool {
 
 func (s *appState) executeAction(action Action, ev key.Event) {
 	log.Printf("[ACTION] Executing action=%v mode=%s", action, s.mode)
-	
+
 	switch action {
 	case ActionToggleExplorer:
-		log.Printf("[TOGGLE_EXPLORER] Before: visible=%v focused=%v mode=%s", 
+		log.Printf("[TOGGLE_EXPLORER] Before: visible=%v focused=%v mode=%s",
 			s.explorerVisible, s.explorerFocused, s.mode)
 		if s.fileTree == nil {
 			s.status = "File tree not available"
@@ -271,7 +276,7 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			return
 		}
 		s.toggleExplorer()
-		log.Printf("[TOGGLE_EXPLORER] After: visible=%v focused=%v mode=%s", 
+		log.Printf("[TOGGLE_EXPLORER] After: visible=%v focused=%v mode=%s",
 			s.explorerVisible, s.explorerFocused, s.mode)
 
 	case ActionFocusExplorer:
@@ -469,6 +474,21 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 				s.fileTree.LoadInitial()
 				s.status = "Up to " + s.fileTree.CurrentPath()
 			}
+		}
+
+	case ActionRenameFile:
+		if s.mode == modeExplorer && s.fileTree != nil {
+			s.enterRenameMode()
+		}
+
+	case ActionDeleteFile:
+		if s.mode == modeExplorer && s.fileTree != nil {
+			s.enterFileDeleteMode()
+		}
+
+	case ActionCreateFile:
+		if s.mode == modeExplorer && s.fileTree != nil {
+			s.enterCreateMode()
 		}
 	}
 }

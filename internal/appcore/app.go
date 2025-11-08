@@ -55,29 +55,36 @@ var (
 )
 
 type appState struct {
-	theme        *material.Theme
-	bufferMgr    *editor.BufferManager
-	fileTree     *filesystem.FileTree
-	mode         mode
-	status       string
-	lastKey      string
-	focusTag     *int
-	pendingCount int
-	pendingGoto  bool
-	visualStart  int
-	visualActive bool
-	skipNextEdit bool
-	caretVisible bool
-	nextBlink    time.Time
-	caretReset   bool
-	clipLines    []string
-	cmdText      string
-	window       *app.Window
+	theme              *material.Theme
+	bufferMgr          *editor.BufferManager
+	fileTree           *filesystem.FileTree
+	mode               mode
+	status             string
+	lastKey            string
+	focusTag           *int
+	pendingCount       int
+	pendingGoto        bool
+	visualStart        int
+	visualActive       bool
+	skipNextEdit       bool
+	skipNextFileOpEdit bool
+	caretVisible       bool
+	nextBlink          time.Time
+	caretReset         bool
+	clipLines          []string
+	cmdText            string
+	window             *app.Window
 
 	// Explorer state
 	explorerVisible bool
 	explorerWidth   int
 	explorerFocused bool
+
+	// File operation state
+	fileOpMode         string
+	fileOpInput        string
+	fileOpOriginalName string
+	fileOpTarget       *filesystem.TreeNode
 
 	// Modifier tracking (some platforms don't report modifiers correctly)
 	ctrlPressed  bool
@@ -268,6 +275,16 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				continue
 			}
 
+			// Handle file operation input if active
+			if s.fileOpMode == "rename" || s.fileOpMode == "create" {
+				if s.skipNextFileOpEdit {
+					s.skipNextFileOpEdit = false
+					continue
+				}
+				s.appendFileOpInput(e.Text)
+				continue
+			}
+
 			// Check for colon to enter command mode (except in INSERT and COMMAND modes)
 			if e.Text == ":" && s.mode != modeInsert && s.mode != modeCommand {
 				s.enterCommandMode()
@@ -362,33 +379,41 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 }
 
 func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
-	cur := s.activeBuffer().Cursor()
+	var status string
 
-	// Build status line with file info
-	fileName := s.activeBuffer().FilePath()
-	if fileName == "" {
-		fileName = "[No Name]"
+	// If file operation is active, show ONLY the file operation prompt for clarity
+	if s.fileOpMode != "" {
+		status = s.getFileOpPrompt()
+	} else {
+		cur := s.activeBuffer().Cursor()
+
+		// Build status line with file info
+		fileName := s.activeBuffer().FilePath()
+		if fileName == "" {
+			fileName = "[No Name]"
+		}
+
+		modFlag := ""
+		if s.activeBuffer().Modified() {
+			modFlag = " [+]"
+		}
+
+		bufferInfo := ""
+		if s.bufferMgr.BufferCount() > 1 {
+			bufferInfo = fmt.Sprintf(" | BUFFER %d/%d", s.bufferMgr.ActiveIndex()+1, s.bufferMgr.BufferCount())
+		}
+
+		// Add fullscreen indicator
+		fullscreenInfo := ""
+		if s.currentWindowMode == app.Fullscreen {
+			fullscreenInfo = " | FULLSCREEN"
+		}
+
+		status = fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s | %s",
+			s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, fullscreenInfo, s.status,
+		)
 	}
 
-	modFlag := ""
-	if s.activeBuffer().Modified() {
-		modFlag = " [+]"
-	}
-
-	bufferInfo := ""
-	if s.bufferMgr.BufferCount() > 1 {
-		bufferInfo = fmt.Sprintf(" | BUFFER %d/%d", s.bufferMgr.ActiveIndex()+1, s.bufferMgr.BufferCount())
-	}
-
-	// Add fullscreen indicator
-	fullscreenInfo := ""
-	if s.currentWindowMode == app.Fullscreen {
-		fullscreenInfo = " | FULLSCREEN"
-	}
-
-	status := fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s | %s",
-		s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, fullscreenInfo, s.status,
-	)
 	label := material.Body2(s.theme, status)
 	label.Font.Typeface = "GoMono"
 	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
@@ -537,6 +562,13 @@ func (s *appState) handleKey(ev key.Event) {
 		return
 	}
 	s.lastKey = describeKey(ev)
+
+	// Handle file operation input if active
+	if s.fileOpMode != "" {
+		if s.handleFileOpKey(ev) {
+			return
+		}
+	}
 
 	// Debug logging
 	modStr := s.formatModifiers(ev.Modifiers)
@@ -1335,6 +1367,198 @@ func (s *appState) handlePrintWorkingDirectoryCommand() {
 		return
 	}
 	s.status = fmt.Sprintf("Current directory: %s", s.fileTree.CurrentPath())
+}
+
+func (s *appState) enterRenameMode() {
+	if s.fileTree == nil {
+		return
+	}
+	node := s.fileTree.SelectedNode()
+	if node == nil {
+		return
+	}
+	s.fileOpMode = "rename"
+	s.fileOpOriginalName = node.Name
+	s.fileOpInput = ""
+	s.fileOpTarget = node
+	s.skipNextFileOpEdit = true
+	s.status = fmt.Sprintf("Rename File: %s -> ", s.fileOpOriginalName)
+}
+
+func (s *appState) enterCreateMode() {
+	if s.fileTree == nil {
+		return
+	}
+	node := s.fileTree.SelectedNode()
+	if node == nil {
+		return
+	}
+	s.fileOpMode = "create"
+	s.fileOpInput = ""
+	s.fileOpTarget = node
+	s.skipNextFileOpEdit = true
+	s.status = "New file: "
+}
+
+func (s *appState) enterFileDeleteMode() {
+	if s.fileTree == nil {
+		return
+	}
+	node := s.fileTree.SelectedNode()
+	if node == nil {
+		return
+	}
+	s.fileOpMode = "delete"
+	s.fileOpTarget = node
+	s.status = fmt.Sprintf("Delete '%s'? (y/n)", node.Name)
+}
+
+func (s *appState) completeFileOp() {
+	if s.fileTree == nil || s.fileOpTarget == nil {
+		s.cancelFileOp()
+		return
+	}
+
+	var err error
+	switch s.fileOpMode {
+	case "rename":
+		if s.fileOpInput == "" {
+			s.status = "Error: filename cannot be empty"
+			s.cancelFileOp()
+			return
+		}
+		err = s.fileTree.RenameNode(s.fileOpTarget, s.fileOpInput)
+		if err != nil {
+			s.status = fmt.Sprintf("Rename failed: %v", err)
+		} else {
+			s.status = fmt.Sprintf("Renamed to '%s'", s.fileOpInput)
+			s.fileTree.Refresh()
+		}
+
+	case "create":
+		if s.fileOpInput == "" {
+			s.status = "Error: filename cannot be empty"
+			s.cancelFileOp()
+			return
+		}
+		err = s.fileTree.CreateFile(s.fileOpTarget, s.fileOpInput)
+		if err != nil {
+			s.status = fmt.Sprintf("Create failed: %v", err)
+		} else {
+			// Check if directories were created
+			if strings.Contains(s.fileOpInput, "/") || strings.Contains(s.fileOpInput, string(filepath.Separator)) {
+				s.status = fmt.Sprintf("Created path '%s'", s.fileOpInput)
+			} else {
+				s.status = fmt.Sprintf("Created '%s'", s.fileOpInput)
+			}
+			s.fileTree.Refresh()
+		}
+
+	case "delete":
+		err = s.fileTree.DeleteNode(s.fileOpTarget)
+		if err != nil {
+			s.status = fmt.Sprintf("Delete failed: %v", err)
+		} else {
+			s.status = fmt.Sprintf("Deleted '%s'", s.fileOpTarget.Name)
+			s.fileTree.Refresh()
+		}
+	}
+
+	s.cancelFileOp()
+}
+
+func (s *appState) cancelFileOp() {
+	s.fileOpMode = ""
+	s.fileOpInput = ""
+	s.fileOpOriginalName = ""
+	s.fileOpTarget = nil
+	s.skipNextFileOpEdit = false
+}
+
+func (s *appState) appendFileOpInput(text string) {
+	if text == "" {
+		return
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			continue
+		}
+		s.fileOpInput += string(r)
+	}
+	s.status = s.getFileOpPrompt()
+}
+
+func (s *appState) deleteFileOpChar() {
+	if s.fileOpInput == "" {
+		return
+	}
+	runes := []rune(s.fileOpInput)
+	if len(runes) == 0 {
+		return
+	}
+	s.fileOpInput = string(runes[:len(runes)-1])
+	s.status = s.getFileOpPrompt()
+}
+
+func (s *appState) getFileOpPrompt() string {
+	switch s.fileOpMode {
+	case "rename":
+		return fmt.Sprintf("Rename File: %s -> %s", s.fileOpOriginalName, s.fileOpInput)
+	case "create":
+		return fmt.Sprintf("New file: %s", s.fileOpInput)
+	case "delete":
+		if s.fileOpTarget != nil {
+			return fmt.Sprintf("Delete '%s'? (y/n)", s.fileOpTarget.Name)
+		}
+		return "Delete? (y/n)"
+	default:
+		return s.status
+	}
+}
+
+func (s *appState) handleFileOpKey(ev key.Event) bool {
+	// Handle Escape to cancel
+	if ev.Name == key.NameEscape {
+		s.status = "Cancelled"
+		s.cancelFileOp()
+		return true
+	}
+
+	// Handle delete confirmation (y/n)
+	if s.fileOpMode == "delete" {
+		if r, ok := printableKey(ev); ok {
+			switch unicode.ToLower(r) {
+			case 'y':
+				s.completeFileOp()
+				return true
+			case 'n':
+				s.cancelFileOp()
+				return true
+			}
+		}
+		return true
+	}
+
+	// Handle Enter to complete rename/create
+	if ev.Name == key.NameReturn || ev.Name == key.NameEnter {
+		s.completeFileOp()
+		return true
+	}
+
+	// Handle Backspace for rename/create
+	if ev.Name == key.NameDeleteBackward {
+		s.deleteFileOpChar()
+		return true
+	}
+
+	// Consume ALL other keys when in rename/create mode
+	// This prevents 'd', 'r', 'n' from triggering explorer actions while typing
+	// Text input is handled separately via EditEvent
+	if s.fileOpMode == "rename" || s.fileOpMode == "create" {
+		return true
+	}
+
+	return false
 }
 
 func (s *appState) insertText(text string) {
