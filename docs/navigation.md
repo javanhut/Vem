@@ -1,6 +1,38 @@
 # Navigation in ProjectVem
 
-This document describes the navigation features in ProjectVem, including pane navigation between the file tree explorer and the text editor.
+This document describes the navigation features in ProjectVem, including pane navigation between the file tree explorer and the text editor, and fullscreen mode management.
+
+## Fullscreen Mode
+
+### Shift+Enter - Toggle Fullscreen
+
+ProjectVem supports fullscreen mode for a distraction-free editing experience.
+
+#### Key Binding
+- **Shift+Enter**: Toggle fullscreen mode (works in all modes)
+
+#### Behavior
+- Press `Shift+Enter` to enter fullscreen mode
+- Press `Shift+Enter` again to return to windowed mode
+- Status bar displays "FULLSCREEN" indicator when in fullscreen mode
+- Works across all editor modes (NORMAL, INSERT, VISUAL, DELETE, EXPLORER, COMMAND)
+- Supported on all platforms (Linux, macOS, Windows, WebAssembly)
+
+#### Mode-Specific Behavior
+- **INSERT mode**: Regular `Enter` still inserts a newline; only `Shift+Enter` toggles fullscreen
+- **COMMAND mode**: `Shift+Enter` toggles fullscreen instead of executing the command
+- **EXPLORER mode**: `Shift+Enter` toggles fullscreen; regular `Enter` still opens files/directories
+- **NORMAL, VISUAL, DELETE modes**: `Shift+Enter` toggles fullscreen without side effects
+
+#### Visual Feedback
+- Status bar shows "FULLSCREEN" indicator when in fullscreen mode
+- Status message confirms "Entered fullscreen (Shift+Enter to exit)" or "Exited fullscreen"
+- Window state is automatically tracked even if changed via OS window controls
+
+#### Platform Notes
+- On some platforms, fullscreen behavior may vary based on OS window management
+- Gio UI handles platform-specific fullscreen implementation automatically
+- Wayland, X11, macOS, and Windows are all fully supported
 
 ## Pane Navigation
 
@@ -9,9 +41,9 @@ ProjectVem supports Vim-like split pane navigation with keyboard shortcuts to qu
 ### Key Bindings
 
 #### Ctrl+H - Jump to File Tree
-When in **NORMAL mode** with the editor focused:
+When in **NORMAL mode** with the editor focused and tree view visible:
 - Pressing `Ctrl+H` will switch focus to the file tree explorer (left pane)
-- If the tree view is hidden, it will be opened and focused automatically
+- **Note**: The tree view must already be open (use `Ctrl+T` to open it first)
 - The focused pane is indicated by a blue border on its edge
 - Status bar will display: "Focus: Tree View (use Ctrl+L to return to editor)"
 
@@ -42,16 +74,20 @@ The currently focused pane is indicated by:
 ### Navigation Flow
 
 ```
-NORMAL mode (Editor focused)
+1. Open tree view with Ctrl+T
+
+NORMAL mode (Editor focused, tree visible)
     |
-    | Ctrl+H
+    | Ctrl+H (jump to tree)
     v
 EXPLORER mode (Tree view focused)
     |
-    | Ctrl+L
+    | Ctrl+L (jump to editor)
     v
-NORMAL mode (Editor focused)
+NORMAL mode (Editor focused, tree visible)
 ```
+
+**Important**: `Ctrl+H` and `Ctrl+L` only work when the tree view is already open. Use `Ctrl+T` to toggle the tree view visibility first.
 
 ### File Tree Navigation
 
@@ -86,9 +122,17 @@ You can also control the explorer from command mode:
 
 ### Quick Pane Switching
 
-1. While editing, press `Ctrl+H` to quickly check the file tree
-2. Navigate with `j`/`k` to find a file
-3. Press `Ctrl+L` to return to editing without opening anything
+1. Press `Ctrl+T` to open the file tree (if not already visible)
+2. While editing, press `Ctrl+H` to quickly jump to the file tree
+3. Navigate with `j`/`k` to find a file
+4. Press `Ctrl+L` to return to editing without opening anything
+
+### Workflow Tips
+
+- Use `Ctrl+T` to show/hide the tree view when you need more screen space
+- Once the tree is visible, use `Ctrl+H` and `Ctrl+L` to quickly switch focus
+- Normal Vim navigation (`h`, `j`, `k`, `l`) works as expected in the editor
+- In EXPLORER mode, `h`/`l` collapse/expand directories instead of moving the cursor
 
 ## Implementation Details
 

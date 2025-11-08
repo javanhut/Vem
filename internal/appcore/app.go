@@ -72,15 +72,18 @@ type appState struct {
 	clipLines    []string
 	cmdText      string
 	window       *app.Window
-	
+
 	// Explorer state
 	explorerVisible bool
 	explorerWidth   int
 	explorerFocused bool
-	
-	// Key state tracking
-	ctrlPressed  bool
-	shiftPressed bool
+
+	// Modifier tracking (some platforms don't report Ctrl in key modifiers)
+	ctrlPressed bool
+
+	// Fullscreen state tracking
+	currentWindowMode app.WindowMode
+	wasFullscreen     bool
 }
 
 func Run(w *app.Window) error {
@@ -95,6 +98,9 @@ func (s *appState) run(w *app.Window) error {
 		switch e := w.Event().(type) {
 		case app.DestroyEvent:
 			return e.Err
+		case app.ConfigEvent:
+			// Track window mode changes (fullscreen, maximized, etc.)
+			s.currentWindowMode = e.Config.Mode
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 			s.layout(gtx)
@@ -109,10 +115,10 @@ func newAppState() *appState {
 		text.NoSystemFonts(),
 		text.WithCollection(gofont.Collection()),
 	)
-	
+
 	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
 	bufferMgr := editor.NewBufferManagerWithBuffer(buf)
-	
+
 	// Initialize file tree from current directory
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -124,20 +130,22 @@ func newAppState() *appState {
 	} else {
 		fileTree.LoadInitial()
 	}
-	
+
 	return &appState{
-		theme:           theme,
-		bufferMgr:       bufferMgr,
-		fileTree:        fileTree,
-		mode:            modeNormal,
-		status:          "Ready",
-		focusTag:        new(int),
-		visualStart:     -1,
-		visualActive:    false,
-		caretVisible:    true,
-		explorerVisible: false,
-		explorerWidth:   250,
-		explorerFocused: false,
+		theme:             theme,
+		bufferMgr:         bufferMgr,
+		fileTree:          fileTree,
+		mode:              modeNormal,
+		status:            "Ready",
+		focusTag:          new(int),
+		visualStart:       -1,
+		visualActive:      false,
+		caretVisible:      true,
+		explorerVisible:   false,
+		explorerWidth:     250,
+		explorerFocused:   false,
+		currentWindowMode: app.Windowed,
+		wasFullscreen:     false,
 	}
 }
 
@@ -207,14 +215,10 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.status = "Ready"
 			}
 		case key.Event:
-			// Track Ctrl and Shift key state
-			if e.Name == "Ctrl" {
+			if e.Name == key.NameCtrl {
 				s.ctrlPressed = (e.State == key.Press)
+				continue
 			}
-			if e.Name == "Shift" {
-				s.shiftPressed = (e.State == key.Press)
-			}
-			
 			s.handleKey(e)
 		case key.EditEvent:
 			if e.Text == "" {
@@ -242,7 +246,7 @@ func (s *appState) handleEvents(gtx layout.Context) {
 }
 
 func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
-	label := material.H5(s.theme, "ProjectVem · Gio Rendering Spike")
+	label := material.H5(s.theme, "Vem")
 	label.Color = headerColor
 	label.Font.Weight = font.Bold
 	inset := layout.Inset{
@@ -260,7 +264,7 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	cursorLine := s.activeBuffer().Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
 	cursorCol := s.activeBuffer().Cursor().Col
-	
+
 	// Draw focus border on the left edge if editor is focused (not in explorer mode)
 	editorFocused := !s.explorerFocused && s.explorerVisible
 	if editorFocused {
@@ -272,7 +276,7 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 		paint.Fill(gtx.Ops, focusBorder)
 		borderRect.Pop()
 	}
-	
+
 	inset := layout.Inset{
 		Top:    unit.Dp(8),
 		Right:  unit.Dp(16),
@@ -316,25 +320,31 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 
 func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 	cur := s.activeBuffer().Cursor()
-	
+
 	// Build status line with file info
 	fileName := s.activeBuffer().FilePath()
 	if fileName == "" {
 		fileName = "[No Name]"
 	}
-	
+
 	modFlag := ""
 	if s.activeBuffer().Modified() {
 		modFlag = " [+]"
 	}
-	
+
 	bufferInfo := ""
 	if s.bufferMgr.BufferCount() > 1 {
 		bufferInfo = fmt.Sprintf(" | BUFFER %d/%d", s.bufferMgr.ActiveIndex()+1, s.bufferMgr.BufferCount())
 	}
-	
-	status := fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s | %s",
-		s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, s.status,
+
+	// Add fullscreen indicator
+	fullscreenInfo := ""
+	if s.currentWindowMode == app.Fullscreen {
+		fullscreenInfo = " | FULLSCREEN"
+	}
+
+	status := fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s | %s",
+		s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, fullscreenInfo, s.status,
 	)
 	label := material.Body2(s.theme, status)
 	label.Font.Typeface = "GoMono"
@@ -397,7 +407,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 			pathLabel := material.Body2(s.theme, currentPath)
 			pathLabel.Font.Typeface = "GoMono"
 			pathLabel.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
-			
+
 			return layout.Inset{
 				Top:    unit.Dp(4),
 				Right:  unit.Dp(8),
@@ -484,6 +494,11 @@ func (s *appState) handleKey(ev key.Event) {
 		return
 	}
 	s.lastKey = describeKey(ev)
+
+	if s.handleGlobalShortcuts(ev) {
+		return
+	}
+
 	switch s.mode {
 	case modeNormal:
 		if s.handleNormalMode(ev) {
@@ -513,35 +528,84 @@ func (s *appState) handleKey(ev key.Event) {
 	s.status = "Waiting for motion"
 }
 
+func (s *appState) handleGlobalShortcuts(ev key.Event) bool {
+	ctrlActive := ev.Modifiers.Contain(key.ModCtrl) || s.ctrlPressed
+	if !ctrlActive {
+		return false
+	}
+
+	name := strings.ToLower(string(ev.Name))
+
+	switch name {
+	case "t":
+		return s.handleCtrlToggleExplorerShortcut()
+	case "h":
+		return s.handleCtrlFocusExplorerShortcut()
+	case "l":
+		return s.handleCtrlFocusEditorShortcut()
+	}
+
+	// Some platforms send DeleteBackward for Ctrl+H
+	if ev.Name == key.NameDeleteBackward {
+		return s.handleCtrlFocusExplorerShortcut()
+	}
+
+	return false
+}
+
+func (s *appState) handleCtrlToggleExplorerShortcut() bool {
+	if s.fileTree == nil {
+		s.status = "File tree not available"
+		return true
+	}
+	s.toggleExplorer()
+	return true
+}
+
+func (s *appState) handleCtrlFocusExplorerShortcut() bool {
+	if s.fileTree == nil {
+		s.status = "File tree not available"
+		return true
+	}
+	if s.mode == modeExplorer {
+		s.status = "Tree view already focused (Ctrl+L to return to editor)"
+		return true
+	}
+	if s.mode != modeNormal {
+		s.status = "Ctrl+H available from NORMAL mode"
+		return true
+	}
+	s.enterExplorerMode()
+	s.status = "Focus: Tree View (use Ctrl+L to return to editor)"
+	return true
+}
+
+func (s *appState) handleCtrlFocusEditorShortcut() bool {
+	if !s.explorerVisible {
+		s.status = "Tree view hidden (Ctrl+T to open)"
+		return true
+	}
+	if s.mode != modeExplorer {
+		s.status = "Editor already focused"
+		return true
+	}
+	s.exitExplorerMode()
+	s.status = "Focus: Editor (use Ctrl+H to return to tree view)"
+	return true
+}
+
 func (s *appState) handleNormalMode(ev key.Event) bool {
+	// Check for Shift+Enter to toggle fullscreen
+	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
+		s.toggleFullscreen()
+		return true
+	}
+
 	if s.isColonKey(ev) {
 		s.enterCommandMode()
 		return true
 	}
-	
-	// Check for Ctrl+T to toggle tree view
-	// Since Gio sends Ctrl and T as separate events, we track Ctrl state manually
-	if s.ctrlPressed && (ev.Name == "T" || ev.Name == "t") && ev.State == key.Press {
-		s.toggleExplorer()
-		return true
-	}
-	
-	// Check for Ctrl+H to jump to tree view (left pane)
-	if s.ctrlPressed && (ev.Name == "H" || ev.Name == "h") && ev.State == key.Press {
-		if s.fileTree != nil && s.explorerVisible {
-			s.enterExplorerMode()
-			s.status = "Focus: Tree View (use Ctrl+L to return to editor)"
-		} else if s.fileTree != nil {
-			// Tree view exists but hidden, show it and focus it
-			s.explorerVisible = true
-			s.enterExplorerMode()
-			s.status = "Tree View opened and focused (use Ctrl+L to return to editor)"
-		} else {
-			s.status = "No tree view available (open one with Ctrl+T)"
-		}
-		return true
-	}
-	
+
 	switch ev.Name {
 	case key.NameEscape:
 		s.exitVisualMode()
@@ -585,6 +649,9 @@ func (s *appState) handleNormalMode(ev key.Event) bool {
 		case 'i':
 			s.enterInsertMode()
 			return true
+		case 't':
+			s.enterExplorerMode()
+			return true
 		case 'v':
 			s.enterVisualLine()
 			return true
@@ -623,6 +690,12 @@ func (s *appState) handleNormalMode(ev key.Event) bool {
 }
 
 func (s *appState) handleInsertMode(ev key.Event) bool {
+	// Check for Shift+Enter to toggle fullscreen (before regular Enter handling)
+	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
+		s.toggleFullscreen()
+		return true
+	}
+
 	switch ev.Name {
 	case key.NameEscape:
 		s.mode = modeNormal
@@ -671,6 +744,12 @@ func (s *appState) handleInsertMode(ev key.Event) bool {
 }
 
 func (s *appState) handleDeleteMode(ev key.Event) bool {
+	// Check for Shift+Enter to toggle fullscreen
+	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
+		s.toggleFullscreen()
+		return true
+	}
+
 	switch ev.Name {
 	case key.NameEscape:
 		s.exitDeleteMode()
@@ -695,6 +774,12 @@ func (s *appState) handleDeleteMode(ev key.Event) bool {
 }
 
 func (s *appState) handleVisualMode(ev key.Event) bool {
+	// Check for Shift+Enter to toggle fullscreen
+	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
+		s.toggleFullscreen()
+		return true
+	}
+
 	if s.isColonKey(ev) {
 		s.enterCommandMode()
 		return true
@@ -777,6 +862,12 @@ func (s *appState) handleVisualMode(ev key.Event) bool {
 }
 
 func (s *appState) handleCommandMode(ev key.Event) bool {
+	// Check for Shift+Enter to toggle fullscreen (before regular Enter handling)
+	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
+		s.toggleFullscreen()
+		return true
+	}
+
 	switch ev.Name {
 	case key.NameEscape:
 		s.exitCommandMode()
@@ -797,16 +888,9 @@ func (s *appState) handleExplorerMode(ev key.Event) bool {
 		return false
 	}
 
-	// Check for Ctrl+T to toggle tree view (close it when in explorer mode)
-	if s.ctrlPressed && (ev.Name == "T" || ev.Name == "t") && ev.State == key.Press {
-		s.toggleExplorer()
-		return true
-	}
-	
-	// Check for Ctrl+L to jump back to editor (right pane)
-	if s.ctrlPressed && (ev.Name == "L" || ev.Name == "l") && ev.State == key.Press {
-		s.exitExplorerMode()
-		s.status = "Focus: Editor (use Ctrl+H to return to tree view)"
+	// Check for Shift+Enter to toggle fullscreen (before regular Enter handling)
+	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
+		s.toggleFullscreen()
 		return true
 	}
 
@@ -1183,6 +1267,24 @@ func (s *appState) toggleExplorer() {
 	}
 }
 
+func (s *appState) toggleFullscreen() {
+	if s.window == nil {
+		return
+	}
+
+	if s.currentWindowMode == app.Fullscreen {
+		// Exit fullscreen - return to windowed mode
+		s.window.Option(app.Windowed.Option())
+		s.status = "Exited fullscreen"
+		s.wasFullscreen = false
+	} else {
+		// Enter fullscreen
+		s.window.Perform(system.ActionFullscreen)
+		s.status = "Entered fullscreen (Shift+Enter to exit)"
+		s.wasFullscreen = true
+	}
+}
+
 func (s *appState) openSelectedNode() {
 	if s.fileTree == nil {
 		return
@@ -1376,7 +1478,7 @@ func (s *appState) handleQuitCommand(force bool) {
 		s.status = fmt.Sprintf("Error: %v", err)
 		return
 	}
-	
+
 	// If no buffers left, close the window
 	if s.bufferMgr.BufferCount() == 0 || (s.bufferMgr.BufferCount() == 1 && s.activeBuffer().FilePath() == "") {
 		s.requestClose()
@@ -1394,12 +1496,12 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 		// Save as
 		err = s.bufferMgr.SaveAs(arg)
 	}
-	
+
 	if err != nil {
 		s.status = fmt.Sprintf("Write failed: %v", err)
 		return
 	}
-	
+
 	filename := s.activeBuffer().FilePath()
 	if andQuit {
 		s.handleQuitCommand(false)
@@ -1414,7 +1516,7 @@ func (s *appState) handleEditCommand(path string) {
 		s.status = "E471: Argument required"
 		return
 	}
-	
+
 	if _, err := s.bufferMgr.OpenFile(path); err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", path, err)
 	} else {
@@ -1478,7 +1580,7 @@ func (s *appState) handleChangeDirectoryCommand(path string) {
 	}
 
 	s.status = fmt.Sprintf("Changed directory to %s", s.fileTree.CurrentPath())
-	
+
 	// Show explorer if not already visible
 	if !s.explorerVisible {
 		s.explorerVisible = true

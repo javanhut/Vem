@@ -35,6 +35,9 @@ If the build fails with `fatal error: vulkan/vulkan.h: No such file or directory
 - `d`: enter DELETE mode. Type a line number (optional) and press `d` again to delete that line (e.g., `d 5 d` removes line 5). `<Esc>` cancels and returns to NORMAL.
 - `<Esc>`: return to NORMAL mode.
 
+### Window Management
+- `Shift+Enter`: toggle fullscreen mode (works in all modes).
+
 ### File Tree Explorer
 - `Ctrl+T`: toggle the file tree explorer visibility.
 - `Ctrl+H`: jump from editor to file tree (opens tree if hidden).
@@ -60,6 +63,7 @@ If the build fails with `fatal error: vulkan/vulkan.h: No such file or directory
 - Status bar updates mirror cursor moves and record the last key observed so you can confirm actions as you type.
 - Focused pane is indicated by a blue border (file tree or editor).
 - Mode indicator shows current mode (NORMAL, INSERT, VISUAL, DELETE, EXPLORER, COMMAND).
+- Fullscreen indicator shows "FULLSCREEN" in status bar when in fullscreen mode.
 
 ## Next steps
 1. **Text editing**: extend `internal/editor.Buffer` with insert/delete operations and wire `key.EditEvent` data into mutations.

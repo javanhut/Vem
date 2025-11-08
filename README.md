@@ -11,8 +11,12 @@ A NeoVim-inspired text editor written in Go with Gio UI, designed to run cross-p
 - Multi-buffer support
 - Vim-style commands (`:e`, `:w`, `:q`, etc.)
 - Pane navigation between file tree and editor
+- Fullscreen mode toggle for distraction-free editing
 
 ### Key Bindings
+
+#### Window Management
+- `Shift+Enter`: Toggle fullscreen mode
 
 #### Pane Navigation
 - `Ctrl+H`: Jump to file tree explorer (opens if hidden)
