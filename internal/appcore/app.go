@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -15,6 +16,7 @@ import (
 	"gioui.org/font/gofont"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -24,15 +26,18 @@ import (
 	"gioui.org/widget/material"
 
 	"github.com/javanhut/ProjectVem/internal/editor"
+	"github.com/javanhut/ProjectVem/internal/filesystem"
 )
 
 type mode string
 
 const (
-	modeNormal mode = "NORMAL"
-	modeInsert mode = "INSERT"
-	modeVisual mode = "VISUAL"
-	modeDelete mode = "DELETE"
+	modeNormal   mode = "NORMAL"
+	modeInsert   mode = "INSERT"
+	modeVisual   mode = "VISUAL"
+	modeDelete   mode = "DELETE"
+	modeCommand  mode = "COMMAND"
+	modeExplorer mode = "EXPLORER"
 )
 
 const caretBlinkInterval = 600 * time.Millisecond
@@ -48,7 +53,8 @@ var (
 
 type appState struct {
 	theme        *material.Theme
-	buffer       *editor.Buffer
+	bufferMgr    *editor.BufferManager
+	fileTree     *filesystem.FileTree
 	mode         mode
 	status       string
 	lastKey      string
@@ -62,6 +68,17 @@ type appState struct {
 	nextBlink    time.Time
 	caretReset   bool
 	clipLines    []string
+	cmdText      string
+	window       *app.Window
+	
+	// Explorer state
+	explorerVisible bool
+	explorerWidth   int
+	explorerFocused bool
+	
+	// Key state tracking
+	ctrlPressed  bool
+	shiftPressed bool
 }
 
 func Run(w *app.Window) error {
@@ -70,6 +87,7 @@ func Run(w *app.Window) error {
 }
 
 func (s *appState) run(w *app.Window) error {
+	s.window = w
 	var ops op.Ops
 	for {
 		switch e := w.Event().(type) {
@@ -89,17 +107,44 @@ func newAppState() *appState {
 		text.NoSystemFonts(),
 		text.WithCollection(gofont.Collection()),
 	)
+	
 	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
-	return &appState{
-		theme:        theme,
-		buffer:       buf,
-		mode:         modeNormal,
-		status:       "Ready",
-		focusTag:     new(int),
-		visualStart:  -1,
-		visualActive: false,
-		caretVisible: true,
+	bufferMgr := editor.NewBufferManagerWithBuffer(buf)
+	
+	// Initialize file tree from current directory
+	workDir, err := os.Getwd()
+	if err != nil {
+		workDir = "."
 	}
+	fileTree, err := filesystem.NewFileTree(workDir)
+	if err != nil {
+		fileTree = nil
+	} else {
+		fileTree.LoadInitial()
+	}
+	
+	return &appState{
+		theme:           theme,
+		bufferMgr:       bufferMgr,
+		fileTree:        fileTree,
+		mode:            modeNormal,
+		status:          "Ready",
+		focusTag:        new(int),
+		visualStart:     -1,
+		visualActive:    false,
+		caretVisible:    true,
+		explorerVisible: false,
+		explorerWidth:   250,
+		explorerFocused: false,
+	}
+}
+
+// activeBuffer returns the active buffer (helper method).
+func (s *appState) activeBuffer() *editor.Buffer {
+	if s.bufferMgr == nil {
+		return nil
+	}
+	return s.bufferMgr.ActiveBuffer()
 }
 
 func (s *appState) layout(gtx layout.Context) layout.Dimensions {
@@ -115,9 +160,23 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 			return s.drawHeader(gtx)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			if s.explorerVisible && s.fileTree != nil {
+				// Horizontal split: explorer | editor
+				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return s.drawFileExplorer(gtx)
+					}),
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						return s.drawBuffer(gtx)
+					}),
+				)
+			}
 			return s.drawBuffer(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if s.mode == modeCommand {
+				return s.drawCommandBar(gtx)
+			}
 			return s.drawStatusBar(gtx)
 		}),
 	)
@@ -125,7 +184,7 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 
 func (s *appState) handleEvents(gtx layout.Context) {
 	event.Op(gtx.Ops, s.focusTag)
-	if s.mode == modeInsert {
+	if s.mode == modeInsert || s.mode == modeCommand {
 		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
 		gtx.Execute(key.SoftKeyboardCmd{Show: true})
 	} else {
@@ -146,16 +205,36 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.status = "Ready"
 			}
 		case key.Event:
+			// Track Ctrl and Shift key state
+			if e.Name == "Ctrl" {
+				s.ctrlPressed = (e.State == key.Press)
+			}
+			if e.Name == "Shift" {
+				s.shiftPressed = (e.State == key.Press)
+			}
+			
 			s.handleKey(e)
 		case key.EditEvent:
-			if s.mode != modeInsert || e.Text == "" {
+			if e.Text == "" {
 				continue
 			}
-			if s.skipNextEdit {
-				s.skipNextEdit = false
+
+			// Check for colon to enter command mode (except in INSERT and COMMAND modes)
+			if e.Text == ":" && s.mode != modeInsert && s.mode != modeCommand {
+				s.enterCommandMode()
 				continue
 			}
-			s.insertText(e.Text)
+
+			switch s.mode {
+			case modeInsert:
+				if s.skipNextEdit {
+					s.skipNextEdit = false
+					continue
+				}
+				s.insertText(e.Text)
+			case modeCommand:
+				s.appendCommandText(e.Text)
+			}
 		}
 	}
 }
@@ -174,11 +253,11 @@ func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
 }
 
 func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
-	lines := s.buffer.LineCount()
+	lines := s.activeBuffer().LineCount()
 	list := layout.List{Axis: layout.Vertical}
-	cursorLine := s.buffer.Cursor().Line
+	cursorLine := s.activeBuffer().Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
-	cursorCol := s.buffer.Cursor().Col
+	cursorCol := s.activeBuffer().Cursor().Col
 	inset := layout.Inset{
 		Top:    unit.Dp(8),
 		Right:  unit.Dp(16),
@@ -187,7 +266,7 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	}
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return list.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
-			lineText := fmt.Sprintf("%4d  %s", index+1, s.buffer.Line(index))
+			lineText := fmt.Sprintf("%4d  %s", index+1, s.activeBuffer().Line(index))
 			label := material.Body1(s.theme, lineText)
 			label.Font.Typeface = "GoMono"
 			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
@@ -210,7 +289,7 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 
 			if index == cursorLine {
 				gutter := fmt.Sprintf("%4d  ", index+1)
-				prefix := s.buffer.LinePrefix(index, cursorCol)
+				prefix := s.activeBuffer().LinePrefix(index, cursorCol)
 				charUnder := s.getCharAtCursor(index, cursorCol)
 				s.drawCursor(gtx, gutter, prefix, charUnder, dims.Size.Y)
 			}
@@ -220,12 +299,30 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 }
 
 func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
-	cur := s.buffer.Cursor()
-	status := fmt.Sprintf("MODE %s | CURSOR %d:%d | LAST %s | %s",
-		s.mode, cur.Line+1, cur.Col+1, s.lastKey, s.status,
+	cur := s.activeBuffer().Cursor()
+	
+	// Build status line with file info
+	fileName := s.activeBuffer().FilePath()
+	if fileName == "" {
+		fileName = "[No Name]"
+	}
+	
+	modFlag := ""
+	if s.activeBuffer().Modified() {
+		modFlag = " [+]"
+	}
+	
+	bufferInfo := ""
+	if s.bufferMgr.BufferCount() > 1 {
+		bufferInfo = fmt.Sprintf(" | BUFFER %d/%d", s.bufferMgr.ActiveIndex()+1, s.bufferMgr.BufferCount())
+	}
+	
+	status := fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s | %s",
+		s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, s.status,
 	)
 	label := material.Body2(s.theme, status)
 	label.Font.Typeface = "GoMono"
+	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 	macro := op.Record(gtx.Ops)
 	dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, label.Layout)
@@ -238,6 +335,106 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 	call.Add(gtx.Ops)
 	return layout.Dimensions{
 		Size: image.Pt(gtx.Constraints.Max.X, dims.Size.Y),
+	}
+}
+
+func (s *appState) drawCommandBar(gtx layout.Context) layout.Dimensions {
+	prompt := ":" + s.cmdText
+	label := material.Body2(s.theme, prompt)
+	label.Font.Typeface = "GoMono"
+	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+
+	macro := op.Record(gtx.Ops)
+	dims := layout.UniformInset(unit.Dp(8)).Layout(gtx, label.Layout)
+	call := macro.Stop()
+
+	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, statusBg)
+	rect.Pop()
+
+	call.Add(gtx.Ops)
+	return layout.Dimensions{
+		Size: image.Pt(gtx.Constraints.Max.X, dims.Size.Y),
+	}
+}
+
+func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
+	if s.fileTree == nil {
+		return layout.Dimensions{}
+	}
+
+	explorerBg := color.NRGBA{R: 0x15, G: 0x1a, B: 0x28, A: 0xff}
+	selectedBg := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x88}
+	dirColor := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	fileColor := color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+
+	width := gtx.Dp(unit.Dp(s.explorerWidth))
+	gtx.Constraints.Max.X = width
+	gtx.Constraints.Min.X = width
+
+	// Draw background
+	macro := op.Record(gtx.Ops)
+	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			nodes := s.fileTree.GetFlatList()
+			selectedIndex := s.fileTree.SelectedIndex()
+
+			list := layout.List{Axis: layout.Vertical}
+			inset := layout.Inset{
+				Top:    unit.Dp(8),
+				Right:  unit.Dp(8),
+				Bottom: unit.Dp(8),
+				Left:   unit.Dp(8),
+			}
+
+			return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return list.Layout(gtx, len(nodes), func(gtx layout.Context, index int) layout.Dimensions {
+					node := nodes[index]
+
+					// Draw selection highlight
+					if index == selectedIndex {
+						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, gtx.Dp(unit.Dp(20)))}.Push(gtx.Ops)
+						paint.Fill(gtx.Ops, selectedBg)
+						rect.Pop()
+					}
+
+					// Build line text with indentation
+					indent := strings.Repeat("  ", node.Depth)
+					icon := "  "
+					if node.IsDir {
+						if node.Expanded {
+							icon = "▼ "
+						} else {
+							icon = "▶ "
+						}
+					}
+					lineText := indent + icon + node.Name
+
+					// Render text
+					label := material.Body2(s.theme, lineText)
+					label.Font.Typeface = "GoMono"
+					if node.IsDir {
+						label.Color = dirColor
+					} else {
+						label.Color = fileColor
+					}
+
+					return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, label.Layout)
+				})
+			})
+		}),
+	)
+	call := macro.Stop()
+
+	// Fill background
+	rect := clip.Rect{Max: image.Pt(width, gtx.Constraints.Max.Y)}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, explorerBg)
+	rect.Pop()
+
+	call.Add(gtx.Ops)
+
+	return layout.Dimensions{
+		Size: image.Pt(width, dims.Size.Y),
 	}
 }
 
@@ -263,11 +460,31 @@ func (s *appState) handleKey(ev key.Event) {
 		if s.handleVisualMode(ev) {
 			return
 		}
+	case modeCommand:
+		if s.handleCommandMode(ev) {
+			return
+		}
+	case modeExplorer:
+		if s.handleExplorerMode(ev) {
+			return
+		}
 	}
 	s.status = "Waiting for motion"
 }
 
 func (s *appState) handleNormalMode(ev key.Event) bool {
+	if s.isColonKey(ev) {
+		s.enterCommandMode()
+		return true
+	}
+	
+	// Check for Ctrl+T to toggle tree view
+	// Since Gio sends Ctrl and T as separate events, we track Ctrl state manually
+	if s.ctrlPressed && (ev.Name == "T" || ev.Name == "t") && ev.State == key.Press {
+		s.toggleExplorer()
+		return true
+	}
+	
 	switch ev.Name {
 	case key.NameEscape:
 		s.exitVisualMode()
@@ -287,7 +504,7 @@ func (s *appState) handleNormalMode(ev key.Event) bool {
 		s.moveCursor("up")
 		return true
 	}
-	if r, ok := printableKey(ev.Name); ok {
+	if r, ok := printableKey(ev); ok {
 		if unicode.IsDigit(r) {
 			if s.handleCountDigit(int(r - '0')) {
 				return true
@@ -330,14 +547,14 @@ func (s *appState) handleNormalMode(ev key.Event) bool {
 			s.moveCursor("right")
 			return true
 		case '0':
-			if s.buffer.JumpLineStart() {
+			if s.activeBuffer().JumpLineStart() {
 				s.setCursorStatus("Line start")
 			} else {
 				s.status = "Already at line start"
 			}
 			return true
 		case '$':
-			if s.buffer.JumpLineEnd() {
+			if s.activeBuffer().JumpLineEnd() {
 				s.setCursorStatus("Line end")
 			} else {
 				s.status = "Already at line end"
@@ -363,14 +580,14 @@ func (s *appState) handleInsertMode(ev key.Event) bool {
 		s.insertText(" ")
 		return true
 	case key.NameDeleteBackward:
-		if s.buffer.DeleteBackward() {
+		if s.activeBuffer().DeleteBackward() {
 			s.setCursorStatus("Backspace")
 		} else {
 			s.status = "Start of buffer"
 		}
 		return true
 	case key.NameDeleteForward:
-		if s.buffer.DeleteForward() {
+		if s.activeBuffer().DeleteForward() {
 			s.setCursorStatus("Delete")
 		} else {
 			s.status = "End of buffer"
@@ -389,7 +606,7 @@ func (s *appState) handleInsertMode(ev key.Event) bool {
 		s.moveCursor("down")
 		return true
 	}
-	if _, ok := printableKey(ev.Name); ok {
+	if _, ok := printableKey(ev); ok {
 		// Text insertion is driven by key.EditEvent to avoid double characters.
 		return true
 	}
@@ -402,7 +619,7 @@ func (s *appState) handleDeleteMode(ev key.Event) bool {
 		s.exitDeleteMode()
 		return true
 	}
-	if r, ok := printableKey(ev.Name); ok {
+	if r, ok := printableKey(ev); ok {
 		if unicode.IsDigit(r) {
 			s.handleCountDigit(int(r - '0'))
 			if s.pendingCount > 0 {
@@ -421,6 +638,10 @@ func (s *appState) handleDeleteMode(ev key.Event) bool {
 }
 
 func (s *appState) handleVisualMode(ev key.Event) bool {
+	if s.isColonKey(ev) {
+		s.enterCommandMode()
+		return true
+	}
 	switch ev.Name {
 	case key.NameEscape:
 		s.exitVisualMode()
@@ -440,7 +661,7 @@ func (s *appState) handleVisualMode(ev key.Event) bool {
 		s.moveCursor("up")
 		return true
 	}
-	if r, ok := printableKey(ev.Name); ok {
+	if r, ok := printableKey(ev); ok {
 		if unicode.IsDigit(r) && s.handleCountDigit(int(r-'0')) {
 			return true
 		}
@@ -484,12 +705,12 @@ func (s *appState) handleVisualMode(ev key.Event) bool {
 			s.moveCursor("right")
 			return true
 		case '0':
-			if s.buffer.JumpLineStart() {
+			if s.activeBuffer().JumpLineStart() {
 				s.setCursorStatus("Line start")
 			}
 			return true
 		case '$':
-			if s.buffer.JumpLineEnd() {
+			if s.activeBuffer().JumpLineEnd() {
 				s.setCursorStatus("Line end")
 			}
 			return true
@@ -498,17 +719,117 @@ func (s *appState) handleVisualMode(ev key.Event) bool {
 	return false
 }
 
+func (s *appState) handleCommandMode(ev key.Event) bool {
+	switch ev.Name {
+	case key.NameEscape:
+		s.exitCommandMode()
+		s.status = "Command cancelled"
+		return true
+	case key.NameReturn, key.NameEnter:
+		s.executeCommandLine()
+		return true
+	case key.NameDeleteBackward:
+		s.deleteCommandChar()
+		return true
+	}
+	return false
+}
+
+func (s *appState) handleExplorerMode(ev key.Event) bool {
+	if s.fileTree == nil {
+		return false
+	}
+
+	// Check for Ctrl+T to toggle tree view (close it when in explorer mode)
+	if s.ctrlPressed && (ev.Name == "T" || ev.Name == "t") && ev.State == key.Press {
+		s.toggleExplorer()
+		return true
+	}
+
+	switch ev.Name {
+	case key.NameEscape:
+		s.exitExplorerMode()
+		return true
+	case key.NameReturn, key.NameEnter:
+		s.openSelectedNode()
+		return true
+	case key.NameUpArrow:
+		if s.fileTree.MoveUp() {
+			s.status = "Explorer: moved up"
+		}
+		return true
+	case key.NameDownArrow:
+		if s.fileTree.MoveDown() {
+			s.status = "Explorer: moved down"
+		}
+		return true
+	case key.NameLeftArrow:
+		if s.fileTree.Collapse() {
+			s.status = "Explorer: collapsed"
+		}
+		return true
+	case key.NameRightArrow:
+		if s.fileTree.Expand() {
+			if node := s.fileTree.SelectedNode(); node != nil && node.IsDir {
+				s.fileTree.ExpandAndLoad(node)
+			}
+			s.status = "Explorer: expanded"
+		}
+		return true
+	}
+
+	if r, ok := printableKey(ev); ok {
+		switch unicode.ToLower(r) {
+		case 'j':
+			if s.fileTree.MoveDown() {
+				s.status = "Explorer: moved down"
+			}
+			return true
+		case 'k':
+			if s.fileTree.MoveUp() {
+				s.status = "Explorer: moved up"
+			}
+			return true
+		case 'h':
+			if s.fileTree.Collapse() {
+				s.status = "Explorer: collapsed"
+			}
+			return true
+		case 'l':
+			if s.fileTree.Expand() {
+				if node := s.fileTree.SelectedNode(); node != nil && node.IsDir {
+					s.fileTree.ExpandAndLoad(node)
+				}
+				s.status = "Explorer: expanded"
+			}
+			return true
+		case 'r':
+			if err := s.fileTree.Refresh(); err != nil {
+				s.status = fmt.Sprintf("Refresh error: %v", err)
+			} else {
+				s.status = "Tree refreshed"
+			}
+			return true
+		case 'q':
+			s.exitExplorerMode()
+			return true
+		}
+	}
+
+	return false
+}
+
 func (s *appState) moveCursor(direction string) {
 	var moved bool
 	switch direction {
 	case "left":
-		moved = s.buffer.MoveLeft()
+		moved = s.activeBuffer().MoveLeft()
 	case "right":
-		moved = s.buffer.MoveRight()
+		moved = s.activeBuffer().MoveRight()
 	case "up":
-		moved = s.buffer.MoveUp()
+		moved = s.activeBuffer().MoveUp()
 	case "down":
-		moved = s.buffer.MoveDown()
+		moved = s.activeBuffer().MoveDown()
 	default:
 		return
 	}
@@ -520,7 +841,7 @@ func (s *appState) moveCursor(direction string) {
 }
 
 func (s *appState) setCursorStatus(action string) {
-	cur := s.buffer.Cursor()
+	cur := s.activeBuffer().Cursor()
 	s.status = fmt.Sprintf("%s → %d:%d", action, cur.Line+1, cur.Col+1)
 	s.caretReset = true
 }
@@ -537,7 +858,7 @@ func (s *appState) enterInsertMode() {
 }
 
 func (s *appState) getCharAtCursor(lineIdx, col int) string {
-	line := s.buffer.Line(lineIdx)
+	line := s.activeBuffer().Line(lineIdx)
 	if col >= len([]rune(line)) {
 		return " "
 	}
@@ -645,7 +966,7 @@ func (s *appState) resetCount() {
 }
 
 func (s *appState) gotoLine(target int) {
-	total := s.buffer.LineCount()
+	total := s.activeBuffer().LineCount()
 	if total == 0 {
 		return
 	}
@@ -655,14 +976,14 @@ func (s *appState) gotoLine(target int) {
 	if target > total {
 		target = total
 	}
-	s.buffer.MoveToLine(target - 1)
+	s.activeBuffer().MoveToLine(target - 1)
 	s.setCursorStatus(fmt.Sprintf("Goto line %d", target))
 }
 
 func (s *appState) gotoLineWithCount() {
 	target := s.consumeCount(-1)
 	if target <= 0 {
-		target = s.buffer.LineCount()
+		target = s.activeBuffer().LineCount()
 	}
 	s.gotoLine(target)
 }
@@ -685,15 +1006,15 @@ func (s *appState) exitDeleteMode() {
 func (s *appState) executeDeleteCommand() {
 	target := s.pendingCount
 	if target <= 0 {
-		target = s.buffer.Cursor().Line + 1
+		target = s.activeBuffer().Cursor().Line + 1
 	}
-	total := s.buffer.LineCount()
+	total := s.activeBuffer().LineCount()
 	if target < 1 || target > total {
 		s.status = fmt.Sprintf("Line %d out of range", target)
 		s.exitDeleteMode()
 		return
 	}
-	s.buffer.DeleteLines(target-1, target-1)
+	s.activeBuffer().DeleteLines(target-1, target-1)
 	s.setCursorStatus(fmt.Sprintf("Deleted line %d", target))
 	s.exitDeleteMode()
 }
@@ -714,9 +1035,9 @@ func (s *appState) handleGotoSequence(r rune) bool {
 		s.gotoLine(target)
 		return true
 	case 'G':
-		target := s.consumeCount(s.buffer.LineCount())
+		target := s.consumeCount(s.activeBuffer().LineCount())
 		if target <= 0 {
-			target = s.buffer.LineCount()
+			target = s.activeBuffer().LineCount()
 		}
 		s.gotoLine(target)
 		return true
@@ -728,9 +1049,18 @@ func (s *appState) handleGotoSequence(r rune) bool {
 func (s *appState) enterVisualLine() {
 	s.mode = modeVisual
 	s.visualActive = true
-	s.visualStart = s.buffer.Cursor().Line
+	s.visualStart = s.activeBuffer().Cursor().Line
 	s.resetCount()
 	s.status = "VISUAL (line)"
+}
+
+func (s *appState) enterCommandMode() {
+	if s.mode == modeCommand {
+		return
+	}
+	s.mode = modeCommand
+	s.cmdText = ""
+	s.status = "COMMAND (:...)"
 }
 
 func (s *appState) exitVisualMode() {
@@ -741,11 +1071,80 @@ func (s *appState) exitVisualMode() {
 	s.visualStart = -1
 }
 
+func (s *appState) exitCommandMode() {
+	if s.mode == modeCommand {
+		s.mode = modeNormal
+	}
+	s.cmdText = ""
+}
+
+func (s *appState) enterExplorerMode() {
+	if s.mode == modeExplorer {
+		return
+	}
+	s.mode = modeExplorer
+	s.explorerVisible = true
+	s.explorerFocused = true
+	s.status = "EXPLORER (j/k navigate, Enter open, Esc exit, Ctrl+T toggle)"
+}
+
+func (s *appState) exitExplorerMode() {
+	s.mode = modeNormal
+	s.explorerFocused = false
+	s.status = "Back to NORMAL"
+}
+
+func (s *appState) toggleExplorer() {
+	if s.explorerVisible {
+		// Hide explorer completely
+		s.explorerVisible = false
+		s.explorerFocused = false
+		if s.mode == modeExplorer {
+			s.mode = modeNormal
+		}
+		s.status = "Explorer closed"
+	} else {
+		// Show and enter explorer
+		s.explorerVisible = true
+		s.enterExplorerMode()
+	}
+}
+
+func (s *appState) openSelectedNode() {
+	if s.fileTree == nil {
+		return
+	}
+
+	node := s.fileTree.SelectedNode()
+	if node == nil {
+		return
+	}
+
+	if node.IsDir {
+		// Toggle directory expansion
+		if node.Expanded {
+			s.fileTree.Collapse()
+		} else {
+			s.fileTree.Expand()
+			s.fileTree.ExpandAndLoad(node)
+		}
+		return
+	}
+
+	// Open file
+	if _, err := s.bufferMgr.OpenFile(node.Path); err != nil {
+		s.status = fmt.Sprintf("Error opening %s: %v", node.Name, err)
+	} else {
+		s.exitExplorerMode()
+		s.status = fmt.Sprintf("Opened %s", node.Name)
+	}
+}
+
 func (s *appState) visualSelectionRange() (int, int, bool) {
 	if !s.visualActive || s.visualStart < 0 {
 		return 0, 0, false
 	}
-	cur := s.buffer.Cursor().Line
+	cur := s.activeBuffer().Cursor().Line
 	start := s.visualStart
 	if cur < start {
 		return cur, start, true
@@ -759,7 +1158,7 @@ func (s *appState) deleteVisualSelection() {
 		s.status = "No selection"
 		return
 	}
-	s.buffer.DeleteLines(start, end)
+	s.activeBuffer().DeleteLines(start, end)
 	s.exitVisualMode()
 	s.setCursorStatus("Deleted selection")
 }
@@ -770,7 +1169,7 @@ func (s *appState) copyVisualSelection() {
 		s.status = "No selection to copy"
 		return
 	}
-	lines := s.buffer.LinesRange(start, end)
+	lines := s.activeBuffer().LinesRange(start, end)
 	if len(lines) == 0 {
 		s.status = "No selection to copy"
 		return
@@ -790,28 +1189,210 @@ func (s *appState) pasteClipboard() {
 		return
 	}
 	lines := append([]string(nil), s.clipLines...)
-	s.buffer.InsertLines(start, lines)
+	s.activeBuffer().InsertLines(start, lines)
 	s.exitVisualMode()
 	s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
+}
+
+func (s *appState) isColonKey(ev key.Event) bool {
+	if string(ev.Name) == ":" {
+		return true
+	}
+	if ev.Modifiers.Contain(key.ModShift) && string(ev.Name) == ";" {
+		return true
+	}
+	return false
+}
+
+func (s *appState) appendCommandText(text string) {
+	if text == "" {
+		return
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			continue
+		}
+		s.cmdText += string(r)
+	}
+}
+
+func (s *appState) deleteCommandChar() {
+	if s.cmdText == "" {
+		return
+	}
+	runes := []rune(s.cmdText)
+	if len(runes) == 0 {
+		return
+	}
+	s.cmdText = string(runes[:len(runes)-1])
+}
+
+func (s *appState) executeCommandLine() {
+	cmd := strings.TrimSpace(s.cmdText)
+	s.exitCommandMode()
+	if cmd == "" {
+		s.status = "No command"
+		return
+	}
+	if strings.HasPrefix(cmd, ":") {
+		cmd = strings.TrimSpace(cmd[1:])
+	}
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		s.status = "No command"
+		return
+	}
+	name := strings.ToLower(fields[0])
+	args := ""
+	if len(fields) > 1 {
+		args = strings.Join(fields[1:], " ")
+	}
+	switch name {
+	case "q", "quit":
+		s.handleQuitCommand(false)
+	case "q!":
+		s.handleQuitCommand(true)
+	case "w", "write":
+		s.handleWriteCommand(strings.TrimSpace(args), false)
+	case "wq":
+		s.handleWriteCommand(strings.TrimSpace(args), true)
+	case "e", "edit":
+		s.handleEditCommand(strings.TrimSpace(args))
+	case "bn", "bnext":
+		if s.bufferMgr.NextBuffer() {
+			s.status = "Switched to next buffer"
+		} else {
+			s.status = "Already at last buffer"
+		}
+	case "bp", "bprev":
+		if s.bufferMgr.PrevBuffer() {
+			s.status = "Switched to previous buffer"
+		} else {
+			s.status = "Already at first buffer"
+		}
+	case "bd", "bdelete":
+		s.handleBufferDeleteCommand(false)
+	case "bd!":
+		s.handleBufferDeleteCommand(true)
+	case "ls", "buffers":
+		s.handleListBuffersCommand()
+	case "ex", "explore":
+		s.toggleExplorer()
+	default:
+		s.status = fmt.Sprintf("Unknown command: %s", name)
+	}
+}
+
+func (s *appState) handleQuitCommand(force bool) {
+	if err := s.bufferMgr.CloseActiveBuffer(force); err != nil {
+		s.status = fmt.Sprintf("Error: %v", err)
+		return
+	}
+	
+	// If no buffers left, close the window
+	if s.bufferMgr.BufferCount() == 0 || (s.bufferMgr.BufferCount() == 1 && s.activeBuffer().FilePath() == "") {
+		s.requestClose()
+	} else {
+		s.status = "Buffer closed"
+	}
+}
+
+func (s *appState) handleWriteCommand(arg string, andQuit bool) {
+	var err error
+	if arg == "" {
+		// Save to current file
+		err = s.bufferMgr.SaveActiveBuffer()
+	} else {
+		// Save as
+		err = s.bufferMgr.SaveAs(arg)
+	}
+	
+	if err != nil {
+		s.status = fmt.Sprintf("Write failed: %v", err)
+		return
+	}
+	
+	filename := s.activeBuffer().FilePath()
+	if andQuit {
+		s.handleQuitCommand(false)
+		s.status = fmt.Sprintf("Wrote + closed %s", filename)
+		return
+	}
+	s.status = fmt.Sprintf("Wrote %d line(s) → %s", s.activeBuffer().LineCount(), filename)
+}
+
+func (s *appState) handleEditCommand(path string) {
+	if path == "" {
+		s.status = "E471: Argument required"
+		return
+	}
+	
+	if _, err := s.bufferMgr.OpenFile(path); err != nil {
+		s.status = fmt.Sprintf("Error opening %s: %v", path, err)
+	} else {
+		s.status = fmt.Sprintf("Opened %s", path)
+	}
+}
+
+func (s *appState) handleBufferDeleteCommand(force bool) {
+	if err := s.bufferMgr.CloseActiveBuffer(force); err != nil {
+		s.status = fmt.Sprintf("Error: %v", err)
+	} else {
+		s.status = "Buffer deleted"
+	}
+}
+
+func (s *appState) handleListBuffersCommand() {
+	buffers := s.bufferMgr.ListBuffers()
+	s.status = fmt.Sprintf("Buffers: %s", strings.Join(buffers, " | "))
 }
 
 func (s *appState) insertText(text string) {
 	if text == "" {
 		return
 	}
-	s.buffer.InsertText(text)
+	s.activeBuffer().InsertText(text)
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
 	s.skipNextEdit = false
 }
 
-func printableKey(name key.Name) (rune, bool) {
-	str := string(name)
-	r, size := utf8.DecodeRuneInString(str)
-	if r == utf8.RuneError || r == 0 || size == 0 {
+func (s *appState) saveBufferToFile(path string) error {
+	if path == "" {
+		return fmt.Errorf("no file name")
+	}
+	lines := make([]string, s.activeBuffer().LineCount())
+	for i := 0; i < len(lines); i++ {
+		lines[i] = s.activeBuffer().Line(i)
+	}
+	content := strings.Join(lines, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func (s *appState) requestClose() {
+	if s.window == nil {
+		return
+	}
+	s.window.Perform(system.ActionClose)
+}
+
+func printableKey(ev key.Event) (rune, bool) {
+	str := string(ev.Name)
+	if utf8.RuneCountInString(str) != 1 {
+		return 0, false
+	}
+	r, _ := utf8.DecodeRuneInString(str)
+	if r == utf8.RuneError || r == 0 {
 		return 0, false
 	}
 	if unicode.IsControl(r) {
 		return 0, false
+	}
+	// Gio reports punctuation keys like Shift+; as ';' with ModShift; normalize to ':'.
+	if r == ';' && ev.Modifiers.Contain(key.ModShift) {
+		r = ':'
 	}
 	return r, true
 }

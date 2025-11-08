@@ -1,14 +1,17 @@
 package editor
 
 import (
+	"os"
 	"strings"
 	"unicode/utf8"
 )
 
 // Buffer represents an in-memory text buffer with a Vim-style cursor.
 type Buffer struct {
-	lines  []string
-	cursor Cursor
+	lines    []string
+	cursor   Cursor
+	filePath string
+	modified bool
 }
 
 // Cursor stores the current line/column position (1 rune == 1 column).
@@ -122,6 +125,7 @@ func (b *Buffer) DeleteLines(start, end int) {
 	}
 	b.cursor.Line = start
 	b.clampColumn()
+	b.markModified()
 }
 
 // InsertLines inserts the provided lines at the given index, adjusting the cursor to the end of the block.
@@ -143,6 +147,7 @@ func (b *Buffer) InsertLines(at int, lines []string) {
 	b.lines = newLines
 	b.cursor.Line = at + len(linesCopy) - 1
 	b.clampColumn()
+	b.markModified()
 }
 
 // InsertText inserts the provided text at the cursor position and moves the cursor
@@ -170,6 +175,7 @@ func (b *Buffer) InsertText(text string) {
 	} else {
 		b.cursor.Col = lastSegmentLen
 	}
+	b.markModified()
 }
 
 // DeleteBackward deletes the rune before the cursor (backspace semantics).
@@ -185,6 +191,7 @@ func (b *Buffer) DeleteBackward() bool {
 		b.lines = removeLine(b.lines, b.cursor.Line)
 		b.cursor.Line = prev
 		b.cursor.Col = prevLen
+		b.markModified()
 		return true
 	}
 
@@ -195,6 +202,7 @@ func (b *Buffer) DeleteBackward() bool {
 	line = append(line[:b.cursor.Col-1], line[b.cursor.Col:]...)
 	b.lines[b.cursor.Line] = string(line)
 	b.cursor.Col--
+	b.markModified()
 	return true
 }
 
@@ -205,6 +213,7 @@ func (b *Buffer) DeleteForward() bool {
 	if b.cursor.Col < len(lineRunes) {
 		lineRunes = append(lineRunes[:b.cursor.Col], lineRunes[b.cursor.Col+1:]...)
 		b.lines[b.cursor.Line] = string(lineRunes)
+		b.markModified()
 		return true
 	}
 	if b.cursor.Line >= len(b.lines)-1 {
@@ -212,6 +221,7 @@ func (b *Buffer) DeleteForward() bool {
 	}
 	b.lines[b.cursor.Line] = b.lines[b.cursor.Line] + b.lines[b.cursor.Line+1]
 	b.lines = removeLine(b.lines, b.cursor.Line+1)
+	b.markModified()
 	return true
 }
 
@@ -335,4 +345,101 @@ func removeLine(lines []string, index int) []string {
 		return lines
 	}
 	return append(lines[:index], lines[index+1:]...)
+}
+
+// FilePath returns the file path associated with this buffer.
+func (b *Buffer) FilePath() string {
+	return b.filePath
+}
+
+// SetFilePath sets the file path for this buffer.
+func (b *Buffer) SetFilePath(path string) {
+	b.filePath = path
+}
+
+// Modified returns true if the buffer has unsaved changes.
+func (b *Buffer) Modified() bool {
+	return b.modified
+}
+
+// SetModified sets the modified flag.
+func (b *Buffer) SetModified(modified bool) {
+	b.modified = modified
+}
+
+// MarkModified marks the buffer as modified (used internally after edits).
+func (b *Buffer) markModified() {
+	b.modified = true
+}
+
+// LoadFromFile loads the buffer content from a file.
+func (b *Buffer) LoadFromFile(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	text := string(content)
+	lines := strings.Split(text, "\n")
+	
+	// Remove trailing empty line if file ends with newline
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	b.lines = lines
+	b.cursor = Cursor{Line: 0, Col: 0}
+	b.filePath = path
+	b.modified = false
+
+	return nil
+}
+
+// SaveToFile saves the buffer content to a file.
+func (b *Buffer) SaveToFile(path string) error {
+	content := b.GetContent()
+	
+	// Ensure file ends with newline
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return err
+	}
+
+	b.filePath = path
+	b.modified = false
+	return nil
+}
+
+// Save saves the buffer to its associated file path.
+func (b *Buffer) Save() error {
+	if b.filePath == "" {
+		return os.ErrInvalid
+	}
+	return b.SaveToFile(b.filePath)
+}
+
+// GetContent returns the entire buffer content as a string.
+func (b *Buffer) GetContent() string {
+	return strings.Join(b.lines, "\n")
+}
+
+// NewBufferFromFile creates a new buffer and loads content from a file.
+func NewBufferFromFile(path string) (*Buffer, error) {
+	buf := &Buffer{
+		lines:  []string{""},
+		cursor: Cursor{},
+	}
+	
+	if err := buf.LoadFromFile(path); err != nil {
+		return nil, err
+	}
+	
+	return buf, nil
 }
