@@ -136,16 +136,42 @@ You can also control the explorer from command mode:
 
 ## Implementation Details
 
-The pane navigation feature is implemented in `internal/appcore/app.go`:
+The pane navigation feature uses a robust **Command/Action pattern** for keybinding handling:
 
 - Focus state is tracked using the `explorerFocused` boolean flag
 - Mode transitions between `modeNormal` and `modeExplorer`
 - Visual borders are rendered using Gio's `clip.Rect` and `paint.Fill` operations
-- Keyboard event handlers in `handleNormalMode` and `handleExplorerMode` manage the transitions
+- Global keybindings (Ctrl+T, Ctrl+H, Ctrl+L) work in ANY mode
+- Mode-specific keybindings only apply to their respective modes
+
+### Architecture
+
+The keybinding system uses **two-phase matching**:
+
+1. **Phase 1**: Check global keybindings (highest priority)
+   - Ctrl+T (toggle explorer)
+   - Ctrl+H (focus explorer)
+   - Ctrl+L (focus editor)
+   - Shift+Enter (toggle fullscreen)
+
+2. **Phase 2**: Check mode-specific keybindings
+   - NORMAL mode: i, v, d, h/j/k/l, etc.
+   - EXPLORER mode: j/k (navigate), Enter (open), etc.
+   - INSERT mode: Escape, arrow keys, etc.
+
+3. **Phase 3**: Special handlers for complex cases
+   - Count accumulation (e.g., "5j")
+   - Goto sequences (e.g., "gg")
+   - Colon commands (e.g., ":w")
+
+This ensures global shortcuts always work, regardless of mode.
 
 ### Code References
 
-- Ctrl+H handler: `internal/appcore/app.go:505-519`
-- Ctrl+L handler: `internal/appcore/app.go:768-772`
-- Focus border rendering (tree): `internal/appcore/app.go:448-454`
-- Focus border rendering (editor): `internal/appcore/app.go:260-268`
+- Keybinding system: `internal/appcore/keybindings.go`
+- Action execution: `internal/appcore/keybindings.go:executeAction()`
+- Event handling: `internal/appcore/app.go:handleKey()`
+- Focus border rendering (tree): `internal/appcore/app.go:drawFileExplorer()`
+- Focus border rendering (editor): `internal/appcore/app.go:drawBuffer()`
+
+For detailed architecture documentation, see `docs/keybindings.md`.

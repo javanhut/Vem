@@ -495,136 +495,52 @@ func (s *appState) handleKey(ev key.Event) {
 	}
 	s.lastKey = describeKey(ev)
 
-	if s.handleGlobalShortcuts(ev) {
+	// Phase 1: Try global keybindings first (highest priority)
+	if action := s.matchGlobalKeybinding(ev); action != ActionNone {
+		s.executeAction(action, ev)
 		return
 	}
 
+	// Phase 2: Try mode-specific keybindings
+	if action := s.matchModeKeybinding(s.mode, ev); action != ActionNone {
+		s.executeAction(action, ev)
+		return
+	}
+
+	// Phase 3: Handle special cases that need custom logic
 	switch s.mode {
 	case modeNormal:
-		if s.handleNormalMode(ev) {
+		if s.handleNormalModeSpecial(ev) {
 			return
 		}
 	case modeInsert:
-		if s.handleInsertMode(ev) {
+		if s.handleInsertModeSpecial(ev) {
 			return
 		}
 	case modeDelete:
-		if s.handleDeleteMode(ev) {
+		if s.handleDeleteModeSpecial(ev) {
 			return
 		}
 	case modeVisual:
-		if s.handleVisualMode(ev) {
+		if s.handleVisualModeSpecial(ev) {
 			return
 		}
 	case modeCommand:
-		if s.handleCommandMode(ev) {
-			return
-		}
+		return
 	case modeExplorer:
-		if s.handleExplorerMode(ev) {
-			return
-		}
+		return
 	}
 	s.status = "Waiting for motion"
 }
 
-func (s *appState) handleGlobalShortcuts(ev key.Event) bool {
-	ctrlActive := ev.Modifiers.Contain(key.ModCtrl) || s.ctrlPressed
-	if !ctrlActive {
-		return false
-	}
 
-	name := strings.ToLower(string(ev.Name))
 
-	switch name {
-	case "t":
-		return s.handleCtrlToggleExplorerShortcut()
-	case "h":
-		return s.handleCtrlFocusExplorerShortcut()
-	case "l":
-		return s.handleCtrlFocusEditorShortcut()
-	}
-
-	// Some platforms send DeleteBackward for Ctrl+H
-	if ev.Name == key.NameDeleteBackward {
-		return s.handleCtrlFocusExplorerShortcut()
-	}
-
-	return false
-}
-
-func (s *appState) handleCtrlToggleExplorerShortcut() bool {
-	if s.fileTree == nil {
-		s.status = "File tree not available"
-		return true
-	}
-	s.toggleExplorer()
-	return true
-}
-
-func (s *appState) handleCtrlFocusExplorerShortcut() bool {
-	if s.fileTree == nil {
-		s.status = "File tree not available"
-		return true
-	}
-	if s.mode == modeExplorer {
-		s.status = "Tree view already focused (Ctrl+L to return to editor)"
-		return true
-	}
-	if s.mode != modeNormal {
-		s.status = "Ctrl+H available from NORMAL mode"
-		return true
-	}
-	s.enterExplorerMode()
-	s.status = "Focus: Tree View (use Ctrl+L to return to editor)"
-	return true
-}
-
-func (s *appState) handleCtrlFocusEditorShortcut() bool {
-	if !s.explorerVisible {
-		s.status = "Tree view hidden (Ctrl+T to open)"
-		return true
-	}
-	if s.mode != modeExplorer {
-		s.status = "Editor already focused"
-		return true
-	}
-	s.exitExplorerMode()
-	s.status = "Focus: Editor (use Ctrl+H to return to tree view)"
-	return true
-}
-
-func (s *appState) handleNormalMode(ev key.Event) bool {
-	// Check for Shift+Enter to toggle fullscreen
-	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
-		s.toggleFullscreen()
-		return true
-	}
-
+func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 	if s.isColonKey(ev) {
 		s.enterCommandMode()
 		return true
 	}
 
-	switch ev.Name {
-	case key.NameEscape:
-		s.exitVisualMode()
-		s.resetCount()
-		s.status = "Staying in NORMAL"
-		return true
-	case key.NameLeftArrow:
-		s.moveCursor("left")
-		return true
-	case key.NameRightArrow:
-		s.moveCursor("right")
-		return true
-	case key.NameDownArrow:
-		s.moveCursor("down")
-		return true
-	case key.NameUpArrow:
-		s.moveCursor("up")
-		return true
-	}
 	if r, ok := printableKey(ev); ok {
 		if unicode.IsDigit(r) {
 			if s.handleCountDigit(int(r - '0')) {
@@ -645,121 +561,27 @@ func (s *appState) handleNormalMode(ev key.Event) bool {
 			s.startGotoSequence()
 			return true
 		}
-		switch unicode.ToLower(r) {
-		case 'i':
-			s.enterInsertMode()
-			return true
-		case 't':
-			s.enterExplorerMode()
-			return true
-		case 'v':
-			s.enterVisualLine()
-			return true
-		case 'd':
-			s.enterDeleteMode()
-			return true
-		case 'h':
-			s.moveCursor("left")
-			return true
-		case 'j':
-			s.moveCursor("down")
-			return true
-		case 'k':
-			s.moveCursor("up")
-			return true
-		case 'l':
-			s.moveCursor("right")
-			return true
-		case '0':
-			if s.activeBuffer().JumpLineStart() {
-				s.setCursorStatus("Line start")
-			} else {
-				s.status = "Already at line start"
-			}
-			return true
-		case '$':
-			if s.activeBuffer().JumpLineEnd() {
-				s.setCursorStatus("Line end")
-			} else {
-				s.status = "Already at line end"
-			}
-			return true
-		}
 	}
 	return false
 }
 
-func (s *appState) handleInsertMode(ev key.Event) bool {
-	// Check for Shift+Enter to toggle fullscreen (before regular Enter handling)
-	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
-		s.toggleFullscreen()
-		return true
-	}
 
-	switch ev.Name {
-	case key.NameEscape:
-		s.mode = modeNormal
-		s.skipNextEdit = false
-		s.resetCount()
-		s.status = "Back to NORMAL"
-		return true
-	case key.NameReturn, key.NameEnter:
-		s.insertText("\n")
-		return true
-	case key.NameSpace:
-		s.insertText(" ")
-		return true
-	case key.NameDeleteBackward:
-		if s.activeBuffer().DeleteBackward() {
-			s.setCursorStatus("Backspace")
-		} else {
-			s.status = "Start of buffer"
-		}
-		return true
-	case key.NameDeleteForward:
-		if s.activeBuffer().DeleteForward() {
-			s.setCursorStatus("Delete")
-		} else {
-			s.status = "End of buffer"
-		}
-		return true
-	case key.NameLeftArrow:
-		s.moveCursor("left")
-		return true
-	case key.NameRightArrow:
-		s.moveCursor("right")
-		return true
-	case key.NameUpArrow:
-		s.moveCursor("up")
-		return true
-	case key.NameDownArrow:
-		s.moveCursor("down")
-		return true
-	}
+
+func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
 	if _, ok := printableKey(ev); ok {
-		// Text insertion is driven by key.EditEvent to avoid double characters.
 		return true
 	}
 	return false
 }
 
-func (s *appState) handleDeleteMode(ev key.Event) bool {
-	// Check for Shift+Enter to toggle fullscreen
-	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
-		s.toggleFullscreen()
-		return true
-	}
 
-	switch ev.Name {
-	case key.NameEscape:
-		s.exitDeleteMode()
-		return true
-	}
+
+func (s *appState) handleDeleteModeSpecial(ev key.Event) bool {
 	if r, ok := printableKey(ev); ok {
 		if unicode.IsDigit(r) {
 			s.handleCountDigit(int(r - '0'))
 			if s.pendingCount > 0 {
-				s.status = fmt.Sprintf("DELETE line %d (pending)", s.pendingCount)
+				s.status = "DELETE line " + string(rune('0'+s.pendingCount)) + " (pending)"
 			} else {
 				s.status = "DELETE mode"
 			}
@@ -773,36 +595,14 @@ func (s *appState) handleDeleteMode(ev key.Event) bool {
 	return false
 }
 
-func (s *appState) handleVisualMode(ev key.Event) bool {
-	// Check for Shift+Enter to toggle fullscreen
-	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
-		s.toggleFullscreen()
-		return true
-	}
 
+
+func (s *appState) handleVisualModeSpecial(ev key.Event) bool {
 	if s.isColonKey(ev) {
 		s.enterCommandMode()
 		return true
 	}
-	switch ev.Name {
-	case key.NameEscape:
-		s.exitVisualMode()
-		s.resetCount()
-		s.status = "Exited VISUAL"
-		return true
-	case key.NameLeftArrow:
-		s.moveCursor("left")
-		return true
-	case key.NameRightArrow:
-		s.moveCursor("right")
-		return true
-	case key.NameDownArrow:
-		s.moveCursor("down")
-		return true
-	case key.NameUpArrow:
-		s.moveCursor("up")
-		return true
-	}
+
 	if r, ok := printableKey(ev); ok {
 		if unicode.IsDigit(r) && s.handleCountDigit(int(r-'0')) {
 			return true
@@ -821,160 +621,15 @@ func (s *appState) handleVisualMode(ev key.Event) bool {
 			s.startGotoSequence()
 			return true
 		}
-		switch unicode.ToLower(r) {
-		case 'c':
-			s.copyVisualSelection()
-			return true
-		case 'd':
-			s.deleteVisualSelection()
-			return true
-		case 'p':
-			s.pasteClipboard()
-			return true
-		case 'v':
-			s.exitVisualMode()
-			return true
-		case 'h':
-			s.moveCursor("left")
-			return true
-		case 'j':
-			s.moveCursor("down")
-			return true
-		case 'k':
-			s.moveCursor("up")
-			return true
-		case 'l':
-			s.moveCursor("right")
-			return true
-		case '0':
-			if s.activeBuffer().JumpLineStart() {
-				s.setCursorStatus("Line start")
-			}
-			return true
-		case '$':
-			if s.activeBuffer().JumpLineEnd() {
-				s.setCursorStatus("Line end")
-			}
-			return true
-		}
 	}
 	return false
 }
 
-func (s *appState) handleCommandMode(ev key.Event) bool {
-	// Check for Shift+Enter to toggle fullscreen (before regular Enter handling)
-	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
-		s.toggleFullscreen()
-		return true
-	}
 
-	switch ev.Name {
-	case key.NameEscape:
-		s.exitCommandMode()
-		s.status = "Command cancelled"
-		return true
-	case key.NameReturn, key.NameEnter:
-		s.executeCommandLine()
-		return true
-	case key.NameDeleteBackward:
-		s.deleteCommandChar()
-		return true
-	}
-	return false
-}
 
-func (s *appState) handleExplorerMode(ev key.Event) bool {
-	if s.fileTree == nil {
-		return false
-	}
 
-	// Check for Shift+Enter to toggle fullscreen (before regular Enter handling)
-	if (ev.Name == key.NameReturn || ev.Name == key.NameEnter) && ev.Modifiers.Contain(key.ModShift) {
-		s.toggleFullscreen()
-		return true
-	}
 
-	switch ev.Name {
-	case key.NameEscape:
-		s.exitExplorerMode()
-		return true
-	case key.NameReturn, key.NameEnter:
-		s.openSelectedNode()
-		return true
-	case key.NameUpArrow:
-		if s.fileTree.MoveUp() {
-			s.status = "Explorer: moved up"
-		}
-		return true
-	case key.NameDownArrow:
-		if s.fileTree.MoveDown() {
-			s.status = "Explorer: moved down"
-		}
-		return true
-	case key.NameLeftArrow:
-		if s.fileTree.Collapse() {
-			s.status = "Explorer: collapsed"
-		}
-		return true
-	case key.NameRightArrow:
-		if s.fileTree.Expand() {
-			if node := s.fileTree.SelectedNode(); node != nil && node.IsDir {
-				s.fileTree.ExpandAndLoad(node)
-			}
-			s.status = "Explorer: expanded"
-		}
-		return true
-	}
 
-	if r, ok := printableKey(ev); ok {
-		switch unicode.ToLower(r) {
-		case 'j':
-			if s.fileTree.MoveDown() {
-				s.status = "Explorer: moved down"
-			}
-			return true
-		case 'k':
-			if s.fileTree.MoveUp() {
-				s.status = "Explorer: moved up"
-			}
-			return true
-		case 'h':
-			if s.fileTree.Collapse() {
-				s.status = "Explorer: collapsed"
-			}
-			return true
-		case 'l':
-			if s.fileTree.Expand() {
-				if node := s.fileTree.SelectedNode(); node != nil && node.IsDir {
-					s.fileTree.ExpandAndLoad(node)
-				}
-				s.status = "Explorer: expanded"
-			}
-			return true
-		case 'r':
-			if err := s.fileTree.Refresh(); err != nil {
-				s.status = fmt.Sprintf("Refresh error: %v", err)
-			} else {
-				s.status = "Tree refreshed"
-			}
-			return true
-		case 'u':
-			// Navigate to parent directory
-			if err := s.fileTree.NavigateToParent(); err != nil {
-				s.status = fmt.Sprintf("Error navigating up: %v", err)
-			} else {
-				s.fileTree.LoadInitial()
-				s.status = fmt.Sprintf("Up to %s", s.fileTree.CurrentPath())
-			}
-			return true
-		case 'q':
-			s.exitExplorerMode()
-			return true
-		}
-	}
-
-	return false
-}
 
 func (s *appState) moveCursor(direction string) {
 	var moved bool
@@ -1261,9 +916,9 @@ func (s *appState) toggleExplorer() {
 		}
 		s.status = "Explorer closed"
 	} else {
-		// Show and enter explorer
+		// Show explorer without focusing
 		s.explorerVisible = true
-		s.enterExplorerMode()
+		s.status = "Explorer opened"
 	}
 }
 
