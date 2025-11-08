@@ -50,6 +50,7 @@ var (
 	statusBg       = color.NRGBA{R: 0x12, G: 0x17, B: 0x22, A: 0xff}
 	headerColor    = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
 	cursorColor    = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	focusBorder    = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
 )
 
 type appState struct {
@@ -259,6 +260,19 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	cursorLine := s.activeBuffer().Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
 	cursorCol := s.activeBuffer().Cursor().Col
+	
+	// Draw focus border on the left edge if editor is focused (not in explorer mode)
+	editorFocused := !s.explorerFocused && s.explorerVisible
+	if editorFocused {
+		borderWidth := 3
+		borderRect := clip.Rect{
+			Min: image.Pt(0, 0),
+			Max: image.Pt(borderWidth, gtx.Constraints.Max.Y),
+		}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, focusBorder)
+		borderRect.Pop()
+	}
+	
 	inset := layout.Inset{
 		Top:    unit.Dp(8),
 		Right:  unit.Dp(16),
@@ -374,7 +388,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 	gtx.Constraints.Max.X = width
 	gtx.Constraints.Min.X = width
 
-	// Draw background
+	// Draw background with focus border if explorer is focused
 	macro := op.Record(gtx.Ops)
 	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		// Header showing current path
@@ -447,6 +461,17 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, explorerBg)
 	rect.Pop()
 
+	// Draw focus border on the right edge if explorer is focused
+	if s.explorerFocused {
+		borderWidth := 3
+		borderRect := clip.Rect{
+			Min: image.Pt(width-borderWidth, 0),
+			Max: image.Pt(width, gtx.Constraints.Max.Y),
+		}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, focusBorder)
+		borderRect.Pop()
+	}
+
 	call.Add(gtx.Ops)
 
 	return layout.Dimensions{
@@ -498,6 +523,22 @@ func (s *appState) handleNormalMode(ev key.Event) bool {
 	// Since Gio sends Ctrl and T as separate events, we track Ctrl state manually
 	if s.ctrlPressed && (ev.Name == "T" || ev.Name == "t") && ev.State == key.Press {
 		s.toggleExplorer()
+		return true
+	}
+	
+	// Check for Ctrl+H to jump to tree view (left pane)
+	if s.ctrlPressed && (ev.Name == "H" || ev.Name == "h") && ev.State == key.Press {
+		if s.fileTree != nil && s.explorerVisible {
+			s.enterExplorerMode()
+			s.status = "Focus: Tree View (use Ctrl+L to return to editor)"
+		} else if s.fileTree != nil {
+			// Tree view exists but hidden, show it and focus it
+			s.explorerVisible = true
+			s.enterExplorerMode()
+			s.status = "Tree View opened and focused (use Ctrl+L to return to editor)"
+		} else {
+			s.status = "No tree view available (open one with Ctrl+T)"
+		}
 		return true
 	}
 	
@@ -759,6 +800,13 @@ func (s *appState) handleExplorerMode(ev key.Event) bool {
 	// Check for Ctrl+T to toggle tree view (close it when in explorer mode)
 	if s.ctrlPressed && (ev.Name == "T" || ev.Name == "t") && ev.State == key.Press {
 		s.toggleExplorer()
+		return true
+	}
+	
+	// Check for Ctrl+L to jump back to editor (right pane)
+	if s.ctrlPressed && (ev.Name == "L" || ev.Name == "l") && ev.State == key.Press {
+		s.exitExplorerMode()
+		s.status = "Focus: Editor (use Ctrl+H to return to tree view)"
 		return true
 	}
 
