@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -78,8 +79,9 @@ type appState struct {
 	explorerWidth   int
 	explorerFocused bool
 
-	// Modifier tracking (some platforms don't report Ctrl in key modifiers)
-	ctrlPressed bool
+	// Modifier tracking (some platforms don't report modifiers correctly)
+	ctrlPressed  bool
+	shiftPressed bool
 
 	// Fullscreen state tracking
 	currentWindowMode app.WindowMode
@@ -215,11 +217,52 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.status = "Ready"
 			}
 		case key.Event:
+			// Track Ctrl key press/release
 			if e.Name == key.NameCtrl {
+				wasPressed := s.ctrlPressed
 				s.ctrlPressed = (e.State == key.Press)
+				log.Printf("[CTRL_TRACK] Ctrl %v -> %v (state=%v)", wasPressed, s.ctrlPressed, e.State)
 				continue
 			}
+			// Track Shift key press/release
+			if e.Name == key.NameShift {
+				wasPressed := s.shiftPressed
+				s.shiftPressed = (e.State == key.Press)
+				log.Printf("[SHIFT_TRACK] Shift %v -> %v (state=%v)", wasPressed, s.shiftPressed, e.State)
+				continue
+			}
+			// Track Alt key press/release
+			if e.Name == key.NameAlt {
+				log.Printf("[ALT_TRACK] Alt key event received, state=%v", e.State)
+				continue
+			}
+			
+			// Platform quirk: ev.Modifiers is ALWAYS empty on this platform!
+			// We must rely ONLY on our tracked modifier state (ctrlPressed, shiftPressed)
+			log.Printf("[PLATFORM_QUIRK] ev.Modifiers=%v (platform never sets this)", e.Modifiers)
+			
+			// Save modifier state before handling key
+			hadCtrl := s.ctrlPressed
+			hadShift := s.shiftPressed
+			
 			s.handleKey(e)
+			
+			// Smart reset: If modifiers are still set after handleKey and we're in certain modes,
+			// it likely means the user released the modifier but platform didn't send Release event.
+			// Reset modifiers after successful command execution to prevent them from sticking.
+			// Exception: Don't reset if we just entered a mode (mode transitions are intentional)
+			if s.mode == modeNormal || s.mode == modeInsert || s.mode == modeCommand {
+				if hadCtrl && s.ctrlPressed {
+					// Ctrl was held before and is still held - user might have released it
+					// Reset it so next key doesn't have Ctrl stuck
+					log.Printf("[SMART_RESET] Resetting Ctrl after key=%q to prevent sticking", e.Name)
+					s.ctrlPressed = false
+				}
+				if hadShift && s.shiftPressed {
+					log.Printf("[SMART_RESET] Resetting Shift after key=%q to prevent sticking", e.Name)
+					s.shiftPressed = false
+				}
+			}
 		case key.EditEvent:
 			if e.Text == "" {
 				continue
@@ -495,34 +538,55 @@ func (s *appState) handleKey(ev key.Event) {
 	}
 	s.lastKey = describeKey(ev)
 
-	// Phase 1: Try global keybindings first (highest priority)
+	// Debug logging
+	modStr := s.formatModifiers(ev.Modifiers)
+	log.Printf("[KEY] Key=%q Modifiers=%s Mode=%s ExplorerVisible=%v ExplorerFocused=%v",
+		ev.Name, modStr, s.mode, s.explorerVisible, s.explorerFocused)
+
+	// Phase 1: Try mode-specific keybindings first for COMMAND mode
+	// (COMMAND mode keys should take priority over global shortcuts)
+	if s.mode == modeCommand {
+		if action := s.matchModeKeybinding(s.mode, ev); action != ActionNone {
+			log.Printf("[MATCH] Mode-specific keybinding matched: Mode=%s Action=%v", s.mode, action)
+			s.executeAction(action, ev)
+			return
+		}
+	}
+
+	// Phase 2: Try global keybindings (highest priority for other modes)
 	if action := s.matchGlobalKeybinding(ev); action != ActionNone {
+		log.Printf("[MATCH] Global keybinding matched: Action=%v", action)
 		s.executeAction(action, ev)
 		return
 	}
 
-	// Phase 2: Try mode-specific keybindings
+	// Phase 3: Try mode-specific keybindings
 	if action := s.matchModeKeybinding(s.mode, ev); action != ActionNone {
+		log.Printf("[MATCH] Mode-specific keybinding matched: Mode=%s Action=%v", s.mode, action)
 		s.executeAction(action, ev)
 		return
 	}
 
-	// Phase 3: Handle special cases that need custom logic
+	// Phase 4: Handle special cases that need custom logic
 	switch s.mode {
 	case modeNormal:
 		if s.handleNormalModeSpecial(ev) {
+			log.Printf("[SPECIAL] Normal mode special handler matched")
 			return
 		}
 	case modeInsert:
 		if s.handleInsertModeSpecial(ev) {
+			log.Printf("[SPECIAL] Insert mode special handler matched")
 			return
 		}
 	case modeDelete:
 		if s.handleDeleteModeSpecial(ev) {
+			log.Printf("[SPECIAL] Delete mode special handler matched")
 			return
 		}
 	case modeVisual:
 		if s.handleVisualModeSpecial(ev) {
+			log.Printf("[SPECIAL] Visual mode special handler matched")
 			return
 		}
 	case modeCommand:
@@ -530,7 +594,44 @@ func (s *appState) handleKey(ev key.Event) {
 	case modeExplorer:
 		return
 	}
+	log.Printf("[NO_MATCH] No keybinding matched for key=%q modifiers=%s", ev.Name, modStr)
 	s.status = "Waiting for motion"
+}
+
+func (s *appState) formatModifiers(mods key.Modifiers) string {
+	var parts []string
+	var tracked []string
+	
+	if mods.Contain(key.ModCtrl) {
+		parts = append(parts, "Ctrl")
+	}
+	if s.ctrlPressed && !mods.Contain(key.ModCtrl) {
+		tracked = append(tracked, "Ctrl")
+	}
+	
+	if mods.Contain(key.ModShift) {
+		parts = append(parts, "Shift")
+	}
+	if s.shiftPressed && !mods.Contain(key.ModShift) {
+		tracked = append(tracked, "Shift")
+	}
+	
+	if mods.Contain(key.ModAlt) {
+		parts = append(parts, "Alt")
+	}
+	
+	result := strings.Join(parts, "+")
+	if len(tracked) > 0 {
+		if result != "" {
+			result += "+"
+		}
+		result += strings.Join(tracked, "+") + "(tracked)"
+	}
+	
+	if result == "" {
+		return "none"
+	}
+	return result
 }
 
 

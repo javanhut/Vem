@@ -57,8 +57,10 @@ When in **EXPLORER mode** (tree view focused):
 #### Ctrl+T - Toggle Tree View
 In any mode:
 - Pressing `Ctrl+T` will toggle the visibility of the file tree explorer
-- If the tree view is hidden, it will be shown and focused (EXPLORER mode)
-- If the tree view is visible, it will be hidden and focus returns to the editor (NORMAL mode)
+- If the tree view is hidden, it will be shown (stays in current mode)
+- If the tree view is visible, it will be hidden and focus returns to the editor
+- This is the ONLY way to show/hide the file tree
+- Note: Plain 't' key does NOT toggle the tree (removed to avoid confusion)
 
 ### Visual Indicators
 

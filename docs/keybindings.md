@@ -1,185 +1,313 @@
-# Keybinding System Architecture
+# Keybindings Reference
 
-## Overview
+Complete reference for all keybindings in ProjectVem.
 
-The keybinding system in ProjectVem uses a **Command/Action pattern** inspired by Neovim's robust modal keybinding architecture. This design ensures that keybindings work consistently across all modes and platforms, avoiding fragile logic that can break due to platform-specific modifier key reporting.
+## Global Keybindings
 
-## Key Concepts
+These keybindings work in all modes.
 
-### Actions
+| Keybinding | Action | Description |
+|------------|--------|-------------|
+| `Ctrl+T` | Toggle Explorer | Show/hide the file tree explorer |
+| `Ctrl+H` | Focus Explorer | Switch focus to the file tree (if visible) |
+| `Ctrl+L` | Focus Editor | Switch focus to the text editor |
+| `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode |
 
-Actions are enum constants that represent discrete operations the editor can perform. Each action is mode-agnostic and can be triggered from different contexts.
+## NORMAL Mode
 
-Examples:
-- `ActionToggleExplorer` - Toggle file explorer visibility
-- `ActionMoveUp` - Move cursor/selection up
-- `ActionEnterInsert` - Enter INSERT mode
+NORMAL mode is the default mode for navigation and executing commands.
 
-### KeyBindings
+### Mode Transitions
 
-A `KeyBinding` maps a key combination to an action. It consists of:
-- **Modifiers**: Ctrl, Shift, Alt (optional)
-- **Key**: The key name (e.g., "t", key.NameEscape)
-- **Modes**: Which modes this binding applies to (empty = all modes)
-- **Action**: The action to execute
+| Key | Action | Description |
+|-----|--------|-------------|
+| `i` | Enter INSERT | Switch to INSERT mode at cursor |
+| `v` | Enter VISUAL | Switch to VISUAL line mode |
+| `d` | Enter DELETE | Switch to DELETE mode |
+| `:` | Enter COMMAND | Open command-line interface |
+| `Esc` | Exit Mode | Return to NORMAL (if in other mode) |
 
-### Two-Phase Matching
+### Navigation
 
-When a key is pressed, the system checks keybindings in priority order:
+#### Basic Movement
 
-1. **Global keybindings** - Checked first, work in ANY mode
-2. **Mode-specific keybindings** - Checked second, only active in specific modes
-3. **Special handlers** - Custom logic for complex cases (counts, goto sequences)
+| Key | Action | Description |
+|-----|--------|-------------|
+| `h` | Move Left | Move cursor one character left |
+| `j` | Move Down | Move cursor one line down |
+| `k` | Move Up | Move cursor one line up |
+| `l` | Move Right | Move cursor one character right |
+| `←` | Move Left | Same as `h` |
+| `↓` | Move Down | Same as `j` |
+| `↑` | Move Up | Same as `k` |
+| `→` | Move Right | Same as `l` |
 
-This ensures that global shortcuts like `Ctrl+T` always work, regardless of which mode you're in.
+#### Line Movement
 
-## Architecture Benefits
+| Key | Action | Description |
+|-----|--------|-------------|
+| `0` | Line Start | Jump to first character of line |
+| `$` | Line End | Jump to last character of line |
 
-### 1. Platform Independence
+#### Document Movement
 
-The system handles platform-specific quirks transparently:
-- Some platforms don't report Ctrl modifier correctly
-- Some platforms send different key codes for the same physical key
-- The `modifiersMatch()` function handles these cases with fallback logic
+| Key | Action | Description |
+|-----|--------|-------------|
+| `gg` | First Line | Jump to first line of buffer |
+| `G` | Last Line | Jump to last line of buffer |
+| `<count>G` | Goto Line | Jump to line `<count>` (e.g., `42G`) |
 
-### 2. Testability
+### Counts
 
-Each component can be tested independently:
-- `matchGlobalKeybinding()` - Test global shortcut matching
-- `matchModeKeybinding()` - Test mode-specific bindings
-- `executeAction()` - Test action execution logic
+Many navigation commands accept a count prefix:
 
-### 3. Debuggability
+| Command | Description |
+|---------|-------------|
+| `5j` | Move down 5 lines |
+| `10k` | Move up 10 lines |
+| `3h` | Move left 3 characters |
+| `42G` | Jump to line 42 |
 
-Clear separation makes debugging easier:
-- Log which binding matched
-- Log which action was executed
-- Trace the full path from keypress → binding → action → result
+## INSERT Mode
 
-### 4. Extensibility
+INSERT mode is for typing and editing text.
 
-Adding new keybindings is straightforward:
+### Mode Control
 
-```go
-// Add a new action
-const (
-    ActionSplitWindow Action = iota + 100
-)
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Exit INSERT | Return to NORMAL mode |
 
-// Add a global keybinding
-var globalKeybindings = []KeyBinding{
-    {Modifiers: key.ModCtrl, Key: "w", Modes: nil, Action: ActionSplitWindow},
-}
+### Text Input
 
-// Implement the action
-func (s *appState) executeAction(action Action, ev key.Event) {
-    switch action {
-    case ActionSplitWindow:
-        s.splitWindow()
-    }
-}
-```
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Enter` | Newline | Insert a new line |
+| `Space` | Space | Insert a space character |
+| `Backspace` | Delete Backward | Delete character before cursor |
+| `Delete` | Delete Forward | Delete character after cursor |
 
-### 5. User Customization (Future)
+### Navigation (in INSERT mode)
 
-This architecture makes it easy to support user-customizable keybindings:
-- Load keybindings from config file
-- Allow per-mode keybinding overrides
-- Support keybinding "layers" (base + user + plugin)
+| Key | Action | Description |
+|-----|--------|-------------|
+| `←` | Move Left | Move cursor left |
+| `→` | Move Right | Move cursor right |
+| `↑` | Move Up | Move cursor up |
+| `↓` | Move Down | Move cursor down |
 
-## How It Works
+## VISUAL Mode
 
-### Event Flow
+VISUAL line mode is for selecting and manipulating multiple lines.
 
-```
-User presses key
-    ↓
-handleEvents() receives key.Event
-    ↓
-handleKey() (if State == Press)
-    ↓
-Phase 1: matchGlobalKeybinding()
-    ↓ (if no match)
-Phase 2: matchModeKeybinding()
-    ↓ (if no match)
-Phase 3: handleModeSpecial() (counts, etc.)
-    ↓
-executeAction()
-    ↓
-State update + re-render
-```
+### Mode Control
 
-### Example: Ctrl+T
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Exit VISUAL | Return to NORMAL mode |
+| `v` | Toggle VISUAL | Exit VISUAL mode back to NORMAL |
 
-1. User presses `Ctrl+T` while in EXPLORER mode
-2. `handleKey()` receives the event
-3. `matchGlobalKeybinding()` checks all global bindings
-4. Finds match: `{Modifiers: key.ModCtrl, Key: "t", Action: ActionToggleExplorer}`
-5. Calls `executeAction(ActionToggleExplorer, ev)`
-6. `executeAction()` toggles explorer visibility
-7. Event handling returns (mode-specific handlers never run)
+### Navigation
 
-### Example: Normal Mode 'j'
+| Key | Action | Description |
+|-----|--------|-------------|
+| `h` | Move Left | Extend/reduce selection left |
+| `j` | Move Down | Extend/reduce selection down |
+| `k` | Move Up | Extend/reduce selection up |
+| `l` | Move Right | Extend/reduce selection right |
+| `←` | Move Left | Same as `h` |
+| `↓` | Move Down | Same as `j` |
+| `↑` | Move Up | Same as `k` |
+| `→` | Move Right | Same as `l` |
+| `0` | Line Start | Move to start of line |
+| `$` | Line End | Move to end of line |
+| `gg` | First Line | Extend selection to first line |
+| `G` | Last Line | Extend selection to last line |
 
-1. User presses `j` in NORMAL mode
-2. `handleKey()` receives the event
-3. `matchGlobalKeybinding()` finds no match (no global binding for 'j')
-4. `matchModeKeybinding(modeNormal, ev)` checks NORMAL mode bindings
-5. Finds match: `{Key: "j", Action: ActionMoveDown}`
-6. Calls `executeAction(ActionMoveDown, ev)`
-7. Cursor moves down one line
+### Selection Operations
 
-## Modifier Matching
+| Key | Action | Description |
+|-----|--------|-------------|
+| `c` | Copy | Copy selected lines to clipboard |
+| `d` | Delete | Delete selected lines |
+| `p` | Paste | Paste clipboard at selection |
 
-The `modifiersMatch()` function handles platform quirks:
+## DELETE Mode
 
-```go
-func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
-    if required == 0 {
-        return ev.Modifiers == 0  // No modifiers required
-    }
-    
-    // Use both ev.Modifiers AND s.ctrlPressed for robustness
-    ctrlHeld := ev.Modifiers.Contain(key.ModCtrl) || s.ctrlPressed
-    
-    if required.Contain(key.ModCtrl) && !ctrlHeld {
-        return false
-    }
-    // ... check other modifiers
-}
-```
+DELETE mode is for deleting specific lines.
 
-This ensures Ctrl bindings work even if `ev.Modifiers` doesn't report Ctrl correctly.
+### Mode Control
 
-## Special Handlers
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Exit DELETE | Return to NORMAL mode |
 
-Some features require more complex logic than simple key → action mapping:
+### Deletion
 
-### Counts (e.g., "5j" to move down 5 lines)
+| Key | Action | Description |
+|-----|--------|-------------|
+| `<count>d` | Delete Line | Delete line `<count>` (e.g., `5d` deletes line 5) |
+| `d` | Delete Current | Delete current line (if no count) |
 
-Handled in `handleNormalModeSpecial()`:
-- Accumulates digits into `pendingCount`
-- Applies count when motion is executed
+### Counts
 
-### Goto Sequences (e.g., "gg" to go to top)
+Type digits to specify which line to delete:
 
-Handled via state machine:
-- First 'g' sets `pendingGoto = true`
-- Second 'g' or 'G' executes goto with accumulated count
+| Command | Description |
+|---------|-------------|
+| `5d` | Delete line 5 |
+| `42d` | Delete line 42 |
+| `d` | Delete current line |
 
-### Colon Commands (e.g., ":w" to save)
+## COMMAND Mode
 
-Detected via `isColonKey()` which handles both `:` and `Shift+;`
+COMMAND mode provides a Vim-style command-line interface.
 
-## File Organization
+### Mode Control
 
-- `internal/appcore/keybindings.go` - Action enum, bindings registry, matching logic
-- `internal/appcore/app.go` - Event handling, special handlers, action execution
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Cancel | Exit COMMAND mode without executing |
+| `Enter` | Execute | Execute the typed command |
+| `Backspace` | Delete Char | Delete character from command line |
 
-## Future Enhancements
+### Commands
 
-1. **Config File Support**: Load user keybindings from `~/.vemrc`
-2. **Plugin Keybindings**: Allow plugins to register their own actions and bindings
-3. **Keybinding Conflicts**: Detect and warn about conflicting bindings
-4. **Visual Keybinding Editor**: GUI for customizing keybindings
-5. **Macro Recording**: Record and replay action sequences
+#### File Operations
+
+| Command | Description |
+|---------|-------------|
+| `:e <file>` | Open `<file>` for editing |
+| `:w` | Save current buffer to its file |
+| `:w <file>` | Save current buffer as `<file>` |
+| `:wq` | Save and close current buffer |
+| `:q` | Close current buffer (fails if modified) |
+| `:q!` | Force close current buffer (discard changes) |
+
+#### Buffer Management
+
+| Command | Description |
+|---------|-------------|
+| `:bn` or `:bnext` | Switch to next buffer |
+| `:bp` or `:bprev` | Switch to previous buffer |
+| `:bd` or `:bdelete` | Close current buffer (fails if modified) |
+| `:bd!` | Force close current buffer (discard changes) |
+| `:ls` or `:buffers` | List all open buffers |
+
+#### File Explorer
+
+| Command | Description |
+|---------|-------------|
+| `:ex` or `:explore` | Toggle file tree explorer |
+| `:cd <path>` | Change working directory to `<path>` |
+| `:cd` | Change to home directory |
+| `:pwd` | Print current working directory |
+
+## EXPLORER Mode
+
+EXPLORER mode is for navigating the file tree.
+
+### Mode Control
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Exit EXPLORER | Return to NORMAL mode |
+| `q` | Quit | Same as `Esc` |
+| `Ctrl+L` | Focus Editor | Switch focus to editor |
+
+### Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `j` | Move Down | Move selection down |
+| `k` | Move Up | Move selection up |
+| `↑` | Move Up | Same as `k` |
+| `↓` | Move Down | Same as `j` |
+
+### File Operations
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Enter` | Open/Toggle | Open file or toggle directory expansion |
+| `h` | Collapse | Collapse current directory |
+| `l` | Expand | Expand current directory |
+| `←` | Collapse | Same as `h` |
+| `→` | Expand | Same as `l` |
+
+### Directory Operations
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `r` | Refresh | Reload file tree from disk |
+| `u` | Navigate Up | Change to parent directory |
+
+## Special Sequences
+
+### Goto Sequences
+
+The `g` key initiates a goto sequence:
+
+| Sequence | Description |
+|----------|-------------|
+| `gg` | Jump to first line |
+| `<count>gg` | Jump to line `<count>` |
+| `gG` | Jump to last line (same as `G`) |
+
+### Count Accumulation
+
+Type digits to build a count before a motion or command:
+
+| Example | Description |
+|---------|-------------|
+| `5j` | Move down 5 lines |
+| `10k` | Move up 10 lines |
+| `42G` | Jump to line 42 |
+| `5dd` | Delete 5 lines starting at line 5 |
+
+## Platform-Specific Notes
+
+### Modifier Keys
+
+ProjectVem uses robust modifier key tracking to handle platform differences:
+
+- **Linux (X11/Wayland)**: Ctrl and Shift are tracked explicitly due to platform quirks
+- **macOS**: Command key is mapped to Ctrl for consistency
+- **Windows**: Ctrl key works as expected
+
+### Fullscreen Behavior
+
+The fullscreen toggle (`Shift+Enter`) may behave differently depending on the platform:
+
+- **Linux**: Uses window manager's fullscreen mode
+- **macOS**: Uses native fullscreen (separate space)
+- **Windows**: Uses borderless maximized window
+
+## Customization (Future)
+
+In future releases, keybindings will be customizable via:
+
+- Configuration file (`~/.vemrc`)
+- Lua/Python/Carrion scripts
+- GUI keybinding editor
+
+See the [ROADMAP.md](../ROADMAP.md) for planned customization features.
+
+## Keybinding Conflicts
+
+ProjectVem uses a priority-based keybinding system to prevent conflicts:
+
+1. **Global keybindings** (highest priority): Ctrl+T, Ctrl+H, Ctrl+L, Shift+Enter
+2. **Mode-specific keybindings**: Commands that only work in specific modes
+3. **Special handlers**: Complex sequences like `gg`, counts, etc.
+
+Exception: COMMAND mode keybindings take priority over global keybindings to ensure commands execute correctly.
+
+## Architecture
+
+For details on how the keybinding system works internally, see [Architecture.md](Architecture.md).
+
+## See Also
+
+- [Navigation Guide](navigation.md) - Pane navigation and fullscreen features
+- [Tutorial](tutorial.md) - Step-by-step guide for new users
+- [Architecture](Architecture.md) - Technical implementation details

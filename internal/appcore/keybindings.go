@@ -1,6 +1,7 @@
 package appcore
 
 import (
+	"log"
 	"strings"
 	"unicode"
 
@@ -83,7 +84,6 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: "i", Modes: nil, Action: ActionEnterInsert},
-		{Modifiers: 0, Key: "t", Modes: nil, Action: ActionEnterExplorer},
 		{Modifiers: 0, Key: "v", Modes: nil, Action: ActionEnterVisual},
 		{Modifiers: 0, Key: "d", Modes: nil, Action: ActionEnterDelete},
 		{Modifiers: 0, Key: "h", Modes: nil, Action: ActionMoveLeft},
@@ -194,24 +194,59 @@ func (s *appState) keysMatch(actual, expected key.Name) bool {
 }
 
 func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
+	// If no modifiers are required, ensure no modifiers are pressed
 	if required == 0 {
-		return ev.Modifiers == 0
+		match := ev.Modifiers == 0
+		if !match {
+			log.Printf("[MOD_MATCH] Required none, got %v -> false", ev.Modifiers)
+		}
+		return match
 	}
 
-	ctrlHeld := ev.Modifiers.Contain(key.ModCtrl) || s.ctrlPressed
+	// Build the actual modifiers state
+	// PLATFORM QUIRK: ev.Modifiers is ALWAYS empty on some platforms!
+	// We MUST rely on tracked state from explicit Press/Release events
+	ctrlHeld := s.ctrlPressed   // Trust tracked state, not ev.Modifiers
+	shiftHeld := s.shiftPressed // Trust tracked state, not ev.Modifiers
+	altHeld := ev.Modifiers.Contain(key.ModAlt) // Alt not tracked yet
 
-	if required.Contain(key.ModCtrl) && !ctrlHeld {
+	// Check if required modifiers are present
+	ctrlRequired := required.Contain(key.ModCtrl)
+	shiftRequired := required.Contain(key.ModShift)
+	altRequired := required.Contain(key.ModAlt)
+
+	log.Printf("[MOD_MATCH] Required: Ctrl=%v Shift=%v Alt=%v | Actual: Ctrl=%v Shift=%v Alt=%v",
+		ctrlRequired, shiftRequired, altRequired, ctrlHeld, shiftHeld, altHeld)
+
+	// All required modifiers must be present
+	if ctrlRequired && !ctrlHeld {
+		log.Printf("[MOD_MATCH] Missing required Ctrl -> false")
+		return false
+	}
+	if shiftRequired && !shiftHeld {
+		log.Printf("[MOD_MATCH] Missing required Shift -> false")
+		return false
+	}
+	if altRequired && !altHeld {
+		log.Printf("[MOD_MATCH] Missing required Alt -> false")
 		return false
 	}
 
-	if required.Contain(key.ModShift) && !ev.Modifiers.Contain(key.ModShift) {
+	// No extra modifiers should be present (exact match)
+	if !ctrlRequired && ctrlHeld {
+		log.Printf("[MOD_MATCH] Extra Ctrl present -> false")
+		return false
+	}
+	if !shiftRequired && shiftHeld {
+		log.Printf("[MOD_MATCH] Extra Shift present -> false")
+		return false
+	}
+	if !altRequired && altHeld {
+		log.Printf("[MOD_MATCH] Extra Alt present -> false")
 		return false
 	}
 
-	if required.Contain(key.ModAlt) && !ev.Modifiers.Contain(key.ModAlt) {
-		return false
-	}
-
+	log.Printf("[MOD_MATCH] Exact match -> true")
 	return true
 }
 
@@ -224,13 +259,20 @@ func (s *appState) matchPrintableKey(ev key.Event, target rune) bool {
 }
 
 func (s *appState) executeAction(action Action, ev key.Event) {
+	log.Printf("[ACTION] Executing action=%v mode=%s", action, s.mode)
+	
 	switch action {
 	case ActionToggleExplorer:
+		log.Printf("[TOGGLE_EXPLORER] Before: visible=%v focused=%v mode=%s", 
+			s.explorerVisible, s.explorerFocused, s.mode)
 		if s.fileTree == nil {
 			s.status = "File tree not available"
+			log.Printf("[TOGGLE_EXPLORER] Aborted: file tree not available")
 			return
 		}
 		s.toggleExplorer()
+		log.Printf("[TOGGLE_EXPLORER] After: visible=%v focused=%v mode=%s", 
+			s.explorerVisible, s.explorerFocused, s.mode)
 
 	case ActionFocusExplorer:
 		if s.fileTree == nil {
@@ -280,9 +322,13 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		s.enterCommandMode()
 
 	case ActionEnterExplorer:
+		log.Printf("[MODE_CHANGE] Entering EXPLORER mode from %s", s.mode)
 		s.enterExplorerMode()
+		log.Printf("[MODE_CHANGE] Now in mode=%s explorerFocused=%v", s.mode, s.explorerFocused)
 
 	case ActionExitMode:
+		log.Printf("[MODE_CHANGE] Exiting mode=%s", s.mode)
+		oldMode := s.mode
 		switch s.mode {
 		case modeInsert:
 			s.mode = modeNormal
@@ -305,6 +351,7 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.resetCount()
 			s.status = "Staying in NORMAL"
 		}
+		log.Printf("[MODE_CHANGE] Exited %s -> now in %s", oldMode, s.mode)
 
 	case ActionMoveLeft:
 		s.moveCursor("left")
