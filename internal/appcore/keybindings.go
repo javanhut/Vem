@@ -36,6 +36,9 @@ const (
 	ActionJumpLineEnd
 	ActionGotoLine
 	ActionStartGotoSequence
+	ActionWordForward
+	ActionWordBackward
+	ActionWordEnd
 
 	// Editing
 	ActionInsertNewline
@@ -111,6 +114,9 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "j", Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: "k", Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: "l", Modes: nil, Action: ActionMoveRight},
+		{Modifiers: 0, Key: "w", Modes: nil, Action: ActionWordForward},
+		{Modifiers: 0, Key: "b", Modes: nil, Action: ActionWordBackward},
+		{Modifiers: 0, Key: "e", Modes: nil, Action: ActionWordEnd},
 		{Modifiers: 0, Key: "0", Modes: nil, Action: ActionJumpLineStart},
 		{Modifiers: 0, Key: "$", Modes: nil, Action: ActionJumpLineEnd},
 		{Modifiers: key.ModShift, Key: "4", Modes: nil, Action: ActionJumpLineEnd},
@@ -142,6 +148,9 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "j", Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: "k", Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: "l", Modes: nil, Action: ActionMoveRight},
+		{Modifiers: 0, Key: "w", Modes: nil, Action: ActionWordForward},
+		{Modifiers: 0, Key: "b", Modes: nil, Action: ActionWordBackward},
+		{Modifiers: 0, Key: "e", Modes: nil, Action: ActionWordEnd},
 		{Modifiers: 0, Key: "0", Modes: nil, Action: ActionJumpLineStart},
 		{Modifiers: 0, Key: "$", Modes: nil, Action: ActionJumpLineEnd},
 		{Modifiers: key.ModShift, Key: "4", Modes: nil, Action: ActionJumpLineEnd},
@@ -441,6 +450,27 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.setCursorStatus("Line end")
 		} else {
 			s.status = "Already at line end"
+		}
+
+	case ActionWordForward:
+		if s.activeBuffer().MoveWordForward() {
+			s.setCursorStatus("Word forward")
+		} else {
+			s.status = "End of buffer"
+		}
+
+	case ActionWordBackward:
+		if s.activeBuffer().MoveWordBackward() {
+			s.setCursorStatus("Word backward")
+		} else {
+			s.status = "Start of buffer"
+		}
+
+	case ActionWordEnd:
+		if s.activeBuffer().MoveWordEnd() {
+			s.setCursorStatus("Word end")
+		} else {
+			s.status = "End of buffer"
 		}
 
 	case ActionInsertNewline:

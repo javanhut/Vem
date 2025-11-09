@@ -293,6 +293,194 @@ func (b *Buffer) JumpLineEnd() bool {
 	return true
 }
 
+// MoveWordForward moves the cursor to the start of the next word.
+// Vim's 'w' command: move forward to the beginning of the next word.
+func (b *Buffer) MoveWordForward() bool {
+	if len(b.lines) == 0 {
+		return false
+	}
+
+	line := b.cursor.Line
+	col := b.cursor.Col
+	runes := []rune(b.lines[line])
+
+	// Skip current word
+	for col < len(runes) && !isSpace(runes[col]) {
+		col++
+	}
+
+	// Skip whitespace
+	for {
+		for col < len(runes) && isSpace(runes[col]) {
+			col++
+		}
+		// If we found non-space on this line, stop
+		if col < len(runes) {
+			break
+		}
+		// Move to next line
+		if line >= len(b.lines)-1 {
+			// At last line, move to end
+			b.cursor.Line = line
+			b.cursor.Col = len(runes)
+			return true
+		}
+		line++
+		col = 0
+		runes = []rune(b.lines[line])
+		// Skip empty lines
+		if len(runes) == 0 {
+			continue
+		}
+	}
+
+	b.cursor.Line = line
+	b.cursor.Col = col
+	return true
+}
+
+// MoveWordBackward moves the cursor to the start of the previous word.
+// Vim's 'b' command: move backward to the beginning of the previous word.
+func (b *Buffer) MoveWordBackward() bool {
+	if len(b.lines) == 0 {
+		return false
+	}
+
+	line := b.cursor.Line
+	col := b.cursor.Col
+
+	// Move back one position
+	if col > 0 {
+		col--
+	} else if line > 0 {
+		line--
+		col = len([]rune(b.lines[line]))
+		if col > 0 {
+			col--
+		}
+	} else {
+		return false // At start of buffer
+	}
+
+	runes := []rune(b.lines[line])
+
+	// Skip whitespace
+	for {
+		for col >= 0 && col < len(runes) && isSpace(runes[col]) {
+			col--
+		}
+		// If we found non-space on this line, break
+		if col >= 0 && col < len(runes) {
+			break
+		}
+		// Move to previous line
+		if line == 0 {
+			b.cursor.Line = 0
+			b.cursor.Col = 0
+			return true
+		}
+		line--
+		runes = []rune(b.lines[line])
+		col = len(runes) - 1
+	}
+
+	// Find start of word
+	charType := getCharType(runes[col])
+	for col > 0 && getCharType(runes[col-1]) == charType {
+		col--
+	}
+
+	b.cursor.Line = line
+	b.cursor.Col = col
+	return true
+}
+
+// MoveWordEnd moves the cursor to the end of the current or next word.
+// Vim's 'e' command: move forward to the end of the word.
+func (b *Buffer) MoveWordEnd() bool {
+	if len(b.lines) == 0 {
+		return false
+	}
+
+	line := b.cursor.Line
+	col := b.cursor.Col
+	runes := []rune(b.lines[line])
+
+	// Move forward one position
+	if col < len(runes)-1 {
+		col++
+	} else if line < len(b.lines)-1 {
+		line++
+		col = 0
+		runes = []rune(b.lines[line])
+	} else {
+		return false // At end of buffer
+	}
+
+	// Skip whitespace
+	for {
+		for col < len(runes) && isSpace(runes[col]) {
+			col++
+		}
+		if col < len(runes) {
+			break
+		}
+		// Move to next line
+		if line >= len(b.lines)-1 {
+			b.cursor.Line = line
+			b.cursor.Col = len(runes)
+			return true
+		}
+		line++
+		col = 0
+		runes = []rune(b.lines[line])
+	}
+
+	// Find end of word
+	charType := getCharType(runes[col])
+	for col < len(runes)-1 && getCharType(runes[col+1]) == charType {
+		col++
+	}
+
+	b.cursor.Line = line
+	b.cursor.Col = col
+	return true
+}
+
+// Word navigation helper functions
+
+type charType int
+
+const (
+	charTypeSpace charType = iota
+	charTypeWord
+	charTypePunct
+)
+
+// isSpace checks if a rune is whitespace.
+func isSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
+
+// isWordChar checks if a rune is a word character (letter, digit, or underscore).
+func isWordChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '_'
+}
+
+// getCharType returns the character type for word navigation.
+func getCharType(r rune) charType {
+	if isSpace(r) {
+		return charTypeSpace
+	}
+	if isWordChar(r) {
+		return charTypeWord
+	}
+	return charTypePunct
+}
+
 func (b *Buffer) clampColumn() {
 	lineLen := b.lineLength(b.cursor.Line)
 	if b.cursor.Col > lineLen {
@@ -381,12 +569,12 @@ func (b *Buffer) LoadFromFile(path string) error {
 
 	text := string(content)
 	lines := strings.Split(text, "\n")
-	
+
 	// Remove trailing empty line if file ends with newline
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	
+
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
@@ -402,7 +590,7 @@ func (b *Buffer) LoadFromFile(path string) error {
 // SaveToFile saves the buffer content to a file.
 func (b *Buffer) SaveToFile(path string) error {
 	content := b.GetContent()
-	
+
 	// Ensure file ends with newline
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
@@ -436,10 +624,10 @@ func NewBufferFromFile(path string) (*Buffer, error) {
 		lines:  []string{""},
 		cursor: Cursor{},
 	}
-	
+
 	if err := buf.LoadFromFile(path); err != nil {
 		return nil, err
 	}
-	
+
 	return buf, nil
 }

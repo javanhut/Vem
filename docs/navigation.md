@@ -2,6 +2,63 @@
 
 This document describes the navigation features in ProjectVem, including cursor movement, viewport scrolling, pane navigation between the file tree explorer and the text editor, and fullscreen mode management.
 
+## Cursor Movement
+
+ProjectVem provides Vim-compatible cursor movement commands for efficient navigation.
+
+### Character Movement
+
+- **`h`** or **Left Arrow** - Move cursor left one character
+- **`l`** or **Right Arrow** - Move cursor right one character
+- **`j`** or **Down Arrow** - Move cursor down one line
+- **`k`** or **Up Arrow** - Move cursor up one line
+
+### Line Movement
+
+- **`0`** - Jump to start of line (column 0)
+- **`$`** - Jump to end of line
+- **`gg`** - Jump to first line of buffer
+- **`G`** - Jump to last line of buffer
+- **`[count]G`** - Jump to line number [count] (e.g., `42G` jumps to line 42)
+
+### Word Movement
+
+Word navigation allows efficient movement through code and text:
+
+- **`w`** - Move forward to start of next **word**
+  - A word is a sequence of letters, digits, and underscores OR other non-blank characters
+  - Examples: `foo_bar` (1 word), `foo-bar` (3 words: `foo`, `-`, `bar`)
+  
+- **`b`** - Move backward to start of previous **word**
+  - Moves to the beginning of the current or previous word
+  
+- **`e`** - Move forward to end of current or next **word**
+  - Positions cursor on the last character of the word
+
+**Word Definition:**
+- **Word characters**: Letters (a-z, A-Z), digits (0-9), underscore (_)
+- **Punctuation**: All other non-whitespace characters are treated as separate words
+- **Whitespace**: Spaces, tabs, newlines separate words
+
+**Examples:**
+```
+Text: "foo_bar = get_value(123);"
+
+Starting at 'f' in foo_bar:
+w → moves to '=' (start of next word)
+w → moves to 'g' in get_value
+w → moves to '(' (punctuation is separate word)
+w → moves to '1' in 123
+e → moves to '3' (end of 123)
+b → moves to '1' (start of previous word)
+```
+
+### Search Movement
+
+- **`/`** - Enter search mode (type pattern and press Enter)
+- **`n`** - Jump to next search match
+- **`N`** - Jump to previous search match
+
 ## Viewport Scrolling
 
 ProjectVem implements Vim-style viewport scrolling to ensure the cursor is always visible and to provide fine-grained control over the viewport position.
@@ -12,6 +69,7 @@ The viewport automatically scrolls to keep the cursor visible with a configurabl
 
 - Jump to a line with `gg`, `G`, or `[count]G`
 - Navigate with `h`, `j`, `k`, `l` or arrow keys
+- Move by word with `w`, `b`, `e`
 - Search and jump to matches with `/` and `n`/`N`
 - Use any other navigation command
 
