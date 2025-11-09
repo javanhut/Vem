@@ -72,6 +72,13 @@ const (
 	// Buffer management
 	ActionNextBuffer
 	ActionPrevBuffer
+
+	// Viewport scrolling
+	ActionScrollToCenter
+	ActionScrollToTop
+	ActionScrollToBottom
+	ActionScrollLineUp
+	ActionScrollLineDown
 )
 
 type KeyBinding struct {
@@ -110,6 +117,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "/", Modes: nil, Action: ActionEnterSearch},
 		{Modifiers: 0, Key: "n", Modes: nil, Action: ActionNextMatch},
 		{Modifiers: key.ModShift, Key: "n", Modes: nil, Action: ActionPrevMatch},
+		{Modifiers: key.ModCtrl, Key: "e", Modes: nil, Action: ActionScrollLineDown},
+		{Modifiers: key.ModCtrl, Key: "y", Modes: nil, Action: ActionScrollLineUp},
 	},
 	modeInsert: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -286,7 +295,7 @@ func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 }
 
 func (s *appState) matchPrintableKey(ev key.Event, target rune) bool {
-	r, ok := printableKey(ev)
+	r, ok := s.printableKey(ev)
 	if !ok {
 		return false
 	}
@@ -554,5 +563,22 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionFuzzyFinderConfirm:
 		s.fuzzyFinderConfirm()
+
+	case ActionScrollToCenter:
+		linesPerPage := 20
+		s.scrollToCenter(linesPerPage)
+
+	case ActionScrollToTop:
+		s.scrollToTop()
+
+	case ActionScrollToBottom:
+		linesPerPage := 20
+		s.scrollToBottom(linesPerPage)
+
+	case ActionScrollLineUp:
+		s.scrollLineUp()
+
+	case ActionScrollLineDown:
+		s.scrollLineDown()
 	}
 }

@@ -1,6 +1,93 @@
 # Navigation in ProjectVem
 
-This document describes the navigation features in ProjectVem, including pane navigation between the file tree explorer and the text editor, and fullscreen mode management.
+This document describes the navigation features in ProjectVem, including cursor movement, viewport scrolling, pane navigation between the file tree explorer and the text editor, and fullscreen mode management.
+
+## Viewport Scrolling
+
+ProjectVem implements Vim-style viewport scrolling to ensure the cursor is always visible and to provide fine-grained control over the viewport position.
+
+### Automatic Scrolling
+
+The viewport automatically scrolls to keep the cursor visible with a configurable scroll offset (default: 3 lines of context above/below the cursor). This happens automatically when you:
+
+- Jump to a line with `gg`, `G`, or `[count]G`
+- Navigate with `h`, `j`, `k`, `l` or arrow keys
+- Search and jump to matches with `/` and `n`/`N`
+- Use any other navigation command
+
+### Manual Scroll Commands
+
+#### Cursor Positioning Commands
+
+- **`zz`** - Center cursor line in viewport (Vim's `zz`)
+  - Scrolls the viewport so the cursor line is in the middle of the screen
+  - Cursor position doesn't change, only the viewport
+  - Status: "Centered cursor"
+
+- **`zt`** - Position cursor line at top of viewport (Vim's `zt`)
+  - Scrolls the viewport so the cursor line is at the top
+  - Cursor position doesn't change, only the viewport
+  - Status: "Cursor at top"
+
+- **`zb`** - Position cursor line at bottom of viewport (Vim's `zb`)
+  - Scrolls the viewport so the cursor line is at the bottom
+  - Cursor position doesn't change, only the viewport
+  - Status: "Cursor at bottom"
+
+#### Line-by-Line Scrolling
+
+- **`Ctrl+E`** - Scroll viewport down one line (Vim's `Ctrl+E`)
+  - Moves the viewport down by one line
+  - Cursor position doesn't change (unless it goes off-screen)
+  - Status: "Scrolled down (top line: N)"
+
+- **`Ctrl+Y`** - Scroll viewport up one line (Vim's `Ctrl+Y`)
+  - Moves the viewport up by one line
+  - Cursor position doesn't change (unless it goes off-screen)
+  - Status: "Scrolled up (top line: N)"
+
+### Scroll Offset
+
+By default, ProjectVem maintains a scroll offset of 3 lines around the cursor. This means:
+
+- When scrolling up, the cursor stays at least 3 lines from the top edge
+- When scrolling down, the cursor stays at least 3 lines from the bottom edge
+- This provides visual context and prevents the cursor from being at the screen edge
+
+### Viewport Scrolling in Different Modes
+
+All scroll commands work in:
+- **NORMAL mode** - Full scroll functionality available
+- **VISUAL mode** - Scroll while maintaining selection (same commands)
+- **INSERT mode** - Automatic scrolling only (manual scroll commands not available)
+
+### Examples
+
+**Jump to top of file and center:**
+```
+gg      # Jump to line 1
+zz      # Center line 1 in viewport
+```
+
+**Navigate to a specific line and position at top:**
+```
+42G     # Jump to line 42
+zt      # Position line 42 at top of viewport
+```
+
+**Fine-tune viewport position:**
+```
+/search_term    # Search for something
+Ctrl+E          # Scroll down 1 line to see more context below
+Ctrl+E          # Scroll down another line
+```
+
+**Quick viewport adjustments:**
+```
+zz      # Center current line
+zt      # Move to top
+zb      # Move to bottom
+```
 
 ## Fullscreen Mode
 
@@ -173,7 +260,21 @@ This ensures global shortcuts always work, regardless of mode.
 - Keybinding system: `internal/appcore/keybindings.go`
 - Action execution: `internal/appcore/keybindings.go:executeAction()`
 - Event handling: `internal/appcore/app.go:handleKey()`
+- Viewport scrolling: `internal/appcore/app.go:ensureCursorVisible()`, `internal/appcore/app.go:drawBuffer()`
+- Key input handling: `internal/appcore/app.go:printableKey()` (shift-aware letter case conversion)
 - Focus border rendering (tree): `internal/appcore/app.go:drawFileExplorer()`
 - Focus border rendering (editor): `internal/appcore/app.go:drawBuffer()`
 
 For detailed architecture documentation, see `docs/keybindings.md`.
+
+## Technical Notes
+
+### Keyboard Input Handling
+
+ProjectVem handles keyboard input with special attention to platform quirks:
+
+- **Letter Case Handling**: Gio UI reports all letter keys as uppercase in the key name (e.g., `ev.Name = "G"` for both `g` and `Shift+G`). The `printableKey()` method checks the tracked shift state to correctly convert letters to lowercase when shift is not pressed, ensuring commands like `gg` (jump to top) and `G` (jump to bottom) work correctly.
+
+- **Modifier Tracking**: Due to platform limitations where `ev.Modifiers` is not reliably reported, ProjectVem tracks modifier key state (Ctrl, Shift) through explicit press/release events in `s.ctrlPressed` and `s.shiftPressed`.
+
+- **Smart Reset**: After executing commands, modifiers are automatically reset to prevent them from "sticking" between keypress events.

@@ -80,6 +80,7 @@ type appState struct {
 	focusTag           *int
 	pendingCount       int
 	pendingGoto        bool
+	pendingScroll      bool
 	visualStart        int
 	visualActive       bool
 	skipNextEdit       bool
@@ -124,6 +125,11 @@ type appState struct {
 	// Fullscreen state tracking
 	currentWindowMode app.WindowMode
 	wasFullscreen     bool
+
+	// Viewport scrolling state
+	viewportTopLine   int // First visible line in viewport (0-based)
+	scrollOffsetLines int // Context lines around cursor (Vim's scrolloff)
+	listPosition      layout.List
 }
 
 func Run(w *app.Window) error {
@@ -186,6 +192,9 @@ func newAppState() *appState {
 		explorerFocused:   false,
 		currentWindowMode: app.Windowed,
 		wasFullscreen:     false,
+		viewportTopLine:   0,
+		scrollOffsetLines: 3,
+		listPosition:      layout.List{Axis: layout.Vertical},
 	}
 }
 
@@ -370,10 +379,26 @@ func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
 
 func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	lines := s.activeBuffer().LineCount()
-	list := layout.List{Axis: layout.Vertical}
 	cursorLine := s.activeBuffer().Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
 	cursorCol := s.activeBuffer().Cursor().Col
+
+	// Calculate approximate lines per page for viewport scrolling
+	// Use a rough estimate: line height ~20dp, inset ~16dp top+bottom
+	lineHeightDp := 20
+	insetDp := 32
+	availableHeight := gtx.Constraints.Max.Y - gtx.Dp(unit.Dp(insetDp))
+	linesPerPage := availableHeight / gtx.Dp(unit.Dp(lineHeightDp))
+	if linesPerPage < 1 {
+		linesPerPage = 1
+	}
+
+	// Ensure cursor is visible in viewport
+	s.ensureCursorVisible(linesPerPage)
+
+	// Set scroll position to viewport top line
+	s.listPosition.Position.First = s.viewportTopLine
+	s.listPosition.Position.Offset = 0
 
 	// Draw focus border on the left edge if editor is focused (not in explorer mode)
 	editorFocused := !s.explorerFocused && s.explorerVisible
@@ -394,7 +419,7 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 		Left:   unit.Dp(16),
 	}
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return list.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
+		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
 			lineContent := expandTabs(s.activeBuffer().Line(index), 4)
 			lineText := fmt.Sprintf("%4d  %s", index+1, lineContent)
 			label := material.Body1(s.theme, lineText)
@@ -868,7 +893,7 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 		return true
 	}
 
-	if r, ok := printableKey(ev); ok {
+	if r, ok := s.printableKey(ev); ok {
 		if unicode.IsDigit(r) {
 			if s.handleCountDigit(int(r - '0')) {
 				return true
@@ -880,6 +905,12 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 			}
 			s.pendingGoto = false
 		}
+		if s.pendingScroll {
+			if s.handleScrollSequence(r) {
+				return true
+			}
+			s.pendingScroll = false
+		}
 		switch r {
 		case 'G':
 			s.gotoLineWithCount()
@@ -887,20 +918,23 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 		case 'g':
 			s.startGotoSequence()
 			return true
+		case 'z':
+			s.startScrollSequence()
+			return true
 		}
 	}
 	return false
 }
 
 func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
-	if _, ok := printableKey(ev); ok {
+	if _, ok := s.printableKey(ev); ok {
 		return true
 	}
 	return false
 }
 
 func (s *appState) handleDeleteModeSpecial(ev key.Event) bool {
-	if r, ok := printableKey(ev); ok {
+	if r, ok := s.printableKey(ev); ok {
 		if unicode.IsDigit(r) {
 			s.handleCountDigit(int(r - '0'))
 			if s.pendingCount > 0 {
@@ -924,7 +958,7 @@ func (s *appState) handleVisualModeSpecial(ev key.Event) bool {
 		return true
 	}
 
-	if r, ok := printableKey(ev); ok {
+	if r, ok := s.printableKey(ev); ok {
 		if unicode.IsDigit(r) && s.handleCountDigit(int(r-'0')) {
 			return true
 		}
@@ -934,12 +968,21 @@ func (s *appState) handleVisualModeSpecial(ev key.Event) bool {
 			}
 			s.pendingGoto = false
 		}
+		if s.pendingScroll {
+			if s.handleScrollSequence(r) {
+				return true
+			}
+			s.pendingScroll = false
+		}
 		switch r {
 		case 'G':
 			s.gotoLineWithCount()
 			return true
 		case 'g':
 			s.startGotoSequence()
+			return true
+		case 'z':
+			s.startScrollSequence()
 			return true
 		}
 	}
@@ -1066,6 +1109,106 @@ func (s *appState) updateCaretBlink(gtx layout.Context) {
 	gtx.Execute(op.InvalidateCmd{At: s.nextBlink})
 }
 
+// ensureCursorVisible adjusts the viewport to ensure the cursor is visible with context lines.
+// linesPerPage is the number of lines that fit in the current viewport.
+func (s *appState) ensureCursorVisible(linesPerPage int) {
+	if linesPerPage <= 0 {
+		linesPerPage = 20 // Fallback default
+	}
+
+	cursorLine := s.activeBuffer().Cursor().Line
+	totalLines := s.activeBuffer().LineCount()
+
+	// Calculate viewport bounds
+	viewportBottom := s.viewportTopLine + linesPerPage - 1
+
+	// Check if cursor is above viewport (need to scroll up)
+	if cursorLine < s.viewportTopLine+s.scrollOffsetLines {
+		s.viewportTopLine = cursorLine - s.scrollOffsetLines
+		if s.viewportTopLine < 0 {
+			s.viewportTopLine = 0
+		}
+	}
+
+	// Check if cursor is below viewport (need to scroll down)
+	if cursorLine > viewportBottom-s.scrollOffsetLines {
+		s.viewportTopLine = cursorLine - linesPerPage + s.scrollOffsetLines + 1
+		if s.viewportTopLine < 0 {
+			s.viewportTopLine = 0
+		}
+	}
+
+	// Clamp viewport to valid range
+	maxTopLine := totalLines - linesPerPage
+	if maxTopLine < 0 {
+		maxTopLine = 0
+	}
+	if s.viewportTopLine > maxTopLine {
+		s.viewportTopLine = maxTopLine
+	}
+}
+
+// scrollToCenter centers the cursor line in the viewport (Vim's zz command).
+func (s *appState) scrollToCenter(linesPerPage int) {
+	if linesPerPage <= 0 {
+		linesPerPage = 20
+	}
+	cursorLine := s.activeBuffer().Cursor().Line
+	s.viewportTopLine = cursorLine - (linesPerPage / 2)
+	if s.viewportTopLine < 0 {
+		s.viewportTopLine = 0
+	}
+	maxTopLine := s.activeBuffer().LineCount() - linesPerPage
+	if maxTopLine < 0 {
+		maxTopLine = 0
+	}
+	if s.viewportTopLine > maxTopLine {
+		s.viewportTopLine = maxTopLine
+	}
+	s.status = "Centered cursor"
+}
+
+// scrollToTop positions cursor line at top of viewport (Vim's zt command).
+func (s *appState) scrollToTop() {
+	cursorLine := s.activeBuffer().Cursor().Line
+	s.viewportTopLine = cursorLine
+	maxTopLine := s.activeBuffer().LineCount() - 1
+	if s.viewportTopLine > maxTopLine {
+		s.viewportTopLine = maxTopLine
+	}
+	s.status = "Cursor at top"
+}
+
+// scrollToBottom positions cursor line at bottom of viewport (Vim's zb command).
+func (s *appState) scrollToBottom(linesPerPage int) {
+	if linesPerPage <= 0 {
+		linesPerPage = 20
+	}
+	cursorLine := s.activeBuffer().Cursor().Line
+	s.viewportTopLine = cursorLine - linesPerPage + 1
+	if s.viewportTopLine < 0 {
+		s.viewportTopLine = 0
+	}
+	s.status = "Cursor at bottom"
+}
+
+// scrollLineUp scrolls viewport up by one line (Vim's Ctrl+Y).
+func (s *appState) scrollLineUp() {
+	if s.viewportTopLine > 0 {
+		s.viewportTopLine--
+		s.status = fmt.Sprintf("Scrolled up (top line: %d)", s.viewportTopLine+1)
+	}
+}
+
+// scrollLineDown scrolls viewport down by one line (Vim's Ctrl+E).
+func (s *appState) scrollLineDown() {
+	maxTopLine := s.activeBuffer().LineCount() - 1
+	if s.viewportTopLine < maxTopLine {
+		s.viewportTopLine++
+		s.status = fmt.Sprintf("Scrolled down (top line: %d)", s.viewportTopLine+1)
+	}
+}
+
 func (s *appState) handleCountDigit(d int) bool {
 	if s.mode == modeInsert {
 		return false
@@ -1090,6 +1233,7 @@ func (s *appState) consumeCount(defaultVal int) int {
 func (s *appState) resetCount() {
 	s.pendingCount = 0
 	s.pendingGoto = false
+	s.pendingScroll = false
 }
 
 func (s *appState) gotoLine(target int) {
@@ -1169,6 +1313,36 @@ func (s *appState) handleGotoSequence(r rune) bool {
 		s.gotoLine(target)
 		return true
 	default:
+		return false
+	}
+}
+
+func (s *appState) startScrollSequence() {
+	s.pendingScroll = true
+	s.status = "scroll: awaiting z/t/b"
+}
+
+func (s *appState) handleScrollSequence(r rune) bool {
+	if !s.pendingScroll {
+		return false
+	}
+	s.pendingScroll = false
+
+	// Calculate approximate lines per page
+	linesPerPage := 20
+
+	switch r {
+	case 'z':
+		s.scrollToCenter(linesPerPage)
+		return true
+	case 't':
+		s.scrollToTop()
+		return true
+	case 'b':
+		s.scrollToBottom(linesPerPage)
+		return true
+	default:
+		s.status = "Unknown scroll command"
 		return false
 	}
 }
@@ -1722,7 +1896,7 @@ func (s *appState) handleFileOpKey(ev key.Event) bool {
 
 	// Handle delete confirmation (y/n)
 	if s.fileOpMode == "delete" {
-		if r, ok := printableKey(ev); ok {
+		if r, ok := s.printableKey(ev); ok {
 			switch unicode.ToLower(r) {
 			case 'y':
 				s.completeFileOp()
@@ -1788,7 +1962,7 @@ func (s *appState) requestClose() {
 	s.window.Perform(system.ActionClose)
 }
 
-func printableKey(ev key.Event) (rune, bool) {
+func (s *appState) printableKey(ev key.Event) (rune, bool) {
 	str := string(ev.Name)
 	if utf8.RuneCountInString(str) != 1 {
 		return 0, false
@@ -1800,6 +1974,17 @@ func printableKey(ev key.Event) (rune, bool) {
 	if unicode.IsControl(r) {
 		return 0, false
 	}
+
+	// Handle letter case based on shift state
+	// Gio reports all letters as uppercase in ev.Name, so we need to check shift state
+	if unicode.IsLetter(r) {
+		// If shift is NOT pressed, convert to lowercase
+		if !s.shiftPressed {
+			r = unicode.ToLower(r)
+		}
+		// If shift IS pressed, keep uppercase (already uppercase from Gio)
+	}
+
 	// Gio reports punctuation keys like Shift+; as ';' with ModShift; normalize to ':'.
 	if r == ';' && ev.Modifiers.Contain(key.ModShift) {
 		r = ':'
