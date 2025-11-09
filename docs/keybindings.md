@@ -48,7 +48,7 @@ NORMAL mode is the default mode for navigation and executing commands.
 | Key | Action | Description |
 |-----|--------|-------------|
 | `0` | Line Start | Jump to first character of line |
-| `$` | Line End | Jump to last character of line |
+| `$` or `Shift+4` | Line End | Jump to last character of line |
 
 #### Search
 
@@ -129,7 +129,7 @@ VISUAL line mode is for selecting and manipulating multiple lines.
 | `↑` | Move Up | Same as `k` |
 | `→` | Move Right | Same as `l` |
 | `0` | Line Start | Move to start of line |
-| `$` | Line End | Move to end of line |
+| `$` or `Shift+4` | Line End | Move to end of line |
 | `gg` | First Line | Extend selection to first line |
 | `G` | Last Line | Extend selection to last line |
 
