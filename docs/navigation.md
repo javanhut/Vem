@@ -59,6 +59,142 @@ b → moves to '1' (start of previous word)
 - **`n`** - Jump to next search match
 - **`N`** - Jump to previous search match
 
+## Visual Mode
+
+ProjectVem implements Vim-style visual selection with two distinct modes for selecting text: character-wise and line-wise.
+
+### Visual Mode Types
+
+#### Character-Wise Visual Mode (`v`)
+
+- **`v`** - Enter character-wise visual mode
+  - Allows precise, per-character selection
+  - Selection extends from the anchor point to the cursor position
+  - Works across multiple lines
+  - Visual indication: selected characters are highlighted with a colored background
+  - Status bar shows: `-- VISUAL --`
+
+**Usage:**
+```
+v           # Start character selection at cursor
+w           # Extend selection forward by word
+e           # Extend to end of word
+b           # Contract selection backward by word
+h/j/k/l     # Extend/contract by character or line
+c           # Copy selected text
+d           # Delete selected text
+p           # Paste (replace selection with clipboard)
+Escape      # Exit visual mode
+```
+
+#### Line-Wise Visual Mode (`Shift+V`)
+
+- **`Shift+V`** - Enter line-wise visual mode
+  - Selects entire lines at a time
+  - Selection always includes complete lines
+  - Visual indication: selected lines are highlighted with a colored background
+  - Status bar shows: `-- VISUAL LINE --`
+
+**Usage:**
+```
+Shift+V     # Start line selection at cursor line
+j/k         # Extend selection down/up by line
+c           # Copy selected lines
+d           # Delete selected lines
+p           # Paste (insert lines at selection)
+Escape      # Exit visual mode
+```
+
+### Visual Mode Operations
+
+Once text is selected in either visual mode, you can perform these operations:
+
+- **`c`** - Copy selection to clipboard
+  - Character mode: copies exact character range
+  - Line mode: copies complete lines
+  - Status shows: "Copied N character(s)" or "Copied N line(s)"
+
+- **`d`** - Delete selection
+  - Character mode: deletes character range, cursor moves to start
+  - Line mode: deletes complete lines, cursor moves to start line
+  - Status shows: "Deleted selection"
+
+- **`p`** - Paste clipboard, replacing selection
+  - Character mode: replaces selected characters with clipboard text
+  - Line mode: replaces selected lines with clipboard lines
+  - Status shows: "Pasted N character(s)" or "Inserted N line(s)"
+
+- **`Escape`** - Exit visual mode without making changes
+  - Returns to NORMAL mode
+  - Selection is cleared
+  - Cursor position is preserved
+
+### Visual Mode Navigation
+
+All normal mode navigation commands work in visual mode to extend or contract the selection:
+
+**Character Movement:**
+- `h`, `l`, `←`, `→` - Extend/contract by character
+- `j`, `k`, `↓`, `↑` - Extend/contract by line
+
+**Word Movement:**
+- `w` - Extend forward to next word start
+- `b` - Contract backward to previous word start
+- `e` - Extend forward to word end
+
+**Line Movement:**
+- `0` - Extend to line start
+- `$` - Extend to line end
+- `gg` - Extend to first line
+- `G` - Extend to last line
+- `[count]G` - Extend to line number
+
+### Visual Mode Examples
+
+**Select and copy a word:**
+```
+v           # Start character selection
+w           # Extend to next word
+c           # Copy to clipboard
+```
+
+**Select and delete multiple lines:**
+```
+Shift+V     # Start line selection
+3j          # Extend down 3 lines (total 4 lines selected)
+d           # Delete all selected lines
+```
+
+**Replace a function name across lines:**
+```
+v           # Start character selection
+e           # Extend to end of current word
+c           # Copy old name
+/new_func   # Search for location to replace
+v           # Start new selection
+w           # Select word
+p           # Paste, replacing selection
+```
+
+**Select code block and copy:**
+```
+Shift+V     # Start line selection at function start
+}           # Jump to end of block (when implemented)
+c           # Copy entire block
+```
+
+### Visual Mode vs Vem Keybindings
+
+ProjectVem uses **Vem-style copy/delete/paste** keybindings instead of Vim's traditional `y` (yank):
+
+| Operation | Vem Key | Vim Key | Notes |
+|-----------|---------|---------|-------|
+| Copy      | `c`     | `y`     | Vem: "copy" is more intuitive |
+| Delete    | `d`     | `d`     | Same in both |
+| Paste     | `p`     | `p`     | Same in both |
+
+This makes the keybindings more intuitive for new users while maintaining the Vim-style modal editing workflow.
+
 ## Viewport Scrolling
 
 ProjectVem implements Vim-style viewport scrolling to ensure the cursor is always visible and to provide fine-grained control over the viewport position.

@@ -21,7 +21,8 @@ const (
 
 	// Mode transitions
 	ActionEnterInsert
-	ActionEnterVisual
+	ActionEnterVisualChar
+	ActionEnterVisualLine
 	ActionEnterDelete
 	ActionEnterCommand
 	ActionEnterExplorer
@@ -108,7 +109,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: "i", Modes: nil, Action: ActionEnterInsert},
-		{Modifiers: 0, Key: "v", Modes: nil, Action: ActionEnterVisual},
+		{Modifiers: 0, Key: "v", Modes: nil, Action: ActionEnterVisualChar},
+		{Modifiers: key.ModShift, Key: "v", Modes: nil, Action: ActionEnterVisualLine},
 		{Modifiers: 0, Key: "d", Modes: nil, Action: ActionEnterDelete},
 		{Modifiers: 0, Key: "h", Modes: nil, Action: ActionMoveLeft},
 		{Modifiers: 0, Key: "j", Modes: nil, Action: ActionMoveDown},
@@ -365,7 +367,10 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	case ActionEnterInsert:
 		s.enterInsertMode()
 
-	case ActionEnterVisual:
+	case ActionEnterVisualChar:
+		s.enterVisualChar()
+
+	case ActionEnterVisualLine:
 		s.enterVisualLine()
 
 	case ActionEnterDelete:

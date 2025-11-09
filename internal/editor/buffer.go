@@ -631,3 +631,106 @@ func NewBufferFromFile(path string) (*Buffer, error) {
 
 	return buf, nil
 }
+
+// GetCharRange returns the text in the specified character range.
+func (b *Buffer) GetCharRange(startLine, startCol, endLine, endCol int) string {
+	if startLine < 0 || startLine >= len(b.lines) {
+		return ""
+	}
+	if endLine < 0 || endLine >= len(b.lines) {
+		return ""
+	}
+
+	// Single line selection
+	if startLine == endLine {
+		runes := []rune(b.lines[startLine])
+		if startCol >= len(runes) {
+			return ""
+		}
+		if endCol > len(runes) {
+			endCol = len(runes)
+		}
+		return string(runes[startCol:endCol])
+	}
+
+	// Multi-line selection
+	var result strings.Builder
+
+	// First line
+	runes := []rune(b.lines[startLine])
+	if startCol < len(runes) {
+		result.WriteString(string(runes[startCol:]))
+	}
+	result.WriteRune('\n')
+
+	// Middle lines
+	for i := startLine + 1; i < endLine; i++ {
+		result.WriteString(b.lines[i])
+		result.WriteRune('\n')
+	}
+
+	// Last line
+	runes = []rune(b.lines[endLine])
+	if endCol > len(runes) {
+		endCol = len(runes)
+	}
+	if endCol > 0 {
+		result.WriteString(string(runes[:endCol]))
+	}
+
+	return result.String()
+}
+
+// DeleteCharRange deletes the text in the specified character range.
+func (b *Buffer) DeleteCharRange(startLine, startCol, endLine, endCol int) {
+	if startLine < 0 || startLine >= len(b.lines) {
+		return
+	}
+	if endLine < 0 || endLine >= len(b.lines) {
+		return
+	}
+
+	// Single line deletion
+	if startLine == endLine {
+		runes := []rune(b.lines[startLine])
+		if startCol >= len(runes) {
+			return
+		}
+		if endCol > len(runes) {
+			endCol = len(runes)
+		}
+		b.lines[startLine] = string(runes[:startCol]) + string(runes[endCol:])
+		b.cursor.Line = startLine
+		b.cursor.Col = startCol
+		b.markModified()
+		return
+	}
+
+	// Multi-line deletion
+	startRunes := []rune(b.lines[startLine])
+	endRunes := []rune(b.lines[endLine])
+
+	// Build the merged line
+	var merged string
+	if startCol < len(startRunes) {
+		merged = string(startRunes[:startCol])
+	}
+	if endCol < len(endRunes) {
+		merged += string(endRunes[endCol:])
+	}
+
+	// Remove the lines in between
+	newLines := make([]string, 0, len(b.lines)-(endLine-startLine))
+	newLines = append(newLines, b.lines[:startLine]...)
+	newLines = append(newLines, merged)
+	newLines = append(newLines, b.lines[endLine+1:]...)
+
+	b.lines = newLines
+	if len(b.lines) == 0 {
+		b.lines = []string{""}
+	}
+
+	b.cursor.Line = startLine
+	b.cursor.Col = startCol
+	b.markModified()
+}

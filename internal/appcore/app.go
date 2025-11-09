@@ -33,6 +33,14 @@ import (
 
 type mode string
 
+type visualModeType int
+
+const (
+	visualModeNone visualModeType = iota
+	visualModeChar                // Character-wise selection (v)
+	visualModeLine                // Line-wise selection (Shift+V)
+)
+
 type SearchMatch struct {
 	Line int
 	Col  int
@@ -81,8 +89,9 @@ type appState struct {
 	pendingCount       int
 	pendingGoto        bool
 	pendingScroll      bool
-	visualStart        int
-	visualActive       bool
+	visualMode         visualModeType
+	visualStartLine    int
+	visualStartCol     int
 	skipNextEdit       bool
 	skipNextFileOpEdit bool
 	skipNextSearchEdit bool
@@ -184,8 +193,9 @@ func newAppState() *appState {
 		mode:              modeNormal,
 		status:            "Ready",
 		focusTag:          new(int),
-		visualStart:       -1,
-		visualActive:      false,
+		visualMode:        visualModeNone,
+		visualStartLine:   0,
+		visualStartCol:    0,
 		caretVisible:      true,
 		explorerVisible:   false,
 		explorerWidth:     250,
@@ -429,11 +439,17 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 			dims := label.Layout(gtx)
 			call := macro.Stop()
 
-			if hasSel && index >= selStart && index <= selEnd {
+			// Draw selection highlighting
+			if s.visualMode == visualModeChar {
+				s.drawCharSelection(gtx, index, dims.Size.Y)
+			} else if hasSel && index >= selStart && index <= selEnd {
+				// Line selection
 				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
 				paint.Fill(gtx.Ops, selectionColor)
 				rect.Pop()
 			}
+
+			// Draw cursor line highlight
 			if index == cursorLine {
 				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
 				paint.Fill(gtx.Ops, highlightColor)
@@ -490,6 +506,62 @@ func (s *appState) drawSearchHighlights(gtx layout.Context, lineIdx int, lineHei
 		paint.Fill(gtx.Ops, highlightCol)
 		rect.Pop()
 	}
+}
+
+func (s *appState) drawCharSelection(gtx layout.Context, lineIdx int, lineHeight int) {
+	startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeChar()
+	if !ok {
+		return
+	}
+
+	// Check if this line is in the selection range
+	if lineIdx < startLine || lineIdx > endLine {
+		return
+	}
+
+	lineContent := s.activeBuffer().Line(lineIdx)
+	runes := []rune(lineContent)
+
+	// Calculate selection range for this line
+	selStart := 0
+	selEnd := len(runes)
+
+	if lineIdx == startLine {
+		selStart = startCol
+		if selStart > len(runes) {
+			selStart = len(runes)
+		}
+	}
+	if lineIdx == endLine {
+		selEnd = endCol
+		if selEnd > len(runes) {
+			selEnd = len(runes)
+		}
+	}
+
+	// Nothing to select on this line
+	if selStart >= selEnd {
+		return
+	}
+
+	// Measure text widths
+	gutter := fmt.Sprintf("%4d  ", lineIdx+1)
+	gutterWidth := s.measureTextWidth(gtx, gutter)
+
+	prefix := string(runes[:selStart])
+	prefixWidth := s.measureTextWidth(gtx, prefix)
+
+	selected := string(runes[selStart:selEnd])
+	selectedWidth := s.measureTextWidth(gtx, selected)
+
+	// Draw highlight rectangle
+	x := gutterWidth + prefixWidth
+	rect := clip.Rect{
+		Min: image.Pt(x, 0),
+		Max: image.Pt(x+selectedWidth, lineHeight),
+	}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, selectionColor)
+	rect.Pop()
 }
 
 func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
@@ -1347,10 +1419,20 @@ func (s *appState) handleScrollSequence(r rune) bool {
 	}
 }
 
+func (s *appState) enterVisualChar() {
+	s.mode = modeVisual
+	s.visualMode = visualModeChar
+	s.visualStartLine = s.activeBuffer().Cursor().Line
+	s.visualStartCol = s.activeBuffer().Cursor().Col
+	s.resetCount()
+	s.status = "VISUAL (char)"
+}
+
 func (s *appState) enterVisualLine() {
 	s.mode = modeVisual
-	s.visualActive = true
-	s.visualStart = s.activeBuffer().Cursor().Line
+	s.visualMode = visualModeLine
+	s.visualStartLine = s.activeBuffer().Cursor().Line
+	s.visualStartCol = 0
 	s.resetCount()
 	s.status = "VISUAL (line)"
 }
@@ -1368,8 +1450,9 @@ func (s *appState) exitVisualMode() {
 	if s.mode == modeVisual {
 		s.mode = modeNormal
 	}
-	s.visualActive = false
-	s.visualStart = -1
+	s.visualMode = visualModeNone
+	s.visualStartLine = 0
+	s.visualStartCol = 0
 }
 
 func (s *appState) exitCommandMode() {
@@ -1471,41 +1554,93 @@ func (s *appState) openSelectedNode() {
 }
 
 func (s *appState) visualSelectionRange() (int, int, bool) {
-	if !s.visualActive || s.visualStart < 0 {
+	if s.visualMode == visualModeNone {
 		return 0, 0, false
 	}
 	cur := s.activeBuffer().Cursor().Line
-	start := s.visualStart
+	start := s.visualStartLine
 	if cur < start {
 		return cur, start, true
 	}
 	return start, cur, true
 }
 
-func (s *appState) deleteVisualSelection() {
-	start, end, ok := s.visualSelectionRange()
-	if !ok {
-		s.status = "No selection"
-		return
+func (s *appState) visualSelectionRangeChar() (startLine, startCol, endLine, endCol int, ok bool) {
+	if s.visualMode != visualModeChar {
+		return 0, 0, 0, 0, false
 	}
-	s.activeBuffer().DeleteLines(start, end)
-	s.exitVisualMode()
-	s.setCursorStatus("Deleted selection")
+
+	curLine := s.activeBuffer().Cursor().Line
+	curCol := s.activeBuffer().Cursor().Col
+
+	// Determine start and end based on cursor position relative to anchor
+	if curLine < s.visualStartLine || (curLine == s.visualStartLine && curCol < s.visualStartCol) {
+		// Selection goes backward
+		return curLine, curCol, s.visualStartLine, s.visualStartCol, true
+	}
+	// Selection goes forward
+	return s.visualStartLine, s.visualStartCol, curLine, curCol, true
+}
+
+func (s *appState) deleteVisualSelection() {
+	if s.visualMode == visualModeChar {
+		// Character-wise deletion
+		startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeChar()
+		if !ok {
+			s.status = "No selection"
+			return
+		}
+		s.activeBuffer().DeleteCharRange(startLine, startCol, endLine, endCol)
+		s.exitVisualMode()
+		s.setCursorStatus("Deleted selection")
+	} else if s.visualMode == visualModeLine {
+		// Line-wise deletion
+		start, end, ok := s.visualSelectionRange()
+		if !ok {
+			s.status = "No selection"
+			return
+		}
+		s.activeBuffer().DeleteLines(start, end)
+		s.exitVisualMode()
+		s.setCursorStatus("Deleted selection")
+	} else {
+		s.status = "No selection"
+	}
 }
 
 func (s *appState) copyVisualSelection() {
-	start, end, ok := s.visualSelectionRange()
-	if !ok {
+	if s.visualMode == visualModeChar {
+		// Character-wise copy
+		startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeChar()
+		if !ok {
+			s.status = "No selection to copy"
+			return
+		}
+		text := s.activeBuffer().GetCharRange(startLine, startCol, endLine, endCol)
+		if len(text) == 0 {
+			s.status = "No selection to copy"
+			return
+		}
+		// Store as a single line in clipboard
+		s.clipLines = []string{text}
+		s.status = fmt.Sprintf("Copied %d character(s)", len(text))
+	} else if s.visualMode == visualModeLine {
+		// Line-wise copy
+		start, end, ok := s.visualSelectionRange()
+		if !ok {
+			s.status = "No selection to copy"
+			return
+		}
+		lines := s.activeBuffer().LinesRange(start, end)
+		if len(lines) == 0 {
+			s.status = "No selection to copy"
+			return
+		}
+		s.clipLines = append([]string(nil), lines...)
+		s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
+	} else {
 		s.status = "No selection to copy"
-		return
 	}
-	lines := s.activeBuffer().LinesRange(start, end)
-	if len(lines) == 0 {
-		s.status = "No selection to copy"
-		return
-	}
-	s.clipLines = append([]string(nil), lines...)
-	s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
 }
 
 func (s *appState) pasteClipboard() {
@@ -1513,15 +1648,36 @@ func (s *appState) pasteClipboard() {
 		s.status = "Clipboard empty"
 		return
 	}
-	start, _, ok := s.visualSelectionRange()
-	if !ok {
+
+	if s.visualMode == visualModeChar {
+		// Character-wise paste: replace selection with clipboard text
+		startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeChar()
+		if !ok {
+			s.status = "Select destination in VISUAL mode"
+			return
+		}
+		buf := s.activeBuffer()
+		// Delete the selected range (this positions cursor at startLine, startCol)
+		buf.DeleteCharRange(startLine, startCol, endLine, endCol)
+		// Insert clipboard text at cursor position
+		text := s.clipLines[0] // Character copy stores as single line
+		buf.InsertText(text)
+		s.exitVisualMode()
+		s.setCursorStatus(fmt.Sprintf("Pasted %d character(s)", len(text)))
+	} else if s.visualMode == visualModeLine {
+		// Line-wise paste
+		start, _, ok := s.visualSelectionRange()
+		if !ok {
+			s.status = "Select destination in VISUAL mode"
+			return
+		}
+		lines := append([]string(nil), s.clipLines...)
+		s.activeBuffer().InsertLines(start, lines)
+		s.exitVisualMode()
+		s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
+	} else {
 		s.status = "Select destination in VISUAL mode"
-		return
 	}
-	lines := append([]string(nil), s.clipLines...)
-	s.activeBuffer().InsertLines(start, lines)
-	s.exitVisualMode()
-	s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
 }
 
 func (s *appState) isColonKey(ev key.Event) bool {
