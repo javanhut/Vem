@@ -449,8 +449,8 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 				rect.Pop()
 			}
 
-			// Draw cursor line highlight
-			if index == cursorLine {
+			// Draw cursor line highlight (skip in character-wise visual mode to show precise selection)
+			if index == cursorLine && s.visualMode != visualModeChar {
 				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
 				paint.Fill(gtx.Ops, highlightColor)
 				rect.Pop()

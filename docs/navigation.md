@@ -129,6 +129,50 @@ Once text is selected in either visual mode, you can perform these operations:
   - Selection is cleared
   - Cursor position is preserved
 
+### Visual Mode Highlighting
+
+ProjectVem uses different highlighting strategies for character-wise and line-wise visual modes to maximize clarity:
+
+#### Character-Wise Mode Highlighting
+
+In character-wise visual mode (`v`), only the selected characters are highlighted:
+- **Selection highlight**: Purple background on selected characters only
+- **Cursor line highlight**: Disabled to show precise character selection
+- **Cursor indicator**: Block cursor remains visible to show current position
+
+This ensures you can see exactly which characters are selected without visual confusion.
+
+**Example:**
+```
+v + 2w (select two words)
+Line 10: int foo = get_value();
+         ^^^^^^^^                ← Only "int foo " is highlighted (purple)
+```
+
+#### Line-Wise Mode Highlighting
+
+In line-wise visual mode (`Shift+V`), entire lines are highlighted:
+- **Selection highlight**: Purple background on entire selected lines
+- **Cursor line highlight**: Blue background on cursor line (overlays with selection)
+- **Visual indication**: Full line width is highlighted
+
+**Example:**
+```
+Shift+V + 2j (select three lines)
+Line 10: int foo = get_value();
+████████████████████████████████ ← Entire line highlighted (purple + blue)
+Line 11: int bar = 42;
+████████████████████████████████ ← Entire line highlighted (purple)
+Line 12: return foo + bar;
+████████████████████████████████ ← Entire line highlighted (purple)
+```
+
+#### Normal Mode Highlighting
+
+In NORMAL and INSERT modes, the cursor line has a subtle blue highlight:
+- **Cursor line highlight**: Blue background on the line containing the cursor
+- **Purpose**: Helps identify current cursor position during navigation
+
 ### Visual Mode Navigation
 
 All normal mode navigation commands work in visual mode to extend or contract the selection:
