@@ -29,6 +29,7 @@ import (
 
 	"github.com/javanhut/ProjectVem/internal/editor"
 	"github.com/javanhut/ProjectVem/internal/filesystem"
+	"github.com/javanhut/ProjectVem/internal/panes"
 )
 
 type mode string
@@ -76,11 +77,17 @@ var (
 	focusBorder       = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
 	searchMatchColor  = color.NRGBA{R: 0xff, G: 0xff, B: 0x00, A: 0x77}
 	currentMatchColor = color.NRGBA{R: 0xff, G: 0xa5, B: 0x00, A: 0xaa}
+
+	// Pane colors
+	activePaneBg   = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff} // Same as background (active is brighter)
+	inactivePaneBg = color.NRGBA{R: 0x14, G: 0x18, B: 0x24, A: 0xff} // 15% darker
+	paneSeparator  = color.NRGBA{R: 0x30, G: 0x35, B: 0x44, A: 0xff} // Subtle gray line
 )
 
 type appState struct {
 	theme              *material.Theme
 	bufferMgr          *editor.BufferManager
+	paneManager        *panes.PaneManager
 	fileTree           *filesystem.FileTree
 	mode               mode
 	status             string
@@ -89,6 +96,7 @@ type appState struct {
 	pendingCount       int
 	pendingGoto        bool
 	pendingScroll      bool
+	pendingPaneCmd     bool
 	visualMode         visualModeType
 	visualStartLine    int
 	visualStartCol     int
@@ -174,6 +182,9 @@ func newAppState() *appState {
 	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
 	bufferMgr := editor.NewBufferManagerWithBuffer(buf)
 
+	// Initialize pane manager with the initial buffer (index 0)
+	paneManager := panes.NewPaneManager(0)
+
 	// Initialize file tree from current directory
 	workDir, err := os.Getwd()
 	if err != nil {
@@ -189,6 +200,7 @@ func newAppState() *appState {
 	return &appState{
 		theme:             theme,
 		bufferMgr:         bufferMgr,
+		paneManager:       paneManager,
 		fileTree:          fileTree,
 		mode:              modeNormal,
 		status:            "Ready",
@@ -208,12 +220,44 @@ func newAppState() *appState {
 	}
 }
 
-// activeBuffer returns the active buffer (helper method).
+// activeBuffer returns the buffer for the active pane.
 func (s *appState) activeBuffer() *editor.Buffer {
-	if s.bufferMgr == nil {
+	if s.paneManager == nil || s.bufferMgr == nil {
 		return nil
 	}
-	return s.bufferMgr.ActiveBuffer()
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return nil
+	}
+
+	return s.bufferMgr.GetBuffer(activePane.BufferIndex)
+}
+
+// activePaneViewportTop returns the viewport top line for the active pane.
+func (s *appState) activePaneViewportTop() int {
+	if s.paneManager == nil {
+		return 0
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return 0
+	}
+
+	return activePane.ViewportTop
+}
+
+// setActivePaneViewportTop sets the viewport top line for the active pane.
+func (s *appState) setActivePaneViewportTop(line int) {
+	if s.paneManager == nil {
+		return
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane != nil {
+		activePane.SetViewportTop(line)
+	}
 }
 
 func (s *appState) layout(gtx layout.Context) layout.Dimensions {
@@ -230,17 +274,17 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if s.explorerVisible && s.fileTree != nil {
-				// Horizontal split: explorer | editor
+				// Horizontal split: explorer | panes
 				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return s.drawFileExplorer(gtx)
 					}),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return s.drawBuffer(gtx)
+						return s.drawPanes(gtx)
 					}),
 				)
 			}
-			return s.drawBuffer(gtx)
+			return s.drawPanes(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if s.mode == modeCommand {
@@ -264,6 +308,7 @@ func (s *appState) handleEvents(gtx layout.Context) {
 		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
 		gtx.Execute(key.SoftKeyboardCmd{Show: true})
 	} else {
+		// In normal mode, we still want to receive Tab events
 		gtx.Execute(key.SoftKeyboardCmd{Show: false})
 	}
 	gtx.Execute(key.FocusCmd{Tag: s.focusTag})
@@ -295,6 +340,10 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				log.Printf("[SHIFT_TRACK] Shift %v -> %v (state=%v)", wasPressed, s.shiftPressed, e.State)
 				continue
 			}
+			// Special handling for Tab key - log if we receive it
+			if e.Name == key.NameTab {
+				log.Printf("[TAB_KEY] Tab event received! State=%v Modifiers=%v Shift=%v", e.State, e.Modifiers, s.shiftPressed)
+			}
 			// Track Alt key press/release
 			if e.Name == key.NameAlt {
 				log.Printf("[ALT_TRACK] Alt key event received, state=%v", e.State)
@@ -314,15 +363,17 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			// Smart reset: If modifiers are still set after handleKey and we're in certain modes,
 			// it likely means the user released the modifier but platform didn't send Release event.
 			// Reset modifiers after successful command execution to prevent them from sticking.
-			// Exception: Don't reset if we just entered a mode (mode transitions are intentional)
-			if s.mode == modeNormal || s.mode == modeInsert || s.mode == modeCommand {
+			// Exception: Don't reset if we just entered a mode or are waiting for a pane command
+			// Exception: Don't reset Shift if Tab was pressed (for Shift+Tab pane cycling)
+			if (s.mode == modeNormal || s.mode == modeInsert || s.mode == modeCommand) && !s.pendingPaneCmd {
 				if hadCtrl && s.ctrlPressed {
 					// Ctrl was held before and is still held - user might have released it
 					// Reset it so next key doesn't have Ctrl stuck
 					log.Printf("[SMART_RESET] Resetting Ctrl after key=%q to prevent sticking", e.Name)
 					s.ctrlPressed = false
 				}
-				if hadShift && s.shiftPressed {
+				if hadShift && s.shiftPressed && e.Name != key.NameTab {
+					// Don't reset Shift after Tab (needed for Shift+Tab keybinding)
 					log.Printf("[SMART_RESET] Resetting Shift after key=%q to prevent sticking", e.Name)
 					s.shiftPressed = false
 				}
@@ -574,33 +625,71 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 		// If file operation is active, show ONLY the file operation prompt for clarity
 		status = s.getFileOpPrompt()
 	} else {
-		cur := s.activeBuffer().Cursor()
+		// Check if we have an active buffer
+		buf := s.activeBuffer()
+		if buf == nil {
+			// No active buffer - show minimal status
+			paneInfo := ""
+			if s.paneManager != nil {
+				paneCount := s.paneManager.PaneCount()
+				if paneCount > 1 {
+					allPanes := s.paneManager.AllPanes()
+					activeIdx := 1
+					for i, p := range allPanes {
+						if p == s.paneManager.ActivePane() {
+							activeIdx = i + 1
+							break
+						}
+					}
+					paneInfo = fmt.Sprintf(" | PANE %d/%d", activeIdx, paneCount)
+				}
+			}
+			status = fmt.Sprintf("MODE %s | No active buffer%s | %s", s.mode, paneInfo, s.status)
+		} else {
+			cur := buf.Cursor()
 
-		// Build status line with file info
-		fileName := s.activeBuffer().FilePath()
-		if fileName == "" {
-			fileName = "[No Name]"
+			// Build status line with file info
+			fileName := buf.FilePath()
+			if fileName == "" {
+				fileName = "[No Name]"
+			}
+
+			modFlag := ""
+			if buf.Modified() {
+				modFlag = " [+]"
+			}
+
+			// Add pane information
+			paneInfo := ""
+			if s.paneManager != nil && s.paneManager.PaneCount() > 1 {
+				// Find active pane index
+				allPanes := s.paneManager.AllPanes()
+				activeIdx := 1
+				for i, p := range allPanes {
+					if p == s.paneManager.ActivePane() {
+						activeIdx = i + 1
+						break
+					}
+				}
+				paneInfo = fmt.Sprintf(" | PANE %d/%d", activeIdx, s.paneManager.PaneCount())
+			}
+
+			// Add fullscreen indicator
+			fullscreenInfo := ""
+			if s.currentWindowMode == app.Fullscreen {
+				fullscreenInfo = " | FULLSCREEN"
+			}
+
+			// Add zoom indicator
+			zoomInfo := ""
+			if s.paneManager != nil && s.paneManager.IsZoomed() {
+				zoomInfo = " | ZOOMED"
+			}
+
+			status = fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s%s | %s",
+				s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status,
+			)
 		}
-
-		modFlag := ""
-		if s.activeBuffer().Modified() {
-			modFlag = " [+]"
-		}
-
-		bufferInfo := ""
-		if s.bufferMgr.BufferCount() > 1 {
-			bufferInfo = fmt.Sprintf(" | BUFFER %d/%d", s.bufferMgr.ActiveIndex()+1, s.bufferMgr.BufferCount())
-		}
-
-		// Add fullscreen indicator
-		fullscreenInfo := ""
-		if s.currentWindowMode == app.Fullscreen {
-			fullscreenInfo = " | FULLSCREEN"
-		}
-
-		status = fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s | %s",
-			s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, fullscreenInfo, s.status,
-		)
 	}
 
 	label := material.Body2(s.theme, status)
@@ -851,7 +940,11 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 }
 
 func (s *appState) handleKey(ev key.Event) {
-	if ev.State != key.Press {
+	// Special case: Tab events only come through on Release (consumed by focus system on Press)
+	// Process Tab on Release, all other keys on Press
+	isTabRelease := (ev.Name == key.NameTab && ev.State == key.Release)
+
+	if ev.State != key.Press && !isTabRelease {
 		return
 	}
 	s.lastKey = describeKey(ev)
@@ -861,6 +954,19 @@ func (s *appState) handleKey(ev key.Event) {
 		if s.handleFileOpKey(ev) {
 			return
 		}
+	}
+
+	// Handle Ctrl+S prefix for pane commands
+	if s.ctrlPressed && strings.ToLower(string(ev.Name)) == "s" && !s.pendingPaneCmd {
+		s.pendingPaneCmd = true
+		s.status = "Pane: v=vsplit h=hsplit Alt+hjkl=nav Tab=cycle Ctrl+X=close ==equalize o=zoom"
+		return
+	}
+
+	if s.pendingPaneCmd {
+		s.handlePaneCommand(ev)
+		s.pendingPaneCmd = false
+		return
 	}
 
 	// Debug logging
@@ -1774,20 +1880,64 @@ func (s *appState) executeCommandLine() {
 }
 
 func (s *appState) handleQuitCommand(force bool) {
-	if err := s.bufferMgr.CloseActiveBuffer(force); err != nil {
-		s.status = fmt.Sprintf("Error: %v", err)
+	// With pane system, quit closes the active pane and its buffer
+	if s.paneManager == nil {
+		s.requestClose()
 		return
 	}
 
-	// If no buffers left, close the window
-	if s.bufferMgr.BufferCount() == 0 || (s.bufferMgr.BufferCount() == 1 && s.activeBuffer().FilePath() == "") {
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
 		s.requestClose()
+		return
+	}
+
+	// Get the buffer for this pane
+	buf := s.bufferMgr.GetBuffer(activePane.BufferIndex)
+	if buf == nil {
+		// No buffer, just close the pane
+		if s.paneManager.PaneCount() > 1 {
+			s.paneManager.ClosePane()
+			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		} else {
+			s.requestClose()
+		}
+		return
+	}
+
+	// Check if buffer is modified (unless force)
+	if !force && buf.Modified() {
+		s.status = "Buffer has unsaved changes (use :q! to force)"
+		return
+	}
+
+	// Close the buffer
+	if err := s.bufferMgr.CloseBuffer(activePane.BufferIndex, force); err != nil {
+		s.status = fmt.Sprintf("Error closing buffer: %v", err)
+		return
+	}
+
+	// Close the pane
+	if s.paneManager.PaneCount() > 1 {
+		if err := s.paneManager.ClosePane(); err != nil {
+			s.status = fmt.Sprintf("Error closing pane: %v", err)
+		} else {
+			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		}
 	} else {
-		s.status = "Buffer closed"
+		// Last pane - close the application
+		s.requestClose()
 	}
 }
 
 func (s *appState) handleWriteCommand(arg string, andQuit bool) {
+	// Check if we have an active buffer
+	buf := s.activeBuffer()
+	if buf == nil {
+		s.status = "No active buffer to save"
+		return
+	}
+
 	var err error
 	if arg == "" {
 		// Save to current file
@@ -1802,13 +1952,13 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 		return
 	}
 
-	filename := s.activeBuffer().FilePath()
+	filename := buf.FilePath()
 	if andQuit {
 		s.handleQuitCommand(false)
 		s.status = fmt.Sprintf("Wrote + closed %s", filename)
 		return
 	}
-	s.status = fmt.Sprintf("Wrote %d line(s) → %s", s.activeBuffer().LineCount(), filename)
+	s.status = fmt.Sprintf("Wrote %d line(s) → %s", buf.LineCount(), filename)
 }
 
 func (s *appState) handleEditCommand(path string) {

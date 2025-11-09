@@ -83,6 +83,18 @@ const (
 	ActionScrollToBottom
 	ActionScrollLineUp
 	ActionScrollLineDown
+
+	// Pane management
+	ActionSplitVertical
+	ActionSplitHorizontal
+	ActionPaneFocusLeft
+	ActionPaneFocusRight
+	ActionPaneFocusUp
+	ActionPaneFocusDown
+	ActionPaneCycleNext
+	ActionPaneClose
+	ActionPaneEqualize
+	ActionPaneZoomToggle
 )
 
 type KeyBinding struct {
@@ -99,6 +111,16 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionOpenFuzzyFinder},
 	{Modifiers: key.ModShift, Key: key.NameReturn, Modes: nil, Action: ActionToggleFullscreen},
 	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: nil, Action: ActionToggleFullscreen},
+
+	// Pane navigation (Alt+hjkl)
+	{Modifiers: key.ModAlt, Key: "h", Modes: nil, Action: ActionPaneFocusLeft},
+	{Modifiers: key.ModAlt, Key: "j", Modes: nil, Action: ActionPaneFocusDown},
+	{Modifiers: key.ModAlt, Key: "k", Modes: nil, Action: ActionPaneFocusUp},
+	{Modifiers: key.ModAlt, Key: "l", Modes: nil, Action: ActionPaneFocusRight},
+
+	// Pane cycling and closing
+	{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
+	{Modifiers: key.ModCtrl, Key: "x", Modes: nil, Action: ActionPaneClose},
 }
 
 var modeKeybindings = map[mode][]KeyBinding{
@@ -615,5 +637,35 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionScrollLineDown:
 		s.scrollLineDown()
+
+	case ActionSplitVertical:
+		s.handleSplitVertical()
+
+	case ActionSplitHorizontal:
+		s.handleSplitHorizontal()
+
+	case ActionPaneFocusLeft:
+		s.handlePaneFocusLeft()
+
+	case ActionPaneFocusRight:
+		s.handlePaneFocusRight()
+
+	case ActionPaneFocusUp:
+		s.handlePaneFocusUp()
+
+	case ActionPaneFocusDown:
+		s.handlePaneFocusDown()
+
+	case ActionPaneCycleNext:
+		s.handlePaneCycleNext()
+
+	case ActionPaneClose:
+		s.handlePaneClose()
+
+	case ActionPaneEqualize:
+		s.handlePaneEqualize()
+
+	case ActionPaneZoomToggle:
+		s.handlePaneZoomToggle()
 	}
 }

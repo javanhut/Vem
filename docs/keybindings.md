@@ -13,6 +13,12 @@ These keybindings work in all modes.
 | `Ctrl+L` | Focus Editor | Switch focus to the text editor |
 | `Ctrl+P` | Fuzzy Finder | Open fuzzy file finder |
 | `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode |
+| `Shift+Tab` | Cycle Panes | Cycle to next pane (when multiple panes open) |
+| `Ctrl+X` | Close Pane | Close active pane and its buffer |
+| `Alt+h` | Focus Left Pane | Move focus to pane on the left |
+| `Alt+j` | Focus Down Pane | Move focus to pane below |
+| `Alt+k` | Focus Up Pane | Move focus to pane above |
+| `Alt+l` | Focus Right Pane | Move focus to pane on the right |
 
 ## NORMAL Mode
 
@@ -404,13 +410,28 @@ In future releases, keybindings will be customizable via:
 
 See the [ROADMAP.md](../ROADMAP.md) for planned customization features.
 
+## Pane Management (Ctrl+S prefix)
+
+Vem provides powerful pane splitting and management capabilities. Press `Ctrl+S` to enter pane command mode, then press one of the following keys:
+
+| Keybinding | Action | Description |
+|------------|--------|-------------|
+| `Ctrl+S v` | Split Vertical | Create vertical split (top/bottom with horizontal divider) |
+| `Ctrl+S h` | Split Horizontal | Create horizontal split (left/right with vertical divider) |
+| `Ctrl+S =` | Equalize Panes | Make all panes equal size (50/50) |
+| `Ctrl+S o` | Zoom Toggle | Maximize/restore active pane |
+
+**Note**: After splitting, use `:e filename` or `Ctrl+P` to open a file in the new pane.
+
+For detailed pane usage, see [Pane Splitting Guide](pane-splitting.md).
+
 ## Keybinding Conflicts
 
 ProjectVem uses a priority-based keybinding system to prevent conflicts:
 
-1. **Global keybindings** (highest priority): Ctrl+T, Ctrl+H, Ctrl+L, Shift+Enter
+1. **Global keybindings** (highest priority): Ctrl+T, Ctrl+H, Ctrl+L, Shift+Enter, Alt+hjkl, Shift+Tab, Ctrl+X
 2. **Mode-specific keybindings**: Commands that only work in specific modes
-3. **Special handlers**: Complex sequences like `gg`, counts, etc.
+3. **Special handlers**: Complex sequences like `gg`, counts, Ctrl+S prefix, etc.
 
 Exception: COMMAND mode keybindings take priority over global keybindings to ensure commands execute correctly.
 
@@ -420,6 +441,7 @@ For details on how the keybinding system works internally, see [Architecture.md]
 
 ## See Also
 
+- [Pane Splitting Guide](pane-splitting.md) - Complete guide to pane management
 - [Navigation Guide](navigation.md) - Pane navigation and fullscreen features
 - [Tutorial](tutorial.md) - Step-by-step guide for new users
 - [Architecture](Architecture.md) - Technical implementation details
