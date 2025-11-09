@@ -85,6 +85,7 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModCtrl, Key: "t", Modes: nil, Action: ActionToggleExplorer},
 	{Modifiers: key.ModCtrl, Key: "h", Modes: nil, Action: ActionFocusExplorer},
 	{Modifiers: key.ModCtrl, Key: "l", Modes: nil, Action: ActionFocusEditor},
+	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionOpenFuzzyFinder},
 	{Modifiers: key.ModShift, Key: key.NameReturn, Modes: nil, Action: ActionToggleFullscreen},
 	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: nil, Action: ActionToggleFullscreen},
 }
@@ -169,6 +170,14 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
 		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionNextMatch},
 		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionNextMatch},
+		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
+	},
+	modeFuzzyFinder: {
+		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
+		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionFuzzyFinderConfirm},
+		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionFuzzyFinderConfirm},
+		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
+		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
 	},
 }
@@ -372,6 +381,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.exitExplorerMode()
 		case modeSearch:
 			s.exitSearchMode()
+		case modeFuzzyFinder:
+			s.exitFuzzyFinder()
 		case modeNormal:
 			s.exitVisualMode()
 			s.resetCount()
@@ -390,6 +401,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			if s.fileTree.MoveUp() {
 				s.status = "Explorer: moved up"
 			}
+		} else if s.mode == modeFuzzyFinder {
+			s.fuzzyFinderMoveUp()
 		} else {
 			s.moveCursor("up")
 		}
@@ -399,6 +412,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			if s.fileTree.MoveDown() {
 				s.status = "Explorer: moved down"
 			}
+		} else if s.mode == modeFuzzyFinder {
+			s.fuzzyFinderMoveDown()
 		} else {
 			s.moveCursor("down")
 		}
@@ -440,6 +455,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.deleteCommandChar()
 		} else if s.mode == modeSearch {
 			s.deleteSearchChar()
+		} else if s.mode == modeFuzzyFinder {
+			s.deleteFuzzyChar()
 		}
 
 	case ActionDeleteForward:
@@ -529,5 +546,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionClearSearch:
 		s.clearSearch()
+
+	case ActionOpenFuzzyFinder:
+		s.enterFuzzyFinder()
+
+	case ActionFuzzyFinderConfirm:
+		s.fuzzyFinderConfirm()
 	}
 }

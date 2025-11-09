@@ -85,6 +85,7 @@ type appState struct {
 	skipNextEdit       bool
 	skipNextFileOpEdit bool
 	skipNextSearchEdit bool
+	skipNextFuzzyEdit  bool
 	caretVisible       bool
 	nextBlink          time.Time
 	caretReset         bool
@@ -204,7 +205,7 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 	paint.Fill(gtx.Ops, background)
 	canvas.Pop()
 
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return s.drawHeader(gtx)
 		}),
@@ -229,11 +230,18 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 			return s.drawStatusBar(gtx)
 		}),
 	)
+
+	// Draw fuzzy finder overlay on top if active
+	if s.fuzzyFinderActive {
+		s.drawFuzzyFinder(gtx)
+	}
+
+	return dims
 }
 
 func (s *appState) handleEvents(gtx layout.Context) {
 	event.Op(gtx.Ops, s.focusTag)
-	if s.mode == modeInsert || s.mode == modeCommand || s.mode == modeSearch {
+	if s.mode == modeInsert || s.mode == modeCommand || s.mode == modeSearch || s.mode == modeFuzzyFinder {
 		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
 		gtx.Execute(key.SoftKeyboardCmd{Show: true})
 	} else {
@@ -336,6 +344,12 @@ func (s *appState) handleEvents(gtx layout.Context) {
 					continue
 				}
 				s.appendSearchText(e.Text)
+			case modeFuzzyFinder:
+				if s.skipNextFuzzyEdit {
+					s.skipNextFuzzyEdit = false
+					continue
+				}
+				s.appendFuzzyInput(e.Text)
 			}
 		}
 	}
@@ -508,6 +522,110 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 	return layout.Dimensions{
 		Size: image.Pt(gtx.Constraints.Max.X, dims.Size.Y),
 	}
+}
+
+func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
+	// Overlay background (semi-transparent)
+	overlayBg := color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xcc}
+	overlayRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, overlayBg)
+	overlayRect.Pop()
+
+	// Calculate centered fuzzy finder dimensions
+	finderWidth := gtx.Constraints.Max.X * 3 / 4
+	if finderWidth > 800 {
+		finderWidth = 800
+	}
+	finderHeight := gtx.Constraints.Max.Y * 2 / 3
+	if finderHeight > 600 {
+		finderHeight = 600
+	}
+
+	offsetX := (gtx.Constraints.Max.X - finderWidth) / 2
+	offsetY := (gtx.Constraints.Max.Y - finderHeight) / 4
+
+	// Draw fuzzy finder box
+	boxBg := color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
+	boxBorder := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+
+	// Position the fuzzy finder
+	offset := op.Offset(image.Pt(offsetX, offsetY)).Push(gtx.Ops)
+	defer offset.Pop()
+
+	// Draw border
+	borderRect := clip.Rect{Max: image.Pt(finderWidth, finderHeight)}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, boxBorder)
+	borderRect.Pop()
+
+	// Draw background (slightly inset for border effect)
+	bgRect := clip.Rect{
+		Min: image.Pt(2, 2),
+		Max: image.Pt(finderWidth-2, finderHeight-2),
+	}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, boxBg)
+	bgRect.Pop()
+
+	// Constrain drawing to fuzzy finder area
+	gtx.Constraints.Max.X = finderWidth - 4
+	gtx.Constraints.Max.Y = finderHeight - 4
+
+	inset := layout.Inset{
+		Top:    unit.Dp(8),
+		Right:  unit.Dp(8),
+		Bottom: unit.Dp(8),
+		Left:   unit.Dp(8),
+	}
+
+	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			// Input field
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				prompt := "Fuzzy Finder: " + s.fuzzyFinderInput
+				label := material.Body1(s.theme, prompt)
+				label.Font.Typeface = "GoMono"
+				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, label.Layout)
+			}),
+			// Match count
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				matchInfo := fmt.Sprintf("%d matches", len(s.fuzzyFinderMatches))
+				label := material.Body2(s.theme, matchInfo)
+				label.Font.Typeface = "GoMono"
+				label.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
+				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, label.Layout)
+			}),
+			// Results list
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				list := layout.List{Axis: layout.Vertical}
+				return list.Layout(gtx, len(s.fuzzyFinderMatches), func(gtx layout.Context, index int) layout.Dimensions {
+					match := s.fuzzyFinderMatches[index]
+
+					// Highlight selected item
+					if index == s.fuzzyFinderSelectedIdx {
+						selectedBg := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x88}
+						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, gtx.Dp(unit.Dp(24)))}.Push(gtx.Ops)
+						paint.Fill(gtx.Ops, selectedBg)
+						rect.Pop()
+					}
+
+					// Draw file path with highlighted matched characters
+					label := material.Body2(s.theme, match.FilePath)
+					label.Font.Typeface = "GoMono"
+					if index == s.fuzzyFinderSelectedIdx {
+						label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+					} else {
+						label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+					}
+
+					return layout.Inset{
+						Top:    unit.Dp(2),
+						Bottom: unit.Dp(2),
+						Left:   unit.Dp(4),
+					}.Layout(gtx, label.Layout)
+				})
+			}),
+		)
+	})
 }
 
 func (s *appState) drawCommandBar(gtx layout.Context) layout.Dimensions {
@@ -1881,6 +1999,102 @@ func (s *appState) deleteSearchChar() {
 	}
 	s.searchPattern = string(runes[:len(runes)-1])
 	s.status = "/" + s.searchPattern
+}
+
+// Fuzzy finder methods
+
+func (s *appState) enterFuzzyFinder() {
+	if s.fileTree == nil {
+		s.status = "File tree not available"
+		return
+	}
+
+	// Discover all files in the workspace
+	workDir := s.fileTree.CurrentPath()
+	files, err := filesystem.FindAllFiles(workDir)
+	if err != nil {
+		s.status = fmt.Sprintf("Error discovering files: %v", err)
+		return
+	}
+
+	s.mode = modeFuzzyFinder
+	s.fuzzyFinderActive = true
+	s.fuzzyFinderInput = ""
+	s.fuzzyFinderFiles = files
+	s.fuzzyFinderMatches = PerformFuzzyMatch("", files, 50)
+	s.fuzzyFinderSelectedIdx = 0
+	s.skipNextFuzzyEdit = true
+	s.status = fmt.Sprintf("Fuzzy Finder: %d files", len(files))
+}
+
+func (s *appState) exitFuzzyFinder() {
+	s.mode = modeNormal
+	s.fuzzyFinderActive = false
+	s.fuzzyFinderInput = ""
+	s.fuzzyFinderFiles = nil
+	s.fuzzyFinderMatches = nil
+	s.fuzzyFinderSelectedIdx = 0
+	s.status = "Fuzzy finder cancelled"
+}
+
+func (s *appState) updateFuzzyMatches() {
+	s.fuzzyFinderMatches = PerformFuzzyMatch(s.fuzzyFinderInput, s.fuzzyFinderFiles, 50)
+	s.fuzzyFinderSelectedIdx = 0
+}
+
+func (s *appState) appendFuzzyInput(text string) {
+	if text == "" {
+		return
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			continue
+		}
+		s.fuzzyFinderInput += string(r)
+	}
+	s.updateFuzzyMatches()
+}
+
+func (s *appState) deleteFuzzyChar() {
+	if s.fuzzyFinderInput == "" {
+		return
+	}
+	runes := []rune(s.fuzzyFinderInput)
+	if len(runes) == 0 {
+		return
+	}
+	s.fuzzyFinderInput = string(runes[:len(runes)-1])
+	s.updateFuzzyMatches()
+}
+
+func (s *appState) fuzzyFinderMoveUp() {
+	if s.fuzzyFinderSelectedIdx > 0 {
+		s.fuzzyFinderSelectedIdx--
+	}
+}
+
+func (s *appState) fuzzyFinderMoveDown() {
+	if s.fuzzyFinderSelectedIdx < len(s.fuzzyFinderMatches)-1 {
+		s.fuzzyFinderSelectedIdx++
+	}
+}
+
+func (s *appState) fuzzyFinderConfirm() {
+	if s.fuzzyFinderSelectedIdx < 0 || s.fuzzyFinderSelectedIdx >= len(s.fuzzyFinderMatches) {
+		s.exitFuzzyFinder()
+		return
+	}
+
+	match := s.fuzzyFinderMatches[s.fuzzyFinderSelectedIdx]
+	fullPath := filepath.Join(s.fileTree.CurrentPath(), match.FilePath)
+
+	if _, err := s.bufferMgr.OpenFile(fullPath); err != nil {
+		s.status = fmt.Sprintf("Error opening %s: %v", match.FilePath, err)
+		s.exitFuzzyFinder()
+	} else {
+		s.exitFuzzyFinder()
+		s.status = fmt.Sprintf("Opened %s", match.FilePath)
+	}
 }
 
 const sampleBuffer = ``

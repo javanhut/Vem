@@ -11,6 +11,7 @@ These keybindings work in all modes.
 | `Ctrl+T` | Toggle Explorer | Show/hide the file tree explorer |
 | `Ctrl+H` | Focus Explorer | Switch focus to the file tree (if visible) |
 | `Ctrl+L` | Focus Editor | Switch focus to the text editor |
+| `Ctrl+P` | Fuzzy Finder | Open fuzzy file finder |
 | `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode |
 
 ## NORMAL Mode
@@ -297,6 +298,60 @@ EXPLORER mode is for navigating the file tree.
 | Key | Action | Description |
 |-----|--------|-------------|
 | `u` | Navigate Up | Change to parent directory |
+
+## FUZZY_FINDER Mode
+
+FUZZY_FINDER mode provides quick file navigation using fuzzy matching.
+
+### Mode Control
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Cancel | Exit fuzzy finder without opening a file |
+| `Enter` | Open File | Open the selected file in the editor |
+| `Backspace` | Delete Char | Delete character from search pattern |
+
+### Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `↑` | Move Up | Move selection up in the results list |
+| `↓` | Move Down | Move selection down in the results list |
+
+### Search Pattern
+
+Type any text to filter files. The fuzzy matcher:
+- Matches characters in sequence (not necessarily consecutive)
+- Prioritizes matches at word boundaries
+- Ranks shorter paths higher
+- Shows up to 50 best matches
+
+### Visual Feedback
+
+- **Blue overlay**: Semi-transparent background showing fuzzy finder is active
+- **Blue border**: Fuzzy finder box
+- **Highlighted row**: Currently selected file (blue background)
+- **Match count**: Shows total number of matching files
+
+### Example Workflow
+
+1. Press `Ctrl+P` from any mode to open fuzzy finder
+2. Type partial file name (e.g., `bufgo` to find `internal/editor/buffer.go`)
+3. Use `↑`/`↓` to navigate through matches
+4. Press `Enter` to open the selected file
+5. Press `Esc` to cancel
+
+### Excluded Directories
+
+The fuzzy finder automatically excludes:
+- Hidden directories (starting with `.`)
+- `node_modules`
+- `vendor`
+- `.git`
+- `.gocache`
+- `dist`
+- `build`
+- `target`
 
 ## Special Sequences
 

@@ -150,36 +150,121 @@ type SearchMatch struct {
 - `n`: Next match
 - `Shift+N`: Previous match
 
-## Fuzzy File Finder (Planned)
+## Fuzzy File Finder (Implemented)
 
-The fuzzy file finder will allow you to quickly open files by typing partial file names.
+The fuzzy file finder allows you to quickly open files by typing partial file names with intelligent fuzzy matching.
 
-### Planned Features
+### Accessing the Fuzzy Finder
+
+Press `Ctrl+P` from any mode to open the fuzzy finder overlay.
+
+### Features
 
 - **Fuzzy matching**: Type partial paths, characters don't need to be consecutive
 - **Recursive search**: Searches all files in the workspace recursively
-- **Score-based ranking**: Best matches appear first
-- **Visual feedback**: Shows matched characters highlighted
+- **Score-based ranking**: Best matches appear first based on intelligent scoring
+- **Visual feedback**: Shows total match count and selection
 - **Quick navigation**: Up/Down arrows to select, Enter to open
+- **Real-time filtering**: Results update as you type
 
-### Planned Keybinding
+### Keybindings
 
-- `Ctrl+P`: Open fuzzy finder (global keybinding)
+**Open fuzzy finder:**
+- `Ctrl+P`: Open fuzzy finder (works from any mode)
 
-### Planned UI
+**In fuzzy finder mode:**
+- Type characters to filter files
+- `↑` / `↓`: Navigate through results
+- `Enter`: Open selected file
+- `Backspace`: Delete last character
+- `Esc`: Cancel and close fuzzy finder
 
-The fuzzy finder will overlay on top of the editor with:
-- Input field at top showing the pattern
-- Scrollable list of matching files
-- Highlighted matched characters in file paths
-- Match score and position indicator
+### Fuzzy Matching Algorithm
 
-### Implementation Status
+The fuzzy matcher uses a sophisticated scoring system:
 
-**Current**: Structure defined, not yet implemented
-**Planned**: Milestone 4 (Weeks 19-24) - User Fluency & Ergonomics
+1. **Sequential character matching**: All pattern characters must appear in order
+2. **Bonus points for**:
+   - Consecutive matches (+15 per character)
+   - Matches at word boundaries (+5)
+   - Matches at start of string (+10)
+   - Case-sensitive matches (+2)
+   - Shorter file paths (preferred)
+3. **Penalties for**:
+   - Gaps between matches (-1 per gap character)
 
-See [ROADMAP.md](../ROADMAP.md) for full implementation timeline.
+**Example matches for pattern "bufgo":**
+- `internal/editor/buffer.go` ✓ (high score - consecutive matches)
+- `internal/appcore/buffer_manager.go` ✓ (lower score - more gaps)
+- `main.go` ✗ (missing required characters)
+
+### UI Elements
+
+The fuzzy finder appears as a centered overlay with:
+
+- **Input field**: Shows your search pattern
+- **Match count**: Total number of matching files
+- **Results list**: Up to 50 best matches, scrollable
+- **Selection highlight**: Blue background on selected file
+- **Semi-transparent overlay**: Darkens background to focus attention
+
+### Excluded Files and Directories
+
+The fuzzy finder automatically excludes:
+
+- Hidden files and directories (starting with `.`)
+- Common build directories: `node_modules`, `vendor`, `dist`, `build`, `target`
+- Version control: `.git`
+- Go cache: `.gocache`
+
+### Example Workflows
+
+**Example 1: Find buffer.go**
+1. Press `Ctrl+P`
+2. Type `buf`
+3. Results show: `internal/editor/buffer.go`, `internal/editor/buffer_manager.go`
+4. Press `Enter` to open the first match
+
+**Example 2: Find app.go in appcore**
+1. Press `Ctrl+P`
+2. Type `appapp` (matches "app" in directory and filename)
+3. Results show: `internal/appcore/app.go` as top match
+4. Press `Enter` to open
+
+**Example 3: Navigate through results**
+1. Press `Ctrl+P`
+2. Type `go`
+3. Many `.go` files appear
+4. Use `↓` to move through list
+5. Press `Enter` when desired file is highlighted
+
+### Implementation Details
+
+**Location**: 
+- `internal/filesystem/finder.go`: File discovery
+- `internal/appcore/fuzzy.go`: Fuzzy matching algorithm
+- `internal/appcore/app.go`: Fuzzy finder UI and state
+
+**Key functions**:
+- `FindAllFiles(root)`: Recursively finds all files in workspace
+- `FuzzyScore(pattern, target)`: Calculates match score and indices
+- `PerformFuzzyMatch(pattern, items, maxResults)`: Filters and ranks matches
+
+**Data structures**:
+```go
+type FuzzyMatch struct {
+    FilePath string
+    Score    int
+    Indices  []int  // Positions of matched characters
+}
+```
+
+**State fields**:
+- `fuzzyFinderActive bool`: Whether fuzzy finder is visible
+- `fuzzyFinderInput string`: Current search pattern
+- `fuzzyFinderFiles []string`: All files in workspace
+- `fuzzyFinderMatches []FuzzyMatch`: Filtered and sorted matches
+- `fuzzyFinderSelectedIdx int`: Currently selected match index
 
 ## See Also
 
