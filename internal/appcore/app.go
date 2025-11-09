@@ -33,25 +33,41 @@ import (
 
 type mode string
 
+type SearchMatch struct {
+	Line int
+	Col  int
+	Len  int
+}
+
+type FuzzyMatch struct {
+	FilePath string
+	Score    int
+	Indices  []int
+}
+
 const (
-	modeNormal   mode = "NORMAL"
-	modeInsert   mode = "INSERT"
-	modeVisual   mode = "VISUAL"
-	modeDelete   mode = "DELETE"
-	modeCommand  mode = "COMMAND"
-	modeExplorer mode = "EXPLORER"
+	modeNormal      mode = "NORMAL"
+	modeInsert      mode = "INSERT"
+	modeVisual      mode = "VISUAL"
+	modeDelete      mode = "DELETE"
+	modeCommand     mode = "COMMAND"
+	modeExplorer    mode = "EXPLORER"
+	modeSearch      mode = "SEARCH"
+	modeFuzzyFinder mode = "FUZZY_FINDER"
 )
 
 const caretBlinkInterval = 600 * time.Millisecond
 
 var (
-	highlightColor = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x55}
-	selectionColor = color.NRGBA{R: 0x1c, G: 0x39, B: 0x60, A: 0x99}
-	background     = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
-	statusBg       = color.NRGBA{R: 0x12, G: 0x17, B: 0x22, A: 0xff}
-	headerColor    = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
-	cursorColor    = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-	focusBorder    = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	highlightColor    = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x55}
+	selectionColor    = color.NRGBA{R: 0x1c, G: 0x39, B: 0x60, A: 0x99}
+	background        = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
+	statusBg          = color.NRGBA{R: 0x12, G: 0x17, B: 0x22, A: 0xff}
+	headerColor       = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
+	cursorColor       = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	focusBorder       = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	searchMatchColor  = color.NRGBA{R: 0xff, G: 0xff, B: 0x00, A: 0x77}
+	currentMatchColor = color.NRGBA{R: 0xff, G: 0xa5, B: 0x00, A: 0xaa}
 )
 
 type appState struct {
@@ -68,6 +84,7 @@ type appState struct {
 	visualActive       bool
 	skipNextEdit       bool
 	skipNextFileOpEdit bool
+	skipNextSearchEdit bool
 	caretVisible       bool
 	nextBlink          time.Time
 	caretReset         bool
@@ -85,6 +102,19 @@ type appState struct {
 	fileOpInput        string
 	fileOpOriginalName string
 	fileOpTarget       *filesystem.TreeNode
+
+	// Search state
+	searchPattern   string
+	searchMatches   []SearchMatch
+	currentMatchIdx int
+	searchActive    bool
+
+	// Fuzzy finder state
+	fuzzyFinderActive      bool
+	fuzzyFinderInput       string
+	fuzzyFinderFiles       []string
+	fuzzyFinderMatches     []FuzzyMatch
+	fuzzyFinderSelectedIdx int
 
 	// Modifier tracking (some platforms don't report modifiers correctly)
 	ctrlPressed  bool
@@ -203,7 +233,7 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 
 func (s *appState) handleEvents(gtx layout.Context) {
 	event.Op(gtx.Ops, s.focusTag)
-	if s.mode == modeInsert || s.mode == modeCommand {
+	if s.mode == modeInsert || s.mode == modeCommand || s.mode == modeSearch {
 		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
 		gtx.Execute(key.SoftKeyboardCmd{Show: true})
 	} else {
@@ -300,6 +330,12 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.insertText(e.Text)
 			case modeCommand:
 				s.appendCommandText(e.Text)
+			case modeSearch:
+				if s.skipNextSearchEdit {
+					s.skipNextSearchEdit = false
+					continue
+				}
+				s.appendSearchText(e.Text)
 			}
 		}
 	}
@@ -365,6 +401,11 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 				rect.Pop()
 			}
 
+			// Draw search highlights
+			if s.searchActive && len(s.searchMatches) > 0 {
+				s.drawSearchHighlights(gtx, index, dims.Size.Y)
+			}
+
 			call.Add(gtx.Ops)
 
 			if index == cursorLine {
@@ -378,11 +419,48 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	})
 }
 
+func (s *appState) drawSearchHighlights(gtx layout.Context, lineIdx int, lineHeight int) {
+	gutter := fmt.Sprintf("%4d  ", lineIdx+1)
+	gutterWidth := s.measureTextWidth(gtx, gutter)
+
+	for i, match := range s.searchMatches {
+		if match.Line != lineIdx {
+			continue
+		}
+
+		// Calculate position of match
+		lineContent := s.activeBuffer().Line(lineIdx)
+		prefix := string([]rune(lineContent)[:match.Col])
+		matchText := string([]rune(lineContent)[match.Col : match.Col+match.Len])
+
+		prefixWidth := s.measureTextWidth(gtx, prefix)
+		matchWidth := s.measureTextWidth(gtx, matchText)
+
+		// Determine highlight color (current match vs other matches)
+		highlightCol := searchMatchColor
+		if i == s.currentMatchIdx {
+			highlightCol = currentMatchColor
+		}
+
+		// Draw highlight rectangle
+		x := gutterWidth + prefixWidth
+		rect := clip.Rect{
+			Min: image.Pt(x, 0),
+			Max: image.Pt(x+matchWidth, lineHeight),
+		}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, highlightCol)
+		rect.Pop()
+	}
+}
+
 func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 	var status string
 
-	// If file operation is active, show ONLY the file operation prompt for clarity
-	if s.fileOpMode != "" {
+	// If search mode is active, show search prompt
+	if s.mode == modeSearch {
+		status = "/" + s.searchPattern
+	} else if s.fileOpMode != "" {
+		// If file operation is active, show ONLY the file operation prompt for clarity
 		status = s.getFileOpPrompt()
 	} else {
 		cur := s.activeBuffer().Cursor()
@@ -1637,6 +1715,172 @@ func expandTabs(s string, tabWidth int) string {
 		}
 	}
 	return result.String()
+}
+
+// Search mode methods
+
+func (s *appState) enterSearchMode() {
+	s.mode = modeSearch
+	s.searchPattern = ""
+	s.searchMatches = nil
+	s.currentMatchIdx = -1
+	s.skipNextSearchEdit = true
+	s.status = "/"
+}
+
+func (s *appState) exitSearchMode() {
+	s.mode = modeNormal
+	s.status = "Search cancelled"
+}
+
+func (s *appState) executeSearch() {
+	if s.searchPattern == "" {
+		s.searchMatches = nil
+		s.currentMatchIdx = -1
+		s.searchActive = false
+		s.status = "No search pattern"
+		s.mode = modeNormal
+		return
+	}
+
+	s.searchMatches = s.findAllMatches(s.searchPattern)
+
+	if len(s.searchMatches) == 0 {
+		s.status = fmt.Sprintf("Pattern not found: %s", s.searchPattern)
+		s.searchActive = false
+		s.currentMatchIdx = -1
+	} else {
+		s.currentMatchIdx = s.findNextMatchFromCursor()
+		if s.currentMatchIdx >= 0 {
+			match := s.searchMatches[s.currentMatchIdx]
+			s.activeBuffer().MoveToLine(match.Line)
+			// Move to start of line then right to column
+			s.activeBuffer().JumpLineStart()
+			for i := 0; i < match.Col; i++ {
+				s.activeBuffer().MoveRight()
+			}
+		}
+		s.searchActive = true
+		s.status = fmt.Sprintf("/%s [%d/%d]", s.searchPattern, s.currentMatchIdx+1, len(s.searchMatches))
+	}
+
+	s.mode = modeNormal
+}
+
+func (s *appState) findAllMatches(pattern string) []SearchMatch {
+	var matches []SearchMatch
+
+	for lineIdx := 0; lineIdx < s.activeBuffer().LineCount(); lineIdx++ {
+		line := s.activeBuffer().Line(lineIdx)
+		lowerLine := strings.ToLower(line)
+		lowerPattern := strings.ToLower(pattern)
+
+		startPos := 0
+		for {
+			idx := strings.Index(lowerLine[startPos:], lowerPattern)
+			if idx == -1 {
+				break
+			}
+
+			actualPos := startPos + idx
+			matches = append(matches, SearchMatch{
+				Line: lineIdx,
+				Col:  len([]rune(line[:actualPos])),
+				Len:  len([]rune(pattern)),
+			})
+
+			startPos = actualPos + 1
+		}
+	}
+
+	return matches
+}
+
+func (s *appState) findNextMatchFromCursor() int {
+	if len(s.searchMatches) == 0 {
+		return -1
+	}
+
+	curLine := s.activeBuffer().Cursor().Line
+	curCol := s.activeBuffer().Cursor().Col
+
+	for i, match := range s.searchMatches {
+		if match.Line > curLine || (match.Line == curLine && match.Col >= curCol) {
+			return i
+		}
+	}
+
+	return 0
+}
+
+func (s *appState) jumpToNextMatch() {
+	if !s.searchActive || len(s.searchMatches) == 0 {
+		s.status = "No active search"
+		return
+	}
+
+	s.currentMatchIdx = (s.currentMatchIdx + 1) % len(s.searchMatches)
+	match := s.searchMatches[s.currentMatchIdx]
+
+	s.activeBuffer().MoveToLine(match.Line)
+	s.activeBuffer().JumpLineStart()
+	for i := 0; i < match.Col; i++ {
+		s.activeBuffer().MoveRight()
+	}
+	s.status = fmt.Sprintf("/%s [%d/%d]", s.searchPattern, s.currentMatchIdx+1, len(s.searchMatches))
+}
+
+func (s *appState) jumpToPrevMatch() {
+	if !s.searchActive || len(s.searchMatches) == 0 {
+		s.status = "No active search"
+		return
+	}
+
+	s.currentMatchIdx--
+	if s.currentMatchIdx < 0 {
+		s.currentMatchIdx = len(s.searchMatches) - 1
+	}
+	match := s.searchMatches[s.currentMatchIdx]
+
+	s.activeBuffer().MoveToLine(match.Line)
+	s.activeBuffer().JumpLineStart()
+	for i := 0; i < match.Col; i++ {
+		s.activeBuffer().MoveRight()
+	}
+	s.status = fmt.Sprintf("/%s [%d/%d]", s.searchPattern, s.currentMatchIdx+1, len(s.searchMatches))
+}
+
+func (s *appState) clearSearch() {
+	s.searchActive = false
+	s.searchMatches = nil
+	s.currentMatchIdx = -1
+	s.searchPattern = ""
+	s.status = "Search cleared"
+}
+
+func (s *appState) appendSearchText(text string) {
+	if text == "" {
+		return
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			continue
+		}
+		s.searchPattern += string(r)
+	}
+	s.status = "/" + s.searchPattern
+}
+
+func (s *appState) deleteSearchChar() {
+	if s.searchPattern == "" {
+		return
+	}
+	runes := []rune(s.searchPattern)
+	if len(runes) == 0 {
+		return
+	}
+	s.searchPattern = string(runes[:len(runes)-1])
+	s.status = "/" + s.searchPattern
 }
 
 const sampleBuffer = ``

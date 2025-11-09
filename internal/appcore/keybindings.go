@@ -59,6 +59,16 @@ const (
 	ActionDeleteFile
 	ActionCreateFile
 
+	// Search
+	ActionEnterSearch
+	ActionNextMatch
+	ActionPrevMatch
+	ActionClearSearch
+
+	// Fuzzy Finder
+	ActionOpenFuzzyFinder
+	ActionFuzzyFinderConfirm
+
 	// Buffer management
 	ActionNextBuffer
 	ActionPrevBuffer
@@ -95,6 +105,9 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "l", Modes: nil, Action: ActionMoveRight},
 		{Modifiers: 0, Key: "0", Modes: nil, Action: ActionJumpLineStart},
 		{Modifiers: 0, Key: "$", Modes: nil, Action: ActionJumpLineEnd},
+		{Modifiers: 0, Key: "/", Modes: nil, Action: ActionEnterSearch},
+		{Modifiers: 0, Key: "n", Modes: nil, Action: ActionNextMatch},
+		{Modifiers: key.ModShift, Key: "n", Modes: nil, Action: ActionPrevMatch},
 	},
 	modeInsert: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -151,6 +164,12 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "n", Modes: nil, Action: ActionCreateFile},
 		{Modifiers: 0, Key: "u", Modes: nil, Action: ActionNavigateUp},
 		{Modifiers: 0, Key: "q", Modes: nil, Action: ActionExitMode},
+	},
+	modeSearch: {
+		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
+		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionNextMatch},
+		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionNextMatch},
+		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
 	},
 }
 
@@ -351,6 +370,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.status = "Command cancelled"
 		case modeExplorer:
 			s.exitExplorerMode()
+		case modeSearch:
+			s.exitSearchMode()
 		case modeNormal:
 			s.exitVisualMode()
 			s.resetCount()
@@ -417,6 +438,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			}
 		} else if s.mode == modeCommand {
 			s.deleteCommandChar()
+		} else if s.mode == modeSearch {
+			s.deleteSearchChar()
 		}
 
 	case ActionDeleteForward:
@@ -490,5 +513,21 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		if s.mode == modeExplorer && s.fileTree != nil {
 			s.enterCreateMode()
 		}
+
+	case ActionEnterSearch:
+		s.enterSearchMode()
+
+	case ActionNextMatch:
+		if s.mode == modeSearch {
+			s.executeSearch()
+		} else {
+			s.jumpToNextMatch()
+		}
+
+	case ActionPrevMatch:
+		s.jumpToPrevMatch()
+
+	case ActionClearSearch:
+		s.clearSearch()
 	}
 }

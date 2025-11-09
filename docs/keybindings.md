@@ -49,6 +49,14 @@ NORMAL mode is the default mode for navigation and executing commands.
 | `0` | Line Start | Jump to first character of line |
 | `$` | Line End | Jump to last character of line |
 
+#### Search
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `/` | Enter SEARCH | Open search prompt |
+| `n` | Next Match | Jump to next search match |
+| `Shift+N` | Previous Match | Jump to previous search match |
+
 #### Document Movement
 
 | Key | Action | Description |
@@ -202,6 +210,48 @@ COMMAND mode provides a Vim-style command-line interface.
 | `:cd <path>` | Change working directory to `<path>` |
 | `:cd` | Change to home directory |
 | `:pwd` | Print current working directory |
+
+## SEARCH Mode
+
+SEARCH mode is for finding text within the current buffer.
+
+### Mode Control
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Cancel Search | Exit SEARCH mode without searching |
+| `Enter` | Execute Search | Execute search and jump to first match |
+| `Backspace` | Delete Char | Delete character from search pattern |
+
+### Search Pattern
+
+Type any text to build your search pattern. The search is:
+- **Case-insensitive**: `hello` matches `Hello`, `HELLO`, etc.
+- **Substring matching**: `the` matches `the`, `there`, `weather`, etc.
+- **Highlights all matches**: All occurrences are highlighted in the buffer
+
+### Search Navigation
+
+After executing a search (pressing `Enter`):
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `n` | Next Match | Jump to next occurrence (wraps around) |
+| `Shift+N` | Previous Match | Jump to previous occurrence (wraps around) |
+
+### Visual Feedback
+
+- **Yellow highlight**: All search matches
+- **Orange highlight**: Current match (where cursor is)
+- **Status bar**: Shows search pattern and match count (e.g., `/hello [2/5]`)
+
+### Example Workflow
+
+1. Press `/` in NORMAL mode to enter SEARCH mode
+2. Type your search pattern (e.g., `function`)
+3. Press `Enter` to execute search
+4. Use `n` and `Shift+N` to navigate between matches
+5. Press `Esc` in NORMAL mode to clear search highlights
 
 ## EXPLORER Mode
 
