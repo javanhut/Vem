@@ -24,6 +24,13 @@ func (p *Pane) SetActive(active bool) {
 	p.Active = active
 }
 
+// SetBufferIndex changes which buffer this pane displays.
+func (p *Pane) SetBufferIndex(index int) {
+	p.BufferIndex = index
+	// Reset viewport when switching buffers
+	p.ViewportTop = 0
+}
+
 // SetViewportTop sets the first visible line for this pane.
 func (p *Pane) SetViewportTop(line int) {
 	if line < 0 {

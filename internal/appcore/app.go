@@ -1254,7 +1254,9 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 }
 
 func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
-	label := material.Body1(s.theme, txt)
+	// Measure a single character to get the fixed width for monospace font
+	// This avoids Material Design's text shaping which can add extra spacing
+	label := material.Body1(s.theme, "M")
 	label.Font.Typeface = "GoMono"
 	measureGtx := gtx
 	measureGtx.Constraints = layout.Constraints{
@@ -1264,7 +1266,13 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	macro := op.Record(measureGtx.Ops)
 	dims := label.Layout(measureGtx)
 	macro.Stop()
-	return dims.Size.X
+
+	// For monospace font, multiply character count by single char width
+	// Count runes, not bytes, for proper Unicode handling
+	charCount := utf8.RuneCountInString(txt)
+	charWidth := dims.Size.X
+
+	return charWidth * charCount
 }
 
 func (s *appState) updateCaretBlink(gtx layout.Context) {
@@ -1651,12 +1659,22 @@ func (s *appState) openSelectedNode() {
 	}
 
 	// Open file
-	if _, err := s.bufferMgr.OpenFile(node.Path); err != nil {
+	_, err := s.bufferMgr.OpenFile(node.Path)
+	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", node.Name, err)
-	} else {
-		s.exitExplorerMode()
-		s.status = fmt.Sprintf("Opened %s", node.Name)
+		return
 	}
+
+	// Update the active pane to display the newly opened buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+		}
+	}
+
+	s.exitExplorerMode()
+	s.status = fmt.Sprintf("Opened %s", node.Name)
 }
 
 func (s *appState) visualSelectionRange() (int, int, bool) {
@@ -1967,11 +1985,21 @@ func (s *appState) handleEditCommand(path string) {
 		return
 	}
 
-	if _, err := s.bufferMgr.OpenFile(path); err != nil {
+	_, err := s.bufferMgr.OpenFile(path)
+	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", path, err)
-	} else {
-		s.status = fmt.Sprintf("Opened %s", path)
+		return
 	}
+
+	// Update the active pane to display the newly opened buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+		}
+	}
+
+	s.status = fmt.Sprintf("Opened %s", path)
 }
 
 func (s *appState) handleBufferDeleteCommand(force bool) {
@@ -2579,13 +2607,23 @@ func (s *appState) fuzzyFinderConfirm() {
 	match := s.fuzzyFinderMatches[s.fuzzyFinderSelectedIdx]
 	fullPath := filepath.Join(s.fileTree.CurrentPath(), match.FilePath)
 
-	if _, err := s.bufferMgr.OpenFile(fullPath); err != nil {
+	_, err := s.bufferMgr.OpenFile(fullPath)
+	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", match.FilePath, err)
 		s.exitFuzzyFinder()
-	} else {
-		s.exitFuzzyFinder()
-		s.status = fmt.Sprintf("Opened %s", match.FilePath)
+		return
 	}
+
+	// Update the active pane to display the newly opened buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+		}
+	}
+
+	s.exitFuzzyFinder()
+	s.status = fmt.Sprintf("Opened %s", match.FilePath)
 }
 
 const sampleBuffer = ``

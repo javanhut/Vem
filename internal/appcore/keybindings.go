@@ -44,6 +44,7 @@ const (
 	// Editing
 	ActionInsertNewline
 	ActionInsertSpace
+	ActionInsertTab
 	ActionDeleteBackward
 	ActionDeleteForward
 	ActionDeleteLine
@@ -155,6 +156,7 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameSpace, Modes: nil, Action: ActionInsertSpace},
+		{Modifiers: 0, Key: key.NameTab, Modes: nil, Action: ActionInsertTab},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
 		{Modifiers: 0, Key: key.NameDeleteForward, Modes: nil, Action: ActionDeleteForward},
 		{Modifiers: 0, Key: key.NameLeftArrow, Modes: nil, Action: ActionMoveLeft},
@@ -510,6 +512,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	case ActionInsertSpace:
 		if s.mode == modeInsert {
 			s.insertText(" ")
+		}
+
+	case ActionInsertTab:
+		if s.mode == modeInsert {
+			s.insertText("\t")
 		}
 
 	case ActionDeleteBackward:
