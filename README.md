@@ -62,11 +62,13 @@ For detailed installation instructions, troubleshooting, and manual build option
 
 #### Linux-Specific
 - Vulkan headers (automatically installed by `make install`)
-  - **Debian/Ubuntu**: `libvulkan-dev`
-  - **Fedora/RHEL**: `vulkan-devel`
-  - **Arch**: `vulkan-headers` and `vulkan-icd-loader`
+  - **Debian/Ubuntu**: `libvulkan-dev libxkbcommon-dev libwayland-dev`
+  - **Fedora/RHEL/CentOS**: `vulkan-devel libxkbcommon-devel wayland-devel`
+  - **Arch/Manjaro**: `vulkan-headers vulkan-icd-loader libxkbcommon wayland`
+  - **openSUSE**: `vulkan-devel libxkbcommon-devel wayland-devel`
+  - **Alpine**: `vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev`
 
-The Vulkan headers are required for GPU-accelerated rendering on Linux. The Makefile detects your package manager and installs them automatically. On macOS, Metal is used; on Windows, Direct3D is used (no extra dependencies needed).
+These libraries provide GPU-accelerated rendering (Vulkan), keyboard input handling (xkbcommon), and display server support (Wayland/X11) on Linux. The Makefile detects your package manager and installs them automatically. On macOS, Metal is used; on Windows, Direct3D is used (no extra dependencies needed).
 
 ### Manual Build
 
@@ -78,9 +80,11 @@ git clone https://github.com/javanhut/ProjectVem.git
 cd ProjectVem
 
 # Install Vulkan headers (Linux only)
-# Debian/Ubuntu: sudo apt-get install libvulkan-dev
-# Fedora/RHEL: sudo dnf install vulkan-devel
-# Arch: sudo pacman -S vulkan-headers vulkan-icd-loader
+# Debian/Ubuntu: sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
+# Fedora/RHEL: sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
+# Arch: sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+# openSUSE: sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+# Alpine: sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 
 # Set local build cache (recommended to avoid permission issues)
 export GOCACHE="$(pwd)/.gocache"
@@ -289,13 +293,19 @@ If using `make install`, Vulkan headers are installed automatically. If installi
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libvulkan-dev
+sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
 
-# Fedora/RHEL
-sudo dnf install vulkan-devel
+# Fedora/RHEL/CentOS
+sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
 
-# Arch
-sudo pacman -S vulkan-headers vulkan-icd-loader
+# Arch/Manjaro
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+
+# openSUSE
+sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+
+# Alpine Linux
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 ```
 
 ### Build Cache Permission Issues

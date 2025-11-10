@@ -34,22 +34,37 @@ For Windows, see [Windows Installation](#windows).
 
 ### Linux-Specific
 
-ProjectVem requires Vulkan headers for GPU-accelerated rendering on Linux. The Makefile will automatically detect and install these for you, but you can also install them manually:
+ProjectVem requires several system libraries for GUI rendering and input handling on Linux. The Makefile will automatically detect and install these for you, but you can also install them manually:
 
 #### Debian/Ubuntu
 ```bash
-sudo apt-get install libvulkan-dev
+sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
 ```
 
-#### Fedora/RHEL
+#### Fedora/RHEL/CentOS
 ```bash
-sudo dnf install vulkan-devel
+sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
 ```
 
-#### Arch Linux
+#### Arch Linux/Manjaro
 ```bash
-sudo pacman -S vulkan-headers vulkan-icd-loader
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
 ```
+
+#### openSUSE
+```bash
+sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+```
+
+#### Alpine Linux
+```bash
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
+```
+
+**What these libraries do:**
+- **Vulkan**: GPU-accelerated rendering backend
+- **xkbcommon**: Keyboard input handling
+- **Wayland**: Display server support (also works on X11)
 
 ### macOS
 
@@ -128,13 +143,19 @@ If you prefer not to use Make, you can build manually:
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libvulkan-dev
+sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
 
-# Fedora/RHEL
-sudo dnf install vulkan-devel
+# Fedora/RHEL/CentOS
+sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
 
-# Arch
-sudo pacman -S vulkan-headers vulkan-icd-loader
+# Arch/Manjaro
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+
+# openSUSE
+sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+
+# Alpine Linux
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 ```
 
 #### 2. Build the Binary
@@ -201,13 +222,19 @@ If the automatic installation fails:
 ```bash
 # Try installing manually based on your distribution
 # Debian/Ubuntu
-sudo apt-get update && sudo apt-get install libvulkan-dev
+sudo apt-get update && sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
 
-# Fedora/RHEL
-sudo dnf install vulkan-devel
+# Fedora/RHEL/CentOS
+sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
 
-# Arch
-sudo pacman -S vulkan-headers vulkan-icd-loader
+# Arch/Manjaro
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+
+# openSUSE
+sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+
+# Alpine Linux
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 ```
 
 Then retry:
@@ -253,12 +280,11 @@ If `vem.exe` is not found:
 
 ### Package Manager Not Detected (Linux)
 
-If you're using a distribution with a different package manager, install Vulkan headers manually:
+If you're using a distribution with a different package manager, install the required libraries manually. Look for packages named:
 
-```bash
-# Find the Vulkan development package for your distribution
-# Common package names: libvulkan-dev, vulkan-devel, vulkan-headers
-```
+- **Vulkan development files**: `libvulkan-dev`, `vulkan-devel`, or `vulkan-headers`
+- **xkbcommon development files**: `libxkbcommon-dev`, `libxkbcommon-devel`, or `libxkbcommon`
+- **Wayland client development files**: `libwayland-dev`, `wayland-devel`, or `wayland`
 
 Then build:
 ```bash
