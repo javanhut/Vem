@@ -365,7 +365,20 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			// Reset modifiers after successful command execution to prevent them from sticking.
 			// Exception: Don't reset if we just entered a mode or are waiting for a pane command
 			// Exception: Don't reset Shift if Tab was pressed (for Shift+Tab pane cycling)
-			if (s.mode == modeNormal || s.mode == modeInsert || s.mode == modeCommand) && !s.pendingPaneCmd {
+			// Exception: In INSERT mode, don't reset modifiers for printable keys that generate EditEvents
+			//            (the EditEvent needs the modifier state to determine capitalization)
+			shouldResetModifiers := false
+
+			if s.mode == modeNormal || s.mode == modeCommand {
+				// In NORMAL/COMMAND modes, always reset modifiers for command keys
+				shouldResetModifiers = !s.pendingPaneCmd
+			} else if s.mode == modeInsert {
+				// In INSERT mode, only reset for non-printable keys (Escape, arrow keys, etc.)
+				// Printable keys (letters, digits, symbols) rely on EditEvent which needs the modifier
+				shouldResetModifiers = !isPrintableKey(e.Name) && !s.pendingPaneCmd
+			}
+
+			if shouldResetModifiers {
 				if hadCtrl && s.ctrlPressed {
 					// Ctrl was held before and is still held - user might have released it
 					// Reset it so next key doesn't have Ctrl stuck
@@ -481,8 +494,9 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	}
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
-			lineContent := expandTabs(s.activeBuffer().Line(index), 4)
-			lineText := fmt.Sprintf("%4d  %s", index+1, lineContent)
+			// Important: Add gutter BEFORE expanding tabs so tab stops align with cursor positioning
+			lineText := fmt.Sprintf("%4d  %s", index+1, s.activeBuffer().Line(index))
+			lineText = expandTabs(lineText, 4)
 			label := material.Body1(s.theme, lineText)
 			label.Font.Typeface = "GoMono"
 			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
@@ -1222,6 +1236,13 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 	full := gutter + prefix
 	x := s.measureTextWidth(gtx, full)
 
+	buf := s.activeBuffer()
+	if buf != nil {
+		cursor := buf.Cursor()
+		log.Printf("[CURSOR_DEBUG] Drawing cursor: Line=%d Col=%d XPos=%d Gutter=%q Prefix=%q CharUnder=%q Mode=%s",
+			cursor.Line, cursor.Col, x, gutter, prefix, charUnder, s.mode)
+	}
+
 	if s.mode == modeInsert {
 		// Thin line cursor for INSERT mode
 		width := gtx.Dp(unit.Dp(2))
@@ -1234,6 +1255,12 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		stack.Pop()
 	} else {
 		// Block cursor for NORMAL/VISUAL/DELETE modes
+		// Expand tab character for display (tabs should render as spaces)
+		displayChar := charUnder
+		if charUnder == "\t" {
+			displayChar = expandTabs("\t", 4)
+		}
+
 		charWidth := s.measureTextWidth(gtx, charUnder)
 		if charWidth < 8 {
 			charWidth = 8
@@ -1244,7 +1271,7 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		stack.Pop()
 
 		// Draw the character on top of the cursor in contrasting color
-		label := material.Body1(s.theme, charUnder)
+		label := material.Body1(s.theme, displayChar)
 		label.Font.Typeface = "GoMono"
 		label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
 		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
@@ -1254,9 +1281,10 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 }
 
 func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
-	// Measure a single character to get the fixed width for monospace font
-	// This avoids Material Design's text shaping which can add extra spacing
-	label := material.Body1(s.theme, "M")
+	// Expand tabs to spaces before measuring so measurements match visual rendering
+	expandedTxt := expandTabs(txt, 4)
+
+	label := material.Body1(s.theme, expandedTxt)
 	label.Font.Typeface = "GoMono"
 	measureGtx := gtx
 	measureGtx.Constraints = layout.Constraints{
@@ -1267,12 +1295,13 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	dims := label.Layout(measureGtx)
 	macro.Stop()
 
-	// For monospace font, multiply character count by single char width
-	// Count runes, not bytes, for proper Unicode handling
-	charCount := utf8.RuneCountInString(txt)
-	charWidth := dims.Size.X
+	// Debug log for tab measurements
+	if strings.Contains(txt, "\t") {
+		log.Printf("[MEASURE_TAB_DEBUG] Original text=%q Expanded=%q width=%d",
+			txt, expandedTxt, dims.Size.X)
+	}
 
-	return charWidth * charCount
+	return dims.Size.X
 }
 
 func (s *appState) updateCaretBlink(gtx layout.Context) {
@@ -2269,7 +2298,17 @@ func (s *appState) insertText(text string) {
 	if text == "" {
 		return
 	}
-	s.activeBuffer().InsertText(text)
+	buf := s.activeBuffer()
+	cursorBefore := buf.Cursor()
+	log.Printf("[INSERT_TEXT_DEBUG] Inserting text=%q at Line=%d Col=%d",
+		text, cursorBefore.Line, cursorBefore.Col)
+
+	buf.InsertText(text)
+
+	cursorAfter := buf.Cursor()
+	log.Printf("[INSERT_TEXT_DEBUG] After insert: Line=%d Col=%d",
+		cursorAfter.Line, cursorAfter.Col)
+
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
 	s.skipNextEdit = false
 }
@@ -2331,6 +2370,28 @@ func describeKey(ev key.Event) string {
 		return string(ev.Name)
 	}
 	return "key"
+}
+
+// isPrintableKey returns true if the key generates a printable character via EditEvent.
+// These keys should not have their modifiers reset immediately in INSERT mode,
+// as the EditEvent needs the modifier state to determine capitalization.
+func isPrintableKey(keyName key.Name) bool {
+	nameStr := string(keyName)
+
+	// Single character keys (letters and digits)
+	if len(nameStr) == 1 {
+		r := rune(nameStr[0])
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+		// Also include common printable symbols
+		if strings.ContainsRune("!@#$%^&*()_+-=[]{}\\|;:'\",.<>/?`~", r) {
+			return true
+		}
+	}
+
+	// Special printable keys
+	return keyName == key.NameSpace
 }
 
 // expandTabs converts tab characters to spaces.

@@ -504,19 +504,58 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionInsertNewline:
 		if s.mode == modeInsert {
+			buf := s.activeBuffer()
+			cursorBefore := buf.Cursor()
+			lineCountBefore := buf.LineCount()
+			log.Printf("[NEWLINE_DEBUG] BEFORE: Line=%d Col=%d LineCount=%d",
+				cursorBefore.Line, cursorBefore.Col, lineCountBefore)
+
 			s.insertText("\n")
+			s.skipNextEdit = true // Prevent EditEvent from inserting again
+
+			cursorAfter := buf.Cursor()
+			lineCountAfter := buf.LineCount()
+			log.Printf("[NEWLINE_DEBUG] AFTER: Line=%d Col=%d LineCount=%d (added %d lines)",
+				cursorAfter.Line, cursorAfter.Col, lineCountAfter, lineCountAfter-lineCountBefore)
 		} else if s.mode == modeCommand {
 			s.executeCommandLine()
 		}
 
 	case ActionInsertSpace:
 		if s.mode == modeInsert {
+			buf := s.activeBuffer()
+			cursorBefore := buf.Cursor()
+			lineBefore := buf.Line(cursorBefore.Line)
+			log.Printf("[SPACE_DEBUG] BEFORE: Line=%d Col=%d LineContent=%q",
+				cursorBefore.Line, cursorBefore.Col, lineBefore)
+
 			s.insertText(" ")
+			s.skipNextEdit = true // Prevent EditEvent from inserting again
+
+			cursorAfter := buf.Cursor()
+			lineAfter := buf.Line(cursorAfter.Line)
+			log.Printf("[SPACE_DEBUG] AFTER: Line=%d Col=%d LineContent=%q",
+				cursorAfter.Line, cursorAfter.Col, lineAfter)
+			log.Printf("[SPACE_DEBUG] Cursor moved from Col %d to Col %d (delta: %d)",
+				cursorBefore.Col, cursorAfter.Col, cursorAfter.Col-cursorBefore.Col)
 		}
 
 	case ActionInsertTab:
 		if s.mode == modeInsert {
+			buf := s.activeBuffer()
+			cursorBefore := buf.Cursor()
+			lineBefore := buf.Line(cursorBefore.Line)
+			log.Printf("[TAB_DEBUG] BEFORE: Line=%d Col=%d LineContent=%q",
+				cursorBefore.Line, cursorBefore.Col, lineBefore)
+
 			s.insertText("\t")
+			s.skipNextEdit = true // Prevent EditEvent from inserting again
+
+			cursorAfter := buf.Cursor()
+			lineAfter := buf.Line(cursorAfter.Line)
+			log.Printf("[TAB_DEBUG] AFTER: Line=%d Col=%d LineContent=%q",
+				cursorAfter.Line, cursorAfter.Col, lineAfter)
+			log.Printf("[TAB_DEBUG] Tab character inserted, line now has tab character at correct position")
 		}
 
 	case ActionDeleteBackward:
