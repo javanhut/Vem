@@ -45,7 +45,7 @@ const (
 	IconDatabase   = "\uf1c0" //
 	IconShell      = "\uf489" //
 	IconVim        = "\ue7c5" //
-	IconBird       = "\uedea" //  (for .crl carrion files)
+	IconBird       = "\uedea" //  Norse hammer icon for .crl Carrion files
 )
 
 // GetFileIcon returns the Nerd Font icon for a given file or directory
