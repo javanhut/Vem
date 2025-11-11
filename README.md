@@ -16,6 +16,7 @@ Vem is a lightweight yet powerful text editor that combines Vim's modal editing 
 - **Undo System**: Full undo support for all edit operations
 - **Multi-Buffer Support**: Open and edit multiple files simultaneously
 - **Search & Highlight**: Case-insensitive search with match highlighting and navigation
+- **Syntax Highlighting**: Powered by Chroma with support for 200+ languages and multiple color themes
 
 ### Window Management
 
@@ -303,6 +304,7 @@ After search, use `n` and `Shift+N` in NORMAL mode to navigate matches.
 - **[Tutorial](docs/tutorial.md)** - Step-by-step getting started guide
 - **[Navigation Guide](docs/navigation.md)** - Pane navigation and fullscreen features
 - **[Search Guide](docs/search.md)** - Search functionality documentation
+- **[Syntax Highlighting](docs/syntax-highlighting.md)** - Color themes and language support
 
 ## Platform Support
 
@@ -350,6 +352,9 @@ Vem/
 │   │   ├── layout.go         # Layout calculations
 │   │   ├── navigation.go     # Pane navigation
 │   │   └── pane.go           # Pane abstraction
+│   ├── syntax/                # Syntax highlighting
+│   │   ├── highlighter.go    # Language detection and tokenization
+│   │   └── theme.go          # Color theme management
 │   └── fonts/                 # Font management
 │       └── fonts.go          # Font loading and rendering
 ├── docs/                      # Documentation
@@ -368,10 +373,15 @@ Vem uses minimal dependencies:
   - Metal (macOS)
   - Direct3D (Windows)
   - WebGL (WebAssembly)
+- **[Chroma](https://github.com/alecthomas/chroma)** v2.20.0 - Syntax highlighting engine
+  - 200+ language lexers
+  - Multiple color themes
+  - Fast tokenization
 
 ### Transitive (Automatic)
 - `gioui.org/shader` v1.0.8 - Shader compilation
 - `github.com/go-text/typesetting` v0.3.0 - Text layout
+- `github.com/dlclark/regexp2` v1.11.5 - Advanced regex (for Chroma)
 - `golang.org/x/exp/shiny` - Platform abstraction
 - `golang.org/x/image` v0.26.0 - Image handling
 - `golang.org/x/sys` v0.33.0 - System calls
@@ -479,6 +489,7 @@ See [LICENSE](LICENSE) for the full license text.
 Vem is feature-complete for Phase 1 and includes:
 
 - Full modal editing system
+- Syntax highlighting with 200+ languages
 - Pane splitting and management
 - Fuzzy file finder
 - File explorer with operations
