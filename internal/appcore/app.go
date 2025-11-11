@@ -29,6 +29,7 @@ import (
 
 	"github.com/javanhut/ProjectVem/internal/editor"
 	"github.com/javanhut/ProjectVem/internal/filesystem"
+	"github.com/javanhut/ProjectVem/internal/fonts"
 	"github.com/javanhut/ProjectVem/internal/panes"
 )
 
@@ -174,10 +175,22 @@ func (s *appState) run(w *app.Window) error {
 
 func newAppState() *appState {
 	theme := material.NewTheme()
-	theme.Shaper = text.NewShaper(
-		text.NoSystemFonts(),
-		text.WithCollection(gofont.Collection()),
-	)
+
+	// Try to load JetBrains Mono Nerd Font, fall back to gofont if it fails
+	customFonts, err := fonts.Collection()
+	if err != nil {
+		log.Printf("Warning: Failed to load JetBrains Mono Nerd Font, using default: %v", err)
+		theme.Shaper = text.NewShaper(
+			text.NoSystemFonts(),
+			text.WithCollection(gofont.Collection()),
+		)
+	} else {
+		log.Printf("Loaded JetBrains Mono Nerd Font successfully")
+		theme.Shaper = text.NewShaper(
+			text.NoSystemFonts(),
+			text.WithCollection(customFonts),
+		)
+	}
 
 	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
 	bufferMgr := editor.NewBufferManagerWithBuffer(buf)
@@ -533,7 +546,7 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 			lineText := fmt.Sprintf("%4d  %s", index+1, s.activeBuffer().Line(index))
 			lineText = expandTabs(lineText, 4)
 			label := material.Body1(s.theme, lineText)
-			label.Font.Typeface = "GoMono"
+			label.Font.Typeface = "JetBrainsMono"
 			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
 			macro := op.Record(gtx.Ops)
 			dims := label.Layout(gtx)
@@ -742,7 +755,7 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 	}
 
 	label := material.Body2(s.theme, status)
-	label.Font.Typeface = "GoMono"
+	label.Font.Typeface = "JetBrainsMono"
 	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 	macro := op.Record(gtx.Ops)
@@ -817,7 +830,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				prompt := "Fuzzy Finder: " + s.fuzzyFinderInput
 				label := material.Body1(s.theme, prompt)
-				label.Font.Typeface = "GoMono"
+				label.Font.Typeface = "JetBrainsMono"
 				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, label.Layout)
 			}),
@@ -825,7 +838,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				matchInfo := fmt.Sprintf("%d matches", len(s.fuzzyFinderMatches))
 				label := material.Body2(s.theme, matchInfo)
-				label.Font.Typeface = "GoMono"
+				label.Font.Typeface = "JetBrainsMono"
 				label.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
 				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, label.Layout)
 			}),
@@ -845,7 +858,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 
 					// Draw file path with highlighted matched characters
 					label := material.Body2(s.theme, match.FilePath)
-					label.Font.Typeface = "GoMono"
+					label.Font.Typeface = "JetBrainsMono"
 					if index == s.fuzzyFinderSelectedIdx {
 						label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 					} else {
@@ -866,7 +879,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 func (s *appState) drawCommandBar(gtx layout.Context) layout.Dimensions {
 	prompt := ":" + s.cmdText
 	label := material.Body2(s.theme, prompt)
-	label.Font.Typeface = "GoMono"
+	label.Font.Typeface = "JetBrainsMono"
 	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 	macro := op.Record(gtx.Ops)
@@ -904,7 +917,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			currentPath := s.fileTree.CurrentPath()
 			pathLabel := material.Body2(s.theme, currentPath)
-			pathLabel.Font.Typeface = "GoMono"
+			pathLabel.Font.Typeface = "JetBrainsMono"
 			pathLabel.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
 
 			return layout.Inset{
@@ -951,7 +964,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 
 					// Render text
 					label := material.Body2(s.theme, lineText)
-					label.Font.Typeface = "GoMono"
+					label.Font.Typeface = "JetBrainsMono"
 					if node.IsDir {
 						label.Color = dirColor
 					} else {
@@ -1329,7 +1342,7 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 
 		// Draw the character on top of the cursor in contrasting color
 		label := material.Body1(s.theme, displayChar)
-		label.Font.Typeface = "GoMono"
+		label.Font.Typeface = "JetBrainsMono"
 		label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
 		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
 		label.Layout(gtx)
@@ -1342,7 +1355,7 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	expandedTxt := expandTabs(txt, 4)
 
 	label := material.Body1(s.theme, expandedTxt)
-	label.Font.Typeface = "GoMono"
+	label.Font.Typeface = "JetBrainsMono"
 	measureGtx := gtx
 	measureGtx.Constraints = layout.Constraints{
 		Min: image.Point{},
