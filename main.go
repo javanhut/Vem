@@ -14,7 +14,7 @@ func main() {
 	go func() {
 		w := new(gioapp.Window)
 		w.Option(
-			gioapp.Title("ProjectVem Gio Spike"),
+			gioapp.Title("Vem - Vim Emulator"),
 			gioapp.Size(unit.Dp(960), unit.Dp(640)),
 		)
 		if err := appcore.Run(w); err != nil {
