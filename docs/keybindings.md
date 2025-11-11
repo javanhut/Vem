@@ -11,8 +11,15 @@ These keybindings work in all modes.
 | `Ctrl+T` | Toggle Explorer | Show/hide the file tree explorer |
 | `Ctrl+H` | Focus Explorer | Switch focus to the file tree (if visible) |
 | `Ctrl+L` | Focus Editor | Switch focus to the text editor |
-| `Ctrl+P` | Fuzzy Finder | Open fuzzy file finder |
-| `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode |
+| `Ctrl+F` | Fuzzy Finder | Open fuzzy file finder |
+| `Ctrl+U` | Undo | Undo last edit operation |
+| `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode (NORMAL mode only) |
+| `Shift+Tab` | Cycle Panes | Cycle to next pane (when multiple panes open) |
+| `Ctrl+X` | Close Pane | Close active pane and its buffer |
+| `Alt+h` | Focus Left Pane | Move focus to pane on the left |
+| `Alt+j` | Focus Down Pane | Move focus to pane below |
+| `Alt+k` | Focus Up Pane | Move focus to pane above |
+| `Alt+l` | Focus Right Pane | Move focus to pane on the right |
 
 ## NORMAL Mode
 
@@ -93,6 +100,7 @@ INSERT mode is for typing and editing text.
 |-----|--------|-------------|
 | `Enter` | Newline | Insert a new line |
 | `Space` | Space | Insert a space character |
+| `Tab` | Insert Tab | Insert a tab character |
 | `Backspace` | Delete Backward | Delete character before cursor |
 | `Delete` | Delete Forward | Delete character after cursor |
 
@@ -335,7 +343,7 @@ Type any text to filter files. The fuzzy matcher:
 
 ### Example Workflow
 
-1. Press `Ctrl+P` from any mode to open fuzzy finder
+1. Press `Ctrl+F` from any mode to open fuzzy finder
 2. Type partial file name (e.g., `bufgo` to find `internal/editor/buffer.go`)
 3. Use `↑`/`↓` to navigate through matches
 4. Press `Enter` to open the selected file
@@ -404,13 +412,48 @@ In future releases, keybindings will be customizable via:
 
 See the [ROADMAP.md](../ROADMAP.md) for planned customization features.
 
+## Pane Management (Ctrl+S prefix)
+
+Vem provides powerful pane splitting and management capabilities. Press `Ctrl+S` to enter pane command mode, then press one of the following keys:
+
+| Keybinding | Action | Description |
+|------------|--------|-------------|
+| `Ctrl+S v` | Split Vertical | Create vertical split (top/bottom with horizontal divider) |
+| `Ctrl+S h` | Split Horizontal | Create horizontal split (left/right with vertical divider) |
+| `Ctrl+S =` | Equalize Panes | Make all panes equal size (50/50) |
+| `Ctrl+S o` | Zoom Toggle | Maximize/restore active pane |
+
+**Note**: After splitting, use `:e filename` or `Ctrl+P` to open a file in the new pane.
+
+For detailed pane usage, see [Pane Splitting Guide](pane-splitting.md).
+
+## Undo Functionality
+
+Vem provides undo functionality for text editing operations:
+
+| Keybinding | Action | Description |
+|------------|--------|-------------|
+| `Ctrl+U` | Undo | Undo the last edit operation (insert, delete, etc.) |
+
+The undo system:
+- Tracks up to 100 edit operations
+- Works for insertions, deletions, and line operations
+- Available in all modes (most useful in NORMAL and INSERT modes)
+- Shows "Nothing to undo" when the undo stack is empty
+
+Example usage:
+1. Make some edits in INSERT mode
+2. Press `Esc` to return to NORMAL mode
+3. Press `Ctrl+U` to undo the last change
+4. Press `Ctrl+U` repeatedly to undo multiple changes
+
 ## Keybinding Conflicts
 
 ProjectVem uses a priority-based keybinding system to prevent conflicts:
 
-1. **Global keybindings** (highest priority): Ctrl+T, Ctrl+H, Ctrl+L, Shift+Enter
-2. **Mode-specific keybindings**: Commands that only work in specific modes
-3. **Special handlers**: Complex sequences like `gg`, counts, etc.
+1. **Global keybindings** (highest priority): Ctrl+T, Ctrl+H, Ctrl+L, Ctrl+F, Ctrl+U, Alt+hjkl, Shift+Tab, Ctrl+X
+2. **Mode-specific keybindings**: Commands that only work in specific modes (e.g., Shift+Enter for fullscreen only in NORMAL mode)
+3. **Special handlers**: Complex sequences like `gg`, counts, Ctrl+S prefix, etc.
 
 Exception: COMMAND mode keybindings take priority over global keybindings to ensure commands execute correctly.
 
@@ -420,6 +463,7 @@ For details on how the keybinding system works internally, see [Architecture.md]
 
 ## See Also
 
+- [Pane Splitting Guide](pane-splitting.md) - Complete guide to pane management
 - [Navigation Guide](navigation.md) - Pane navigation and fullscreen features
 - [Tutorial](tutorial.md) - Step-by-step guide for new users
 - [Architecture](Architecture.md) - Technical implementation details

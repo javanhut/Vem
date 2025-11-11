@@ -31,35 +31,72 @@ ProjectVem is a modern text editor that brings the power and efficiency of NeoVi
 
 ## Installation
 
+### Quick Install (Recommended)
+
+**Linux and macOS:**
+```bash
+git clone https://github.com/javanhut/ProjectVem.git
+cd ProjectVem
+make install
+```
+
+The Makefile automatically detects your OS/architecture, checks for dependencies (including Vulkan headers on Linux), and installs Vem to `/usr/local/bin`.
+
+**Windows:**
+```bash
+git clone https://github.com/javanhut/ProjectVem.git
+cd ProjectVem
+make build
+```
+
+This creates `vem.exe` in the current directory. Add it to your PATH or run directly.
+
+For detailed installation instructions, troubleshooting, and manual build options, see [docs/installation.md](docs/installation.md).
+
 ### Prerequisites
 
 #### All Platforms
 - Go 1.25.3 or later
 - Git (for cloning the repository)
+- Make (for automated installation)
 
 #### Linux-Specific
-- **Debian/Ubuntu**: `sudo apt-get install libvulkan-dev`
-- **Fedora/RHEL**: `sudo dnf install vulkan-devel`
-- **Arch**: `sudo pacman -S vulkan-headers vulkan-icd-loader`
+- Vulkan headers (automatically installed by `make install`)
+  - **Debian/Ubuntu**: `libvulkan-dev libxkbcommon-dev libwayland-dev`
+  - **Fedora/RHEL/CentOS**: `vulkan-devel libxkbcommon-devel wayland-devel`
+  - **Arch/Manjaro**: `vulkan-headers vulkan-icd-loader libxkbcommon wayland`
+  - **openSUSE**: `vulkan-devel libxkbcommon-devel wayland-devel`
+  - **Alpine**: `vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev`
 
-The Vulkan headers are required for GPU-accelerated rendering on Linux. On macOS, Metal is used; on Windows, Direct3D is used (no extra dependencies needed).
+These libraries provide GPU-accelerated rendering (Vulkan), keyboard input handling (xkbcommon), and display server support (Wayland/X11) on Linux. The Makefile detects your package manager and installs them automatically. On macOS, Metal is used; on Windows, Direct3D is used (no extra dependencies needed).
 
-### Build from Source
+### Manual Build
+
+If you prefer not to use Make:
 
 ```bash
 # Clone the repository
 git clone https://github.com/javanhut/ProjectVem.git
 cd ProjectVem
 
+# Install Vulkan headers (Linux only)
+# Debian/Ubuntu: sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
+# Fedora/RHEL: sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
+# Arch: sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+# openSUSE: sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+# Alpine: sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
+
 # Set local build cache (recommended to avoid permission issues)
 export GOCACHE="$(pwd)/.gocache"
 
-# Run the editor
-go run .
-
-# Or build a binary
+# Build the binary
 go build -o vem
+
+# Run the editor
 ./vem
+
+# Or install manually to /usr/local/bin (Linux/macOS)
+sudo install -m 755 vem /usr/local/bin/vem
 ```
 
 ### Running Tests
@@ -121,6 +158,7 @@ For complete documentation, see `docs/keybindings.md`.
 
 ## Documentation
 
+- **[Installation Guide](docs/installation.md)** - Detailed installation instructions for all platforms
 - **[Keybindings Reference](docs/keybindings.md)** - Complete list of all keybindings
 - **[Architecture Guide](docs/Architecture.md)** - Technical architecture and design decisions
 - **[Tutorial](docs/tutorial.md)** - Step-by-step guide for new users
@@ -251,15 +289,23 @@ ProjectVem is currently in active development (Phase 1). Contributions are welco
 
 ### Linux: Vulkan Headers Not Found
 
+If using `make install`, Vulkan headers are installed automatically. If installing manually or if automatic installation fails:
+
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libvulkan-dev
+sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
 
-# Fedora/RHEL
-sudo dnf install vulkan-devel
+# Fedora/RHEL/CentOS
+sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
 
-# Arch
-sudo pacman -S vulkan-headers vulkan-icd-loader
+# Arch/Manjaro
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+
+# openSUSE
+sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+
+# Alpine Linux
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 ```
 
 ### Build Cache Permission Issues
@@ -267,9 +313,11 @@ sudo pacman -S vulkan-headers vulkan-icd-loader
 ```bash
 # Use local build cache
 export GOCACHE="$(pwd)/.gocache"
-go clean -cache
-go build
+make clean
+make build
 ```
+
+For more troubleshooting help, see [docs/installation.md](docs/installation.md#troubleshooting).
 
 ### Platform-Specific Keybinding Issues
 

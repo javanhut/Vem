@@ -29,6 +29,8 @@ import (
 
 	"github.com/javanhut/ProjectVem/internal/editor"
 	"github.com/javanhut/ProjectVem/internal/filesystem"
+	"github.com/javanhut/ProjectVem/internal/fonts"
+	"github.com/javanhut/ProjectVem/internal/panes"
 )
 
 type mode string
@@ -76,11 +78,17 @@ var (
 	focusBorder       = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
 	searchMatchColor  = color.NRGBA{R: 0xff, G: 0xff, B: 0x00, A: 0x77}
 	currentMatchColor = color.NRGBA{R: 0xff, G: 0xa5, B: 0x00, A: 0xaa}
+
+	// Pane colors
+	activePaneBg   = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff} // Same as background (active is brighter)
+	inactivePaneBg = color.NRGBA{R: 0x14, G: 0x18, B: 0x24, A: 0xff} // 15% darker
+	paneSeparator  = color.NRGBA{R: 0x30, G: 0x35, B: 0x44, A: 0xff} // Subtle gray line
 )
 
 type appState struct {
 	theme              *material.Theme
 	bufferMgr          *editor.BufferManager
+	paneManager        *panes.PaneManager
 	fileTree           *filesystem.FileTree
 	mode               mode
 	status             string
@@ -89,6 +97,7 @@ type appState struct {
 	pendingCount       int
 	pendingGoto        bool
 	pendingScroll      bool
+	pendingPaneCmd     bool
 	visualMode         visualModeType
 	visualStartLine    int
 	visualStartCol     int
@@ -104,9 +113,10 @@ type appState struct {
 	window             *app.Window
 
 	// Explorer state
-	explorerVisible bool
-	explorerWidth   int
-	explorerFocused bool
+	explorerVisible      bool
+	explorerWidth        int
+	explorerFocused      bool
+	explorerListPosition layout.List
 
 	// File operation state
 	fileOpMode         string
@@ -166,13 +176,28 @@ func (s *appState) run(w *app.Window) error {
 
 func newAppState() *appState {
 	theme := material.NewTheme()
-	theme.Shaper = text.NewShaper(
-		text.NoSystemFonts(),
-		text.WithCollection(gofont.Collection()),
-	)
+
+	// Try to load JetBrains Mono Nerd Font, fall back to gofont if it fails
+	customFonts, err := fonts.Collection()
+	if err != nil {
+		log.Printf("Warning: Failed to load JetBrains Mono Nerd Font, using default: %v", err)
+		theme.Shaper = text.NewShaper(
+			text.NoSystemFonts(),
+			text.WithCollection(gofont.Collection()),
+		)
+	} else {
+		log.Printf("Loaded JetBrains Mono Nerd Font successfully")
+		theme.Shaper = text.NewShaper(
+			text.NoSystemFonts(),
+			text.WithCollection(customFonts),
+		)
+	}
 
 	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
 	bufferMgr := editor.NewBufferManagerWithBuffer(buf)
+
+	// Initialize pane manager with the initial buffer (index 0)
+	paneManager := panes.NewPaneManager(0)
 
 	// Initialize file tree from current directory
 	workDir, err := os.Getwd()
@@ -187,33 +212,67 @@ func newAppState() *appState {
 	}
 
 	return &appState{
-		theme:             theme,
-		bufferMgr:         bufferMgr,
-		fileTree:          fileTree,
-		mode:              modeNormal,
-		status:            "Ready",
-		focusTag:          new(int),
-		visualMode:        visualModeNone,
-		visualStartLine:   0,
-		visualStartCol:    0,
-		caretVisible:      true,
-		explorerVisible:   false,
-		explorerWidth:     250,
-		explorerFocused:   false,
-		currentWindowMode: app.Windowed,
-		wasFullscreen:     false,
-		viewportTopLine:   0,
-		scrollOffsetLines: 3,
-		listPosition:      layout.List{Axis: layout.Vertical},
+		theme:                theme,
+		bufferMgr:            bufferMgr,
+		paneManager:          paneManager,
+		fileTree:             fileTree,
+		mode:                 modeNormal,
+		status:               "Ready",
+		focusTag:             new(int),
+		visualMode:           visualModeNone,
+		visualStartLine:      0,
+		visualStartCol:       0,
+		caretVisible:         true,
+		explorerVisible:      false,
+		explorerWidth:        250,
+		explorerFocused:      false,
+		explorerListPosition: layout.List{Axis: layout.Vertical},
+		currentWindowMode:    app.Windowed,
+		wasFullscreen:        false,
+		viewportTopLine:      0,
+		scrollOffsetLines:    3,
+		listPosition:         layout.List{Axis: layout.Vertical},
 	}
 }
 
-// activeBuffer returns the active buffer (helper method).
+// activeBuffer returns the buffer for the active pane.
 func (s *appState) activeBuffer() *editor.Buffer {
-	if s.bufferMgr == nil {
+	if s.paneManager == nil || s.bufferMgr == nil {
 		return nil
 	}
-	return s.bufferMgr.ActiveBuffer()
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return nil
+	}
+
+	return s.bufferMgr.GetBuffer(activePane.BufferIndex)
+}
+
+// activePaneViewportTop returns the viewport top line for the active pane.
+func (s *appState) activePaneViewportTop() int {
+	if s.paneManager == nil {
+		return 0
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return 0
+	}
+
+	return activePane.ViewportTop
+}
+
+// setActivePaneViewportTop sets the viewport top line for the active pane.
+func (s *appState) setActivePaneViewportTop(line int) {
+	if s.paneManager == nil {
+		return
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane != nil {
+		activePane.SetViewportTop(line)
+	}
 }
 
 func (s *appState) layout(gtx layout.Context) layout.Dimensions {
@@ -230,17 +289,17 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if s.explorerVisible && s.fileTree != nil {
-				// Horizontal split: explorer | editor
+				// Horizontal split: explorer | panes
 				return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return s.drawFileExplorer(gtx)
 					}),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return s.drawBuffer(gtx)
+						return s.drawPanes(gtx)
 					}),
 				)
 			}
-			return s.drawBuffer(gtx)
+			return s.drawPanes(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			if s.mode == modeCommand {
@@ -264,6 +323,7 @@ func (s *appState) handleEvents(gtx layout.Context) {
 		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
 		gtx.Execute(key.SoftKeyboardCmd{Show: true})
 	} else {
+		// In normal mode, we still want to receive Tab events
 		gtx.Execute(key.SoftKeyboardCmd{Show: false})
 	}
 	gtx.Execute(key.FocusCmd{Tag: s.focusTag})
@@ -283,27 +343,29 @@ func (s *appState) handleEvents(gtx layout.Context) {
 		case key.Event:
 			// Track Ctrl key press/release
 			if e.Name == key.NameCtrl {
-				wasPressed := s.ctrlPressed
 				s.ctrlPressed = (e.State == key.Press)
-				log.Printf("[CTRL_TRACK] Ctrl %v -> %v (state=%v)", wasPressed, s.ctrlPressed, e.State)
+				if e.State == key.Press {
+					log.Printf("⌨ [CTRL] Pressed")
+				} else {
+					log.Printf("⌨ [CTRL] Released")
+				}
 				continue
 			}
 			// Track Shift key press/release
 			if e.Name == key.NameShift {
-				wasPressed := s.shiftPressed
 				s.shiftPressed = (e.State == key.Press)
-				log.Printf("[SHIFT_TRACK] Shift %v -> %v (state=%v)", wasPressed, s.shiftPressed, e.State)
+				if e.State == key.Press {
+					log.Printf("⌨ [SHIFT] Pressed (waiting for character key...)")
+				} else {
+					log.Printf("⌨ [SHIFT] Released")
+				}
 				continue
 			}
 			// Track Alt key press/release
 			if e.Name == key.NameAlt {
-				log.Printf("[ALT_TRACK] Alt key event received, state=%v", e.State)
+				log.Printf("⌨ [ALT] %v", e.State)
 				continue
 			}
-
-			// Platform quirk: ev.Modifiers is ALWAYS empty on this platform!
-			// We must rely ONLY on our tracked modifier state (ctrlPressed, shiftPressed)
-			log.Printf("[PLATFORM_QUIRK] ev.Modifiers=%v (platform never sets this)", e.Modifiers)
 
 			// Save modifier state before handling key
 			hadCtrl := s.ctrlPressed
@@ -314,16 +376,29 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			// Smart reset: If modifiers are still set after handleKey and we're in certain modes,
 			// it likely means the user released the modifier but platform didn't send Release event.
 			// Reset modifiers after successful command execution to prevent them from sticking.
-			// Exception: Don't reset if we just entered a mode (mode transitions are intentional)
-			if s.mode == modeNormal || s.mode == modeInsert || s.mode == modeCommand {
+			// Exception: Don't reset if we just entered a mode or are waiting for a pane command
+			// Exception: In INSERT mode, don't reset modifiers for printable keys that generate EditEvents
+			//            (the EditEvent needs the modifier state to determine capitalization)
+			shouldResetModifiers := false
+
+			if s.mode == modeNormal || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder {
+				// In non-insert modes, reset modifiers after command keys unless waiting for pane command
+				shouldResetModifiers = !s.pendingPaneCmd
+			} else if s.mode == modeInsert {
+				// In INSERT mode, only reset for special keys (Escape, arrow keys, function keys)
+				// Don't reset for: printable keys, Tab (needs Shift state), or when pending pane command
+				isSpecialKey := (e.Name == key.NameEscape ||
+					e.Name == key.NameLeftArrow || e.Name == key.NameRightArrow ||
+					e.Name == key.NameUpArrow || e.Name == key.NameDownArrow ||
+					e.Name == key.NameDeleteBackward || e.Name == key.NameDeleteForward)
+				shouldResetModifiers = isSpecialKey && !s.pendingPaneCmd
+			}
+
+			if shouldResetModifiers {
 				if hadCtrl && s.ctrlPressed {
-					// Ctrl was held before and is still held - user might have released it
-					// Reset it so next key doesn't have Ctrl stuck
-					log.Printf("[SMART_RESET] Resetting Ctrl after key=%q to prevent sticking", e.Name)
 					s.ctrlPressed = false
 				}
 				if hadShift && s.shiftPressed {
-					log.Printf("[SMART_RESET] Resetting Shift after key=%q to prevent sticking", e.Name)
 					s.shiftPressed = false
 				}
 			}
@@ -352,23 +427,62 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			case modeInsert:
 				if s.skipNextEdit {
 					s.skipNextEdit = false
+					log.Printf("✓ [FIX_ACTIVE] Skipped EditEvent %q (already handled by KeyEvent)", e.Text)
 					continue
 				}
+				// Platform didn't send KeyEvent, only EditEvent - use it
+				log.Printf("⚠ [PLATFORM_QUIRK] EditEvent %q arrived without KeyEvent (platform limitation)", e.Text)
 				s.insertText(e.Text)
+				// Reset modifiers after EditEvent insertion
+				if s.shiftPressed {
+					log.Printf("⚠ [PLATFORM_QUIRK] Resetting Shift after EditEvent")
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("⚠ [PLATFORM_QUIRK] Resetting Ctrl after EditEvent")
+					s.ctrlPressed = false
+				}
 			case modeCommand:
 				s.appendCommandText(e.Text)
+				// Reset modifiers after text insertion to prevent sticking
+				if s.shiftPressed {
+					log.Printf("[EDIT_RESET] Resetting Shift after command text=%q", e.Text)
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("[EDIT_RESET] Resetting Ctrl after command text=%q", e.Text)
+					s.ctrlPressed = false
+				}
 			case modeSearch:
 				if s.skipNextSearchEdit {
 					s.skipNextSearchEdit = false
 					continue
 				}
 				s.appendSearchText(e.Text)
+				// Reset modifiers after text insertion to prevent sticking
+				if s.shiftPressed {
+					log.Printf("[EDIT_RESET] Resetting Shift after search text=%q", e.Text)
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("[EDIT_RESET] Resetting Ctrl after search text=%q", e.Text)
+					s.ctrlPressed = false
+				}
 			case modeFuzzyFinder:
 				if s.skipNextFuzzyEdit {
 					s.skipNextFuzzyEdit = false
 					continue
 				}
 				s.appendFuzzyInput(e.Text)
+				// Reset modifiers after text insertion to prevent sticking
+				if s.shiftPressed {
+					log.Printf("[EDIT_RESET] Resetting Shift after fuzzy text=%q", e.Text)
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("[EDIT_RESET] Resetting Ctrl after fuzzy text=%q", e.Text)
+					s.ctrlPressed = false
+				}
 			}
 		}
 	}
@@ -430,10 +544,11 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	}
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
-			lineContent := expandTabs(s.activeBuffer().Line(index), 4)
-			lineText := fmt.Sprintf("%4d  %s", index+1, lineContent)
+			// Important: Add gutter BEFORE expanding tabs so tab stops align with cursor positioning
+			lineText := fmt.Sprintf("%4d  %s", index+1, s.activeBuffer().Line(index))
+			lineText = expandTabs(lineText, 4)
 			label := material.Body1(s.theme, lineText)
-			label.Font.Typeface = "GoMono"
+			label.Font.Typeface = "JetBrainsMono"
 			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
 			macro := op.Record(gtx.Ops)
 			dims := label.Layout(gtx)
@@ -574,37 +689,75 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 		// If file operation is active, show ONLY the file operation prompt for clarity
 		status = s.getFileOpPrompt()
 	} else {
-		cur := s.activeBuffer().Cursor()
+		// Check if we have an active buffer
+		buf := s.activeBuffer()
+		if buf == nil {
+			// No active buffer - show minimal status
+			paneInfo := ""
+			if s.paneManager != nil {
+				paneCount := s.paneManager.PaneCount()
+				if paneCount > 1 {
+					allPanes := s.paneManager.AllPanes()
+					activeIdx := 1
+					for i, p := range allPanes {
+						if p == s.paneManager.ActivePane() {
+							activeIdx = i + 1
+							break
+						}
+					}
+					paneInfo = fmt.Sprintf(" | PANE %d/%d", activeIdx, paneCount)
+				}
+			}
+			status = fmt.Sprintf("MODE %s | No active buffer%s | %s", s.mode, paneInfo, s.status)
+		} else {
+			cur := buf.Cursor()
 
-		// Build status line with file info
-		fileName := s.activeBuffer().FilePath()
-		if fileName == "" {
-			fileName = "[No Name]"
+			// Build status line with file info
+			fileName := buf.FilePath()
+			if fileName == "" {
+				fileName = "[No Name]"
+			}
+
+			modFlag := ""
+			if buf.Modified() {
+				modFlag = " [+]"
+			}
+
+			// Add pane information
+			paneInfo := ""
+			if s.paneManager != nil && s.paneManager.PaneCount() > 1 {
+				// Find active pane index
+				allPanes := s.paneManager.AllPanes()
+				activeIdx := 1
+				for i, p := range allPanes {
+					if p == s.paneManager.ActivePane() {
+						activeIdx = i + 1
+						break
+					}
+				}
+				paneInfo = fmt.Sprintf(" | PANE %d/%d", activeIdx, s.paneManager.PaneCount())
+			}
+
+			// Add fullscreen indicator
+			fullscreenInfo := ""
+			if s.currentWindowMode == app.Fullscreen {
+				fullscreenInfo = " | FULLSCREEN"
+			}
+
+			// Add zoom indicator
+			zoomInfo := ""
+			if s.paneManager != nil && s.paneManager.IsZoomed() {
+				zoomInfo = " | ZOOMED"
+			}
+
+			status = fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s%s | %s",
+				s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status,
+			)
 		}
-
-		modFlag := ""
-		if s.activeBuffer().Modified() {
-			modFlag = " [+]"
-		}
-
-		bufferInfo := ""
-		if s.bufferMgr.BufferCount() > 1 {
-			bufferInfo = fmt.Sprintf(" | BUFFER %d/%d", s.bufferMgr.ActiveIndex()+1, s.bufferMgr.BufferCount())
-		}
-
-		// Add fullscreen indicator
-		fullscreenInfo := ""
-		if s.currentWindowMode == app.Fullscreen {
-			fullscreenInfo = " | FULLSCREEN"
-		}
-
-		status = fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s | %s",
-			s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, bufferInfo, fullscreenInfo, s.status,
-		)
 	}
 
 	label := material.Body2(s.theme, status)
-	label.Font.Typeface = "GoMono"
+	label.Font.Typeface = "JetBrainsMono"
 	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 	macro := op.Record(gtx.Ops)
@@ -679,7 +832,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				prompt := "Fuzzy Finder: " + s.fuzzyFinderInput
 				label := material.Body1(s.theme, prompt)
-				label.Font.Typeface = "GoMono"
+				label.Font.Typeface = "JetBrainsMono"
 				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, label.Layout)
 			}),
@@ -687,7 +840,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				matchInfo := fmt.Sprintf("%d matches", len(s.fuzzyFinderMatches))
 				label := material.Body2(s.theme, matchInfo)
-				label.Font.Typeface = "GoMono"
+				label.Font.Typeface = "JetBrainsMono"
 				label.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
 				return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, label.Layout)
 			}),
@@ -707,7 +860,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 
 					// Draw file path with highlighted matched characters
 					label := material.Body2(s.theme, match.FilePath)
-					label.Font.Typeface = "GoMono"
+					label.Font.Typeface = "JetBrainsMono"
 					if index == s.fuzzyFinderSelectedIdx {
 						label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 					} else {
@@ -728,7 +881,7 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 func (s *appState) drawCommandBar(gtx layout.Context) layout.Dimensions {
 	prompt := ":" + s.cmdText
 	label := material.Body2(s.theme, prompt)
-	label.Font.Typeface = "GoMono"
+	label.Font.Typeface = "JetBrainsMono"
 	label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 
 	macro := op.Record(gtx.Ops)
@@ -766,7 +919,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			currentPath := s.fileTree.CurrentPath()
 			pathLabel := material.Body2(s.theme, currentPath)
-			pathLabel.Font.Typeface = "GoMono"
+			pathLabel.Font.Typeface = "JetBrainsMono"
 			pathLabel.Color = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
 
 			return layout.Inset{
@@ -780,7 +933,6 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 			nodes := s.fileTree.GetFlatList()
 			selectedIndex := s.fileTree.SelectedIndex()
 
-			list := layout.List{Axis: layout.Vertical}
 			inset := layout.Inset{
 				Top:    unit.Dp(8),
 				Right:  unit.Dp(8),
@@ -789,7 +941,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 			}
 
 			return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return list.Layout(gtx, len(nodes), func(gtx layout.Context, index int) layout.Dimensions {
+				return s.explorerListPosition.Layout(gtx, len(nodes), func(gtx layout.Context, index int) layout.Dimensions {
 					node := nodes[index]
 
 					// Draw selection highlight
@@ -799,21 +951,26 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 						rect.Pop()
 					}
 
-					// Build line text with indentation
+					// Build line text with indentation and icon
 					indent := strings.Repeat("  ", node.Depth)
-					icon := "  "
+
+					var icon string
 					if node.IsDir {
-						if node.Expanded {
-							icon = "▼ "
-						} else {
-							icon = "▶ "
-						}
+						// Directory: expand/collapse icon + folder icon
+						expandIcon := node.GetExpandIcon()
+						folderIcon := node.GetIcon()
+						icon = expandIcon + " " + folderIcon + " "
+					} else {
+						// File: file type icon with spacing
+						fileIcon := node.GetIcon()
+						icon = "  " + fileIcon + " "
 					}
+
 					lineText := indent + icon + node.Name
 
 					// Render text
 					label := material.Body2(s.theme, lineText)
-					label.Font.Typeface = "GoMono"
+					label.Font.Typeface = "JetBrainsMono"
 					if node.IsDir {
 						label.Color = dirColor
 					} else {
@@ -851,16 +1008,39 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 }
 
 func (s *appState) handleKey(ev key.Event) {
-	if ev.State != key.Press {
+	// Special case: Tab events only come through on Release (consumed by focus system on Press)
+	// Process Tab on Release, all other keys on Press
+	isTabRelease := (ev.Name == key.NameTab && ev.State == key.Release)
+
+	if ev.State != key.Press && !isTabRelease {
 		return
 	}
 	s.lastKey = describeKey(ev)
+
+	// Clear skipNextEdit at the start of each KeyEvent to prevent stale state
+	// This ensures we only skip EditEvents that correspond to THIS KeyEvent
+	if s.mode == modeInsert {
+		s.skipNextEdit = false
+	}
 
 	// Handle file operation input if active
 	if s.fileOpMode != "" {
 		if s.handleFileOpKey(ev) {
 			return
 		}
+	}
+
+	// Handle Ctrl+S prefix for pane commands
+	if s.ctrlPressed && strings.ToLower(string(ev.Name)) == "s" && !s.pendingPaneCmd {
+		s.pendingPaneCmd = true
+		s.status = "Pane: v=vsplit h=hsplit Alt+hjkl=nav Tab=cycle Ctrl+X=close ==equalize o=zoom"
+		return
+	}
+
+	if s.pendingPaneCmd {
+		s.handlePaneCommand(ev)
+		s.pendingPaneCmd = false
+		return
 	}
 
 	// Debug logging
@@ -999,7 +1179,28 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 }
 
 func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
-	if _, ok := s.printableKey(ev); ok {
+	if r, ok := s.printableKey(ev); ok {
+		// FIX WORKING: Insert character immediately from KeyEvent (bypassing delayed EditEvent)
+		log.Printf("✓ [FIX_ACTIVE] KeyEvent insert: %q | Shift=%v Ctrl=%v", string(r), s.shiftPressed, s.ctrlPressed)
+		s.insertText(string(r))
+
+		// Reset modifiers immediately after insertion
+		modifiersReset := false
+		if s.shiftPressed {
+			s.shiftPressed = false
+			modifiersReset = true
+		}
+		if s.ctrlPressed {
+			s.ctrlPressed = false
+			modifiersReset = true
+		}
+		if modifiersReset {
+			log.Printf("✓ [FIX_ACTIVE] Modifiers reset (no sticking)")
+		}
+
+		// Mark that we should skip the corresponding EditEvent
+		// Note: Sometimes platform doesn't send KeyEvent, only EditEvent
+		s.skipNextEdit = true
 		return true
 	}
 	return false
@@ -1116,6 +1317,8 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 	full := gutter + prefix
 	x := s.measureTextWidth(gtx, full)
 
+	// Cursor drawing (debug logs removed for clarity)
+
 	if s.mode == modeInsert {
 		// Thin line cursor for INSERT mode
 		width := gtx.Dp(unit.Dp(2))
@@ -1128,6 +1331,12 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		stack.Pop()
 	} else {
 		// Block cursor for NORMAL/VISUAL/DELETE modes
+		// Expand tab character for display (tabs should render as spaces)
+		displayChar := charUnder
+		if charUnder == "\t" {
+			displayChar = expandTabs("\t", 4)
+		}
+
 		charWidth := s.measureTextWidth(gtx, charUnder)
 		if charWidth < 8 {
 			charWidth = 8
@@ -1138,8 +1347,8 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		stack.Pop()
 
 		// Draw the character on top of the cursor in contrasting color
-		label := material.Body1(s.theme, charUnder)
-		label.Font.Typeface = "GoMono"
+		label := material.Body1(s.theme, displayChar)
+		label.Font.Typeface = "JetBrainsMono"
 		label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
 		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
 		label.Layout(gtx)
@@ -1148,8 +1357,11 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 }
 
 func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
-	label := material.Body1(s.theme, txt)
-	label.Font.Typeface = "GoMono"
+	// Expand tabs to spaces before measuring so measurements match visual rendering
+	expandedTxt := expandTabs(txt, 4)
+
+	label := material.Body1(s.theme, expandedTxt)
+	label.Font.Typeface = "JetBrainsMono"
 	measureGtx := gtx
 	measureGtx.Constraints = layout.Constraints{
 		Min: image.Point{},
@@ -1158,6 +1370,7 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	macro := op.Record(measureGtx.Ops)
 	dims := label.Layout(measureGtx)
 	macro.Stop()
+
 	return dims.Size.X
 }
 
@@ -1488,10 +1701,27 @@ func (s *appState) toggleExplorer() {
 		}
 		s.status = "Explorer closed"
 	} else {
-		// Show explorer without focusing
-		s.explorerVisible = true
-		s.status = "Explorer opened"
+		// Show explorer AND focus it immediately
+		s.enterExplorerMode()
 	}
+}
+
+// ensureExplorerItemVisible scrolls the explorer to keep selected item visible
+func (s *appState) ensureExplorerItemVisible() {
+	if s.fileTree == nil {
+		return
+	}
+
+	selectedIndex := s.fileTree.SelectedIndex()
+	nodes := s.fileTree.GetFlatList()
+
+	if selectedIndex < 0 || selectedIndex >= len(nodes) {
+		return
+	}
+
+	// Scroll to show selected item
+	s.explorerListPosition.Position.First = selectedIndex
+	s.explorerListPosition.Position.Offset = 0
 }
 
 func (s *appState) toggleFullscreen() {
@@ -1545,12 +1775,22 @@ func (s *appState) openSelectedNode() {
 	}
 
 	// Open file
-	if _, err := s.bufferMgr.OpenFile(node.Path); err != nil {
+	_, err := s.bufferMgr.OpenFile(node.Path)
+	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", node.Name, err)
-	} else {
-		s.exitExplorerMode()
-		s.status = fmt.Sprintf("Opened %s", node.Name)
+		return
 	}
+
+	// Update the active pane to display the newly opened buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+		}
+	}
+
+	s.exitExplorerMode()
+	s.status = fmt.Sprintf("Opened %s", node.Name)
 }
 
 func (s *appState) visualSelectionRange() (int, int, bool) {
@@ -1774,20 +2014,64 @@ func (s *appState) executeCommandLine() {
 }
 
 func (s *appState) handleQuitCommand(force bool) {
-	if err := s.bufferMgr.CloseActiveBuffer(force); err != nil {
-		s.status = fmt.Sprintf("Error: %v", err)
+	// With pane system, quit closes the active pane and its buffer
+	if s.paneManager == nil {
+		s.requestClose()
 		return
 	}
 
-	// If no buffers left, close the window
-	if s.bufferMgr.BufferCount() == 0 || (s.bufferMgr.BufferCount() == 1 && s.activeBuffer().FilePath() == "") {
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
 		s.requestClose()
+		return
+	}
+
+	// Get the buffer for this pane
+	buf := s.bufferMgr.GetBuffer(activePane.BufferIndex)
+	if buf == nil {
+		// No buffer, just close the pane
+		if s.paneManager.PaneCount() > 1 {
+			s.paneManager.ClosePane()
+			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		} else {
+			s.requestClose()
+		}
+		return
+	}
+
+	// Check if buffer is modified (unless force)
+	if !force && buf.Modified() {
+		s.status = "Buffer has unsaved changes (use :q! to force)"
+		return
+	}
+
+	// Close the buffer
+	if err := s.bufferMgr.CloseBuffer(activePane.BufferIndex, force); err != nil {
+		s.status = fmt.Sprintf("Error closing buffer: %v", err)
+		return
+	}
+
+	// Close the pane
+	if s.paneManager.PaneCount() > 1 {
+		if err := s.paneManager.ClosePane(); err != nil {
+			s.status = fmt.Sprintf("Error closing pane: %v", err)
+		} else {
+			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		}
 	} else {
-		s.status = "Buffer closed"
+		// Last pane - close the application
+		s.requestClose()
 	}
 }
 
 func (s *appState) handleWriteCommand(arg string, andQuit bool) {
+	// Check if we have an active buffer
+	buf := s.activeBuffer()
+	if buf == nil {
+		s.status = "No active buffer to save"
+		return
+	}
+
 	var err error
 	if arg == "" {
 		// Save to current file
@@ -1802,13 +2086,13 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 		return
 	}
 
-	filename := s.activeBuffer().FilePath()
+	filename := buf.FilePath()
 	if andQuit {
 		s.handleQuitCommand(false)
 		s.status = fmt.Sprintf("Wrote + closed %s", filename)
 		return
 	}
-	s.status = fmt.Sprintf("Wrote %d line(s) → %s", s.activeBuffer().LineCount(), filename)
+	s.status = fmt.Sprintf("Wrote %d line(s) → %s", buf.LineCount(), filename)
 }
 
 func (s *appState) handleEditCommand(path string) {
@@ -1817,11 +2101,21 @@ func (s *appState) handleEditCommand(path string) {
 		return
 	}
 
-	if _, err := s.bufferMgr.OpenFile(path); err != nil {
+	_, err := s.bufferMgr.OpenFile(path)
+	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", path, err)
-	} else {
-		s.status = fmt.Sprintf("Opened %s", path)
+		return
 	}
+
+	// Update the active pane to display the newly opened buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+		}
+	}
+
+	s.status = fmt.Sprintf("Opened %s", path)
 }
 
 func (s *appState) handleBufferDeleteCommand(force bool) {
@@ -2091,9 +2385,9 @@ func (s *appState) insertText(text string) {
 	if text == "" {
 		return
 	}
-	s.activeBuffer().InsertText(text)
+	buf := s.activeBuffer()
+	buf.InsertText(text)
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
-	s.skipNextEdit = false
 }
 
 func (s *appState) saveBufferToFile(path string) error {
@@ -2153,6 +2447,28 @@ func describeKey(ev key.Event) string {
 		return string(ev.Name)
 	}
 	return "key"
+}
+
+// isPrintableKey returns true if the key generates a printable character via EditEvent.
+// These keys should not have their modifiers reset immediately in INSERT mode,
+// as the EditEvent needs the modifier state to determine capitalization.
+func isPrintableKey(keyName key.Name) bool {
+	nameStr := string(keyName)
+
+	// Single character keys (letters and digits)
+	if len(nameStr) == 1 {
+		r := rune(nameStr[0])
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+		// Also include common printable symbols
+		if strings.ContainsRune("!@#$%^&*()_+-=[]{}\\|;:'\",.<>/?`~", r) {
+			return true
+		}
+	}
+
+	// Special printable keys
+	return keyName == key.NameSpace
 }
 
 // expandTabs converts tab characters to spaces.
@@ -2429,13 +2745,23 @@ func (s *appState) fuzzyFinderConfirm() {
 	match := s.fuzzyFinderMatches[s.fuzzyFinderSelectedIdx]
 	fullPath := filepath.Join(s.fileTree.CurrentPath(), match.FilePath)
 
-	if _, err := s.bufferMgr.OpenFile(fullPath); err != nil {
+	_, err := s.bufferMgr.OpenFile(fullPath)
+	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", match.FilePath, err)
 		s.exitFuzzyFinder()
-	} else {
-		s.exitFuzzyFinder()
-		s.status = fmt.Sprintf("Opened %s", match.FilePath)
+		return
 	}
+
+	// Update the active pane to display the newly opened buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+		}
+	}
+
+	s.exitFuzzyFinder()
+	s.status = fmt.Sprintf("Opened %s", match.FilePath)
 }
 
 const sampleBuffer = ``

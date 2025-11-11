@@ -6,12 +6,21 @@ import (
 	"unicode/utf8"
 )
 
+// UndoEntry represents a single undo operation
+type UndoEntry struct {
+	lines       []string
+	cursor      Cursor
+	description string
+}
+
 // Buffer represents an in-memory text buffer with a Vim-style cursor.
 type Buffer struct {
-	lines    []string
-	cursor   Cursor
-	filePath string
-	modified bool
+	lines     []string
+	cursor    Cursor
+	filePath  string
+	modified  bool
+	undoStack []UndoEntry
+	maxUndos  int
 }
 
 // Cursor stores the current line/column position (1 rune == 1 column).
@@ -27,8 +36,10 @@ func NewBuffer(text string) *Buffer {
 		lines = []string{""}
 	}
 	return &Buffer{
-		lines:  lines,
-		cursor: Cursor{},
+		lines:     lines,
+		cursor:    Cursor{},
+		undoStack: make([]UndoEntry, 0),
+		maxUndos:  100,
 	}
 }
 
@@ -116,6 +127,9 @@ func (b *Buffer) DeleteLines(start, end int) {
 	if start >= len(b.lines) {
 		return
 	}
+	// Save state before deleting
+	b.saveState("delete lines")
+
 	b.lines = append(b.lines[:start], b.lines[end+1:]...)
 	if len(b.lines) == 0 {
 		b.lines = []string{""}
@@ -139,6 +153,9 @@ func (b *Buffer) InsertLines(at int, lines []string) {
 	if at > len(b.lines) {
 		at = len(b.lines)
 	}
+	// Save state before inserting
+	b.saveState("insert lines")
+
 	linesCopy := append([]string(nil), lines...)
 	newLines := make([]string, 0, len(b.lines)+len(linesCopy))
 	newLines = append(newLines, b.lines[:at]...)
@@ -156,6 +173,9 @@ func (b *Buffer) InsertText(text string) {
 	if text == "" {
 		return
 	}
+	// Save state before inserting
+	b.saveState("insert text")
+
 	left, right := splitAtRune(b.lines[b.cursor.Line], b.cursor.Col)
 	segments := strings.Split(text, "\n")
 	lastIdx := len(segments) - 1
@@ -181,6 +201,9 @@ func (b *Buffer) InsertText(text string) {
 // DeleteBackward deletes the rune before the cursor (backspace semantics).
 // When invoked at the start of a line, it merges with the previous line.
 func (b *Buffer) DeleteBackward() bool {
+	// Save state before deleting
+	b.saveState("delete backward")
+
 	if b.cursor.Col == 0 {
 		if b.cursor.Line == 0 {
 			return false
@@ -209,6 +232,9 @@ func (b *Buffer) DeleteBackward() bool {
 // DeleteForward deletes the rune at the cursor (delete semantics).
 // When at the end of a line, it merges with the following line.
 func (b *Buffer) DeleteForward() bool {
+	// Save state before deleting
+	b.saveState("delete forward")
+
 	lineRunes := []rune(b.lines[b.cursor.Line])
 	if b.cursor.Col < len(lineRunes) {
 		lineRunes = append(lineRunes[:b.cursor.Col], lineRunes[b.cursor.Col+1:]...)
@@ -690,6 +716,9 @@ func (b *Buffer) DeleteCharRange(startLine, startCol, endLine, endCol int) {
 		return
 	}
 
+	// Save state before deletion
+	b.saveState("delete char range")
+
 	// Single line deletion
 	if startLine == endLine {
 		runes := []rune(b.lines[startLine])
@@ -733,4 +762,42 @@ func (b *Buffer) DeleteCharRange(startLine, startCol, endLine, endCol int) {
 	b.cursor.Line = startLine
 	b.cursor.Col = startCol
 	b.markModified()
+}
+
+// saveState saves the current buffer state to the undo stack
+func (b *Buffer) saveState(description string) {
+	// Create a deep copy of lines
+	linesCopy := make([]string, len(b.lines))
+	copy(linesCopy, b.lines)
+
+	entry := UndoEntry{
+		lines:       linesCopy,
+		cursor:      b.cursor,
+		description: description,
+	}
+
+	b.undoStack = append(b.undoStack, entry)
+
+	// Limit undo stack size
+	if len(b.undoStack) > b.maxUndos {
+		b.undoStack = b.undoStack[1:]
+	}
+}
+
+// Undo reverts the last change
+func (b *Buffer) Undo() bool {
+	if len(b.undoStack) == 0 {
+		return false
+	}
+
+	// Pop the last entry
+	lastEntry := b.undoStack[len(b.undoStack)-1]
+	b.undoStack = b.undoStack[:len(b.undoStack)-1]
+
+	// Restore state
+	b.lines = lastEntry.lines
+	b.cursor = lastEntry.cursor
+	b.markModified()
+
+	return true
 }
