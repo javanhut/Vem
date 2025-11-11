@@ -1682,9 +1682,8 @@ func (s *appState) toggleExplorer() {
 		}
 		s.status = "Explorer closed"
 	} else {
-		// Show explorer without focusing
-		s.explorerVisible = true
-		s.status = "Explorer opened"
+		// Show explorer AND focus it immediately
+		s.enterExplorerMode()
 	}
 }
 
