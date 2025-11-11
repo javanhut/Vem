@@ -224,7 +224,7 @@ func newAppState() *appState {
 		visualStartCol:       0,
 		caretVisible:         true,
 		explorerVisible:      false,
-		explorerWidth:        250,
+		explorerWidth:        275,
 		explorerFocused:      false,
 		explorerListPosition: layout.List{Axis: layout.Vertical},
 		currentWindowMode:    app.Windowed,
