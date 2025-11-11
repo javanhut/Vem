@@ -328,31 +328,29 @@ func (s *appState) handleEvents(gtx layout.Context) {
 		case key.Event:
 			// Track Ctrl key press/release
 			if e.Name == key.NameCtrl {
-				wasPressed := s.ctrlPressed
 				s.ctrlPressed = (e.State == key.Press)
-				log.Printf("[CTRL_TRACK] Ctrl %v -> %v (state=%v)", wasPressed, s.ctrlPressed, e.State)
+				if e.State == key.Press {
+					log.Printf("⌨ [CTRL] Pressed")
+				} else {
+					log.Printf("⌨ [CTRL] Released")
+				}
 				continue
 			}
 			// Track Shift key press/release
 			if e.Name == key.NameShift {
-				wasPressed := s.shiftPressed
 				s.shiftPressed = (e.State == key.Press)
-				log.Printf("[SHIFT_TRACK] Shift %v -> %v (state=%v)", wasPressed, s.shiftPressed, e.State)
+				if e.State == key.Press {
+					log.Printf("⌨ [SHIFT] Pressed (waiting for character key...)")
+				} else {
+					log.Printf("⌨ [SHIFT] Released")
+				}
 				continue
-			}
-			// Special handling for Tab key - log if we receive it
-			if e.Name == key.NameTab {
-				log.Printf("[TAB_KEY] Tab event received! State=%v Modifiers=%v Shift=%v", e.State, e.Modifiers, s.shiftPressed)
 			}
 			// Track Alt key press/release
 			if e.Name == key.NameAlt {
-				log.Printf("[ALT_TRACK] Alt key event received, state=%v", e.State)
+				log.Printf("⌨ [ALT] %v", e.State)
 				continue
 			}
-
-			// Platform quirk: ev.Modifiers is ALWAYS empty on this platform!
-			// We must rely ONLY on our tracked modifier state (ctrlPressed, shiftPressed)
-			log.Printf("[PLATFORM_QUIRK] ev.Modifiers=%v (platform never sets this)", e.Modifiers)
 
 			// Save modifier state before handling key
 			hadCtrl := s.ctrlPressed
@@ -364,30 +362,28 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			// it likely means the user released the modifier but platform didn't send Release event.
 			// Reset modifiers after successful command execution to prevent them from sticking.
 			// Exception: Don't reset if we just entered a mode or are waiting for a pane command
-			// Exception: Don't reset Shift if Tab was pressed (for Shift+Tab pane cycling)
 			// Exception: In INSERT mode, don't reset modifiers for printable keys that generate EditEvents
 			//            (the EditEvent needs the modifier state to determine capitalization)
 			shouldResetModifiers := false
 
-			if s.mode == modeNormal || s.mode == modeCommand {
-				// In NORMAL/COMMAND modes, always reset modifiers for command keys
+			if s.mode == modeNormal || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder {
+				// In non-insert modes, reset modifiers after command keys unless waiting for pane command
 				shouldResetModifiers = !s.pendingPaneCmd
 			} else if s.mode == modeInsert {
-				// In INSERT mode, only reset for non-printable keys (Escape, arrow keys, etc.)
-				// Printable keys (letters, digits, symbols) rely on EditEvent which needs the modifier
-				shouldResetModifiers = !isPrintableKey(e.Name) && !s.pendingPaneCmd
+				// In INSERT mode, only reset for special keys (Escape, arrow keys, function keys)
+				// Don't reset for: printable keys, Tab (needs Shift state), or when pending pane command
+				isSpecialKey := (e.Name == key.NameEscape ||
+					e.Name == key.NameLeftArrow || e.Name == key.NameRightArrow ||
+					e.Name == key.NameUpArrow || e.Name == key.NameDownArrow ||
+					e.Name == key.NameDeleteBackward || e.Name == key.NameDeleteForward)
+				shouldResetModifiers = isSpecialKey && !s.pendingPaneCmd
 			}
 
 			if shouldResetModifiers {
 				if hadCtrl && s.ctrlPressed {
-					// Ctrl was held before and is still held - user might have released it
-					// Reset it so next key doesn't have Ctrl stuck
-					log.Printf("[SMART_RESET] Resetting Ctrl after key=%q to prevent sticking", e.Name)
 					s.ctrlPressed = false
 				}
-				if hadShift && s.shiftPressed && e.Name != key.NameTab {
-					// Don't reset Shift after Tab (needed for Shift+Tab keybinding)
-					log.Printf("[SMART_RESET] Resetting Shift after key=%q to prevent sticking", e.Name)
+				if hadShift && s.shiftPressed {
 					s.shiftPressed = false
 				}
 			}
@@ -416,23 +412,62 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			case modeInsert:
 				if s.skipNextEdit {
 					s.skipNextEdit = false
+					log.Printf("✓ [FIX_ACTIVE] Skipped EditEvent %q (already handled by KeyEvent)", e.Text)
 					continue
 				}
+				// Platform didn't send KeyEvent, only EditEvent - use it
+				log.Printf("⚠ [PLATFORM_QUIRK] EditEvent %q arrived without KeyEvent (platform limitation)", e.Text)
 				s.insertText(e.Text)
+				// Reset modifiers after EditEvent insertion
+				if s.shiftPressed {
+					log.Printf("⚠ [PLATFORM_QUIRK] Resetting Shift after EditEvent")
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("⚠ [PLATFORM_QUIRK] Resetting Ctrl after EditEvent")
+					s.ctrlPressed = false
+				}
 			case modeCommand:
 				s.appendCommandText(e.Text)
+				// Reset modifiers after text insertion to prevent sticking
+				if s.shiftPressed {
+					log.Printf("[EDIT_RESET] Resetting Shift after command text=%q", e.Text)
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("[EDIT_RESET] Resetting Ctrl after command text=%q", e.Text)
+					s.ctrlPressed = false
+				}
 			case modeSearch:
 				if s.skipNextSearchEdit {
 					s.skipNextSearchEdit = false
 					continue
 				}
 				s.appendSearchText(e.Text)
+				// Reset modifiers after text insertion to prevent sticking
+				if s.shiftPressed {
+					log.Printf("[EDIT_RESET] Resetting Shift after search text=%q", e.Text)
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("[EDIT_RESET] Resetting Ctrl after search text=%q", e.Text)
+					s.ctrlPressed = false
+				}
 			case modeFuzzyFinder:
 				if s.skipNextFuzzyEdit {
 					s.skipNextFuzzyEdit = false
 					continue
 				}
 				s.appendFuzzyInput(e.Text)
+				// Reset modifiers after text insertion to prevent sticking
+				if s.shiftPressed {
+					log.Printf("[EDIT_RESET] Resetting Shift after fuzzy text=%q", e.Text)
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					log.Printf("[EDIT_RESET] Resetting Ctrl after fuzzy text=%q", e.Text)
+					s.ctrlPressed = false
+				}
 			}
 		}
 	}
@@ -963,6 +998,12 @@ func (s *appState) handleKey(ev key.Event) {
 	}
 	s.lastKey = describeKey(ev)
 
+	// Clear skipNextEdit at the start of each KeyEvent to prevent stale state
+	// This ensures we only skip EditEvents that correspond to THIS KeyEvent
+	if s.mode == modeInsert {
+		s.skipNextEdit = false
+	}
+
 	// Handle file operation input if active
 	if s.fileOpMode != "" {
 		if s.handleFileOpKey(ev) {
@@ -1119,7 +1160,28 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 }
 
 func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
-	if _, ok := s.printableKey(ev); ok {
+	if r, ok := s.printableKey(ev); ok {
+		// FIX WORKING: Insert character immediately from KeyEvent (bypassing delayed EditEvent)
+		log.Printf("✓ [FIX_ACTIVE] KeyEvent insert: %q | Shift=%v Ctrl=%v", string(r), s.shiftPressed, s.ctrlPressed)
+		s.insertText(string(r))
+
+		// Reset modifiers immediately after insertion
+		modifiersReset := false
+		if s.shiftPressed {
+			s.shiftPressed = false
+			modifiersReset = true
+		}
+		if s.ctrlPressed {
+			s.ctrlPressed = false
+			modifiersReset = true
+		}
+		if modifiersReset {
+			log.Printf("✓ [FIX_ACTIVE] Modifiers reset (no sticking)")
+		}
+
+		// Mark that we should skip the corresponding EditEvent
+		// Note: Sometimes platform doesn't send KeyEvent, only EditEvent
+		s.skipNextEdit = true
 		return true
 	}
 	return false
@@ -1236,12 +1298,7 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 	full := gutter + prefix
 	x := s.measureTextWidth(gtx, full)
 
-	buf := s.activeBuffer()
-	if buf != nil {
-		cursor := buf.Cursor()
-		log.Printf("[CURSOR_DEBUG] Drawing cursor: Line=%d Col=%d XPos=%d Gutter=%q Prefix=%q CharUnder=%q Mode=%s",
-			cursor.Line, cursor.Col, x, gutter, prefix, charUnder, s.mode)
-	}
+	// Cursor drawing (debug logs removed for clarity)
 
 	if s.mode == modeInsert {
 		// Thin line cursor for INSERT mode
@@ -1294,12 +1351,6 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	macro := op.Record(measureGtx.Ops)
 	dims := label.Layout(measureGtx)
 	macro.Stop()
-
-	// Debug log for tab measurements
-	if strings.Contains(txt, "\t") {
-		log.Printf("[MEASURE_TAB_DEBUG] Original text=%q Expanded=%q width=%d",
-			txt, expandedTxt, dims.Size.X)
-	}
 
 	return dims.Size.X
 }
@@ -2299,18 +2350,8 @@ func (s *appState) insertText(text string) {
 		return
 	}
 	buf := s.activeBuffer()
-	cursorBefore := buf.Cursor()
-	log.Printf("[INSERT_TEXT_DEBUG] Inserting text=%q at Line=%d Col=%d",
-		text, cursorBefore.Line, cursorBefore.Col)
-
 	buf.InsertText(text)
-
-	cursorAfter := buf.Cursor()
-	log.Printf("[INSERT_TEXT_DEBUG] After insert: Line=%d Col=%d",
-		cursorAfter.Line, cursorAfter.Col)
-
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
-	s.skipNextEdit = false
 }
 
 func (s *appState) saveBufferToFile(path string) error {

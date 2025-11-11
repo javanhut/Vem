@@ -48,6 +48,7 @@ const (
 	ActionDeleteBackward
 	ActionDeleteForward
 	ActionDeleteLine
+	ActionUndo
 
 	// Visual mode
 	ActionCopySelection
@@ -109,9 +110,10 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModCtrl, Key: "t", Modes: nil, Action: ActionToggleExplorer},
 	{Modifiers: key.ModCtrl, Key: "h", Modes: nil, Action: ActionFocusExplorer},
 	{Modifiers: key.ModCtrl, Key: "l", Modes: nil, Action: ActionFocusEditor},
-	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionOpenFuzzyFinder},
-	{Modifiers: key.ModShift, Key: key.NameReturn, Modes: nil, Action: ActionToggleFullscreen},
-	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: nil, Action: ActionToggleFullscreen},
+	{Modifiers: key.ModCtrl, Key: "f", Modes: nil, Action: ActionOpenFuzzyFinder},
+	{Modifiers: key.ModCtrl, Key: "u", Modes: nil, Action: ActionUndo},
+	{Modifiers: key.ModShift, Key: key.NameReturn, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
+	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
 
 	// Pane navigation (Alt+hjkl)
 	{Modifiers: key.ModAlt, Key: "h", Modes: nil, Action: ActionPaneFocusLeft},
@@ -119,8 +121,7 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModAlt, Key: "k", Modes: nil, Action: ActionPaneFocusUp},
 	{Modifiers: key.ModAlt, Key: "l", Modes: nil, Action: ActionPaneFocusRight},
 
-	// Pane cycling and closing
-	{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
+	// Pane closing
 	{Modifiers: key.ModCtrl, Key: "x", Modes: nil, Action: ActionPaneClose},
 }
 
@@ -150,6 +151,7 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: key.ModShift, Key: "n", Modes: nil, Action: ActionPrevMatch},
 		{Modifiers: key.ModCtrl, Key: "e", Modes: nil, Action: ActionScrollLineDown},
 		{Modifiers: key.ModCtrl, Key: "y", Modes: nil, Action: ActionScrollLineUp},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
 	},
 	modeInsert: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -184,9 +186,11 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "d", Modes: nil, Action: ActionDeleteSelection},
 		{Modifiers: 0, Key: "p", Modes: nil, Action: ActionPasteClipboard},
 		{Modifiers: 0, Key: "v", Modes: nil, Action: ActionExitMode},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
 	},
 	modeDelete: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
 	},
 	modeCommand: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -211,6 +215,7 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "n", Modes: nil, Action: ActionCreateFile},
 		{Modifiers: 0, Key: "u", Modes: nil, Action: ActionNavigateUp},
 		{Modifiers: 0, Key: "q", Modes: nil, Action: ActionExitMode},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
 	},
 	modeSearch: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -275,11 +280,7 @@ func (s *appState) keysMatch(actual, expected key.Name) bool {
 func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 	// If no modifiers are required, ensure no modifiers are pressed
 	if required == 0 {
-		match := ev.Modifiers == 0
-		if !match {
-			log.Printf("[MOD_MATCH] Required none, got %v -> false", ev.Modifiers)
-		}
-		return match
+		return ev.Modifiers == 0
 	}
 
 	// Build the actual modifiers state
@@ -294,38 +295,28 @@ func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 	shiftRequired := required.Contain(key.ModShift)
 	altRequired := required.Contain(key.ModAlt)
 
-	log.Printf("[MOD_MATCH] Required: Ctrl=%v Shift=%v Alt=%v | Actual: Ctrl=%v Shift=%v Alt=%v",
-		ctrlRequired, shiftRequired, altRequired, ctrlHeld, shiftHeld, altHeld)
-
 	// All required modifiers must be present
 	if ctrlRequired && !ctrlHeld {
-		log.Printf("[MOD_MATCH] Missing required Ctrl -> false")
 		return false
 	}
 	if shiftRequired && !shiftHeld {
-		log.Printf("[MOD_MATCH] Missing required Shift -> false")
 		return false
 	}
 	if altRequired && !altHeld {
-		log.Printf("[MOD_MATCH] Missing required Alt -> false")
 		return false
 	}
 
 	// No extra modifiers should be present (exact match)
 	if !ctrlRequired && ctrlHeld {
-		log.Printf("[MOD_MATCH] Extra Ctrl present -> false")
 		return false
 	}
 	if !shiftRequired && shiftHeld {
-		log.Printf("[MOD_MATCH] Extra Shift present -> false")
 		return false
 	}
 	if !altRequired && altHeld {
-		log.Printf("[MOD_MATCH] Extra Alt present -> false")
 		return false
 	}
 
-	log.Printf("[MOD_MATCH] Exact match -> true")
 	return true
 }
 
@@ -580,6 +571,13 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			} else {
 				s.status = "End of buffer"
 			}
+		}
+
+	case ActionUndo:
+		if s.activeBuffer().Undo() {
+			s.status = "Undo successful"
+		} else {
+			s.status = "Nothing to undo"
 		}
 
 	case ActionCopySelection:
