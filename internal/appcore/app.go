@@ -950,16 +950,21 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 						rect.Pop()
 					}
 
-					// Build line text with indentation
+					// Build line text with indentation and icon
 					indent := strings.Repeat("  ", node.Depth)
-					icon := "  "
+
+					var icon string
 					if node.IsDir {
-						if node.Expanded {
-							icon = "▼ "
-						} else {
-							icon = "▶ "
-						}
+						// Directory: expand/collapse icon + folder icon
+						expandIcon := node.GetExpandIcon()
+						folderIcon := node.GetIcon()
+						icon = expandIcon + " " + folderIcon + " "
+					} else {
+						// File: file type icon with spacing
+						fileIcon := node.GetIcon()
+						icon = "  " + fileIcon + " "
 					}
+
 					lineText := indent + icon + node.Name
 
 					// Render text

@@ -240,6 +240,19 @@ func (node *TreeNode) IsRoot() bool {
 	return node.Parent == nil
 }
 
+// GetIcon returns the appropriate Nerd Font icon for this node
+func (node *TreeNode) GetIcon() string {
+	return GetFileIcon(node.Name, node.IsDir)
+}
+
+// GetExpandIcon returns the expand/collapse icon if this is a directory
+func (node *TreeNode) GetExpandIcon() string {
+	if !node.IsDir {
+		return ""
+	}
+	return GetExpandIcon(node.Expanded)
+}
+
 // ChangeRoot changes the root directory of the tree to a new path.
 func (ft *FileTree) ChangeRoot(newPath string) error {
 	absPath, err := filepath.Abs(newPath)
