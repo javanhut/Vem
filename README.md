@@ -1,250 +1,393 @@
-# ProjectVem
+# Vem - Vim Emulator
 
-A NeoVim-inspired text editor written in Go with cross-platform support and zero external dependencies.
+A modern, opinionated Vim emulator built from scratch in Go with GPU-accelerated rendering. Vem brings the power of modal editing with a clean, NeoVim-inspired interface and cross-platform support.
 
 ## Overview
 
-ProjectVem is a modern text editor that brings the power and efficiency of NeoVim's modal editing to a cross-platform desktop application. Built with Go and Gio UI, it runs natively on Linux, macOS, Windows, and WebAssembly without requiring users to install fonts, packages, or system dependencies.
+Vem is a lightweight yet powerful text editor that combines Vim's modal editing paradigm with modern features like fuzzy file finding, pane splitting, and GPU-accelerated rendering. Built with Go and Gio UI, it runs natively on Linux, macOS, Windows, and WebAssembly without external dependencies.
 
 ## Features
 
-### Current Implementation (Phase 1)
+### Core Editing
 
-- **Modal Editing**: Vim-like modes (NORMAL, INSERT, VISUAL, DELETE, EXPLORER, COMMAND)
-- **File Management**: Built-in file tree explorer with directory navigation
+- **Modal Editing**: Full Vim-like modes (NORMAL, INSERT, VISUAL, DELETE, COMMAND, EXPLORER, SEARCH, FUZZY_FINDER)
+- **Vim Motions**: Complete navigation with hjkl, word motions (w/b/e), line jumps (0/$), document jumps (gg/G)
+- **Visual Mode**: Line and character selection with copy/delete/paste operations
+- **Undo System**: Full undo support for all edit operations
 - **Multi-Buffer Support**: Open and edit multiple files simultaneously
-- **Vim Commands**: Standard command-line interface (`:e`, `:w`, `:q`, `:wq`, etc.)
-- **Pane Navigation**: Keyboard-driven navigation between file tree and editor
-- **Fullscreen Mode**: Distraction-free editing with `Shift+Enter`
-- **GPU-Accelerated Rendering**: Smooth, responsive interface using Gio UI
-- **Cross-Platform**: Runs identically on Linux, macOS, Windows, and WebAssembly
+- **Search & Highlight**: Case-insensitive search with match highlighting and navigation
 
-### Planned Features (See ROADMAP.md)
+### Window Management
 
-- Vim macro recording and playback
-- LSP integration for language intelligence
-- Syntax highlighting via Treesitter-style pipeline
-- Plugin system with Lua/Python/Carrion scripting support
-- Command palette and fuzzy file finder
-- Session persistence and workspace management
-- Customizable themes and keybindings
+- **Pane Splitting**: Split windows horizontally or vertically to view multiple files side-by-side
+- **Pane Navigation**: Navigate between panes with Alt+hjkl or Shift+Tab
+- **Zoom Mode**: Temporarily maximize any pane for focused editing
+- **Equalize Layout**: Balance all pane sizes with a single command
+- **Active Pane Dimming**: Clear visual indication of which pane is active
+
+### File Management
+
+- **File Explorer**: Built-in tree view with directory navigation
+- **Fuzzy Finder**: Fast file search with fuzzy matching (Ctrl+F)
+- **File Operations**: Create, rename, and delete files directly from the explorer
+- **Directory Navigation**: Move up/down directory hierarchy easily
+- **Auto-Scroll**: Explorer automatically scrolls to keep selection visible
+
+### User Experience
+
+- **Fullscreen Mode**: Distraction-free editing with Shift+Enter
+- **Status Bar**: Shows mode, file name, cursor position, pane info, and messages
+- **File Type Icons**: Visual file type indicators in the explorer using Nerd Font icons
+- **Command-Line Interface**: Vim-style commands (:e, :w, :q, :wq, :bd, etc.)
+- **GPU-Accelerated**: Smooth, responsive interface using Gio UI
+- **Cross-Platform**: Identical experience on Linux, macOS, Windows, and WebAssembly
 
 ## Installation
 
-### Quick Install (Recommended)
+### Quick Install
 
 **Linux and macOS:**
 ```bash
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 make install
 ```
 
-The Makefile automatically detects your OS/architecture, checks for dependencies (including Vulkan headers on Linux), and installs Vem to `/usr/local/bin`.
+The Makefile automatically detects your OS/architecture, checks for dependencies, and installs Vem to `/usr/local/bin`.
 
 **Windows:**
 ```bash
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 make build
 ```
 
 This creates `vem.exe` in the current directory. Add it to your PATH or run directly.
 
-For detailed installation instructions, troubleshooting, and manual build options, see [docs/installation.md](docs/installation.md).
-
 ### Prerequisites
 
 #### All Platforms
 - Go 1.25.3 or later
-- Git (for cloning the repository)
-- Make (for automated installation)
+- Git
+- Make
 
 #### Linux-Specific
 - Vulkan headers (automatically installed by `make install`)
   - **Debian/Ubuntu**: `libvulkan-dev libxkbcommon-dev libwayland-dev`
-  - **Fedora/RHEL/CentOS**: `vulkan-devel libxkbcommon-devel wayland-devel`
+  - **Fedora/RHEL**: `vulkan-devel libxkbcommon-devel wayland-devel`
   - **Arch/Manjaro**: `vulkan-headers vulkan-icd-loader libxkbcommon wayland`
   - **openSUSE**: `vulkan-devel libxkbcommon-devel wayland-devel`
   - **Alpine**: `vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev`
 
-These libraries provide GPU-accelerated rendering (Vulkan), keyboard input handling (xkbcommon), and display server support (Wayland/X11) on Linux. The Makefile detects your package manager and installs them automatically. On macOS, Metal is used; on Windows, Direct3D is used (no extra dependencies needed).
-
 ### Manual Build
 
-If you prefer not to use Make:
-
 ```bash
-# Clone the repository
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 
-# Install Vulkan headers (Linux only)
-# Debian/Ubuntu: sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
-# Fedora/RHEL: sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
-# Arch: sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
-# openSUSE: sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
-# Alpine: sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
-
-# Set local build cache (recommended to avoid permission issues)
+# Set local build cache (recommended)
 export GOCACHE="$(pwd)/.gocache"
 
-# Build the binary
+# Build
 go build -o vem
 
-# Run the editor
+# Run
 ./vem
 
-# Or install manually to /usr/local/bin (Linux/macOS)
+# Install to /usr/local/bin (optional)
 sudo install -m 755 vem /usr/local/bin/vem
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-go test ./...
-
-# Run specific package tests
-go test ./internal/editor
-
-# Run with verbose output
-go test -v ./...
 ```
 
 ## Quick Start
 
-### Basic Navigation
+```bash
+# Launch Vem
+vem
 
-1. Launch the editor: `go run .`
-2. Open the file explorer: Press `Ctrl+T`
-3. Navigate files: Use `j`/`k` or arrow keys
-4. Open a file: Press `Enter` on a file
-5. Edit text: Press `i` to enter INSERT mode
-6. Save file: Press `Esc`, then type `:w` and press `Enter`
-7. Quit: Type `:q` and press `Enter`
+# Or open a specific file
+vem main.go
+```
 
-### Essential Keybindings
+### Basic Workflow
 
-#### Window Management
-- `Ctrl+T` - Toggle file explorer visibility
-- `Ctrl+H` - Focus file explorer (when visible)
-- `Ctrl+L` - Focus editor
-- `Shift+Enter` - Toggle fullscreen mode
+1. **Open explorer**: Press `Ctrl+T`
+2. **Navigate files**: Use `j`/`k` to move up/down
+3. **Open file**: Press `Enter` on a file
+4. **Edit text**: Press `i` to enter INSERT mode
+5. **Save**: Press `Esc`, then `:w` and `Enter`
+6. **Quit**: Type `:q` and press `Enter`
+
+## Keybindings
+
+### Global (Work in All Modes)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Ctrl+T` | Toggle Explorer | Show/hide file tree |
+| `Ctrl+H` | Focus Explorer | Switch to file tree |
+| `Ctrl+L` | Focus Editor | Switch to editor |
+| `Ctrl+F` | Fuzzy Finder | Quick file search |
+| `Ctrl+U` | Undo | Undo last operation |
+| `Ctrl+X` | Close Pane | Close active pane |
+| `Shift+Enter` | Fullscreen | Toggle fullscreen mode |
+| `Shift+Tab` | Cycle Panes | Move to next pane |
+
+### Pane Management (Ctrl+S Prefix)
+
+Press `Ctrl+S` followed by:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `v` | Split Vertical | Create top/bottom split |
+| `h` | Split Horizontal | Create left/right split |
+| `=` | Equalize | Make all panes equal size |
+| `o` | Zoom Toggle | Maximize/restore active pane |
+
+### Pane Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Alt+h` | Focus Left | Move to left pane |
+| `Alt+j` | Focus Down | Move to below pane |
+| `Alt+k` | Focus Up | Move to above pane |
+| `Alt+l` | Focus Right | Move to right pane |
+
+### NORMAL Mode
 
 #### Mode Switching
-- `i` - Enter INSERT mode
-- `v` - Enter VISUAL line mode
-- `d` - Enter DELETE mode
-- `:` - Enter COMMAND mode
-- `Esc` - Return to NORMAL mode
 
-#### Text Navigation (NORMAL mode)
-- `h/j/k/l` - Move left/down/up/right
-- `0` - Jump to start of line
-- `$` - Jump to end of line
-- `gg` - Jump to first line
-- `G` - Jump to last line
-- `<count>G` - Jump to specific line (e.g., `42G`)
+| Key | Action | Description |
+|-----|--------|-------------|
+| `i` | INSERT | Enter insert mode |
+| `v` | VISUAL | Enter visual character mode |
+| `Shift+V` | VISUAL LINE | Enter visual line mode |
+| `d` | DELETE | Enter delete mode |
+| `:` | COMMAND | Open command line |
+| `/` | SEARCH | Start search |
 
-#### Editing (INSERT mode)
-- Type normally to insert text
-- `Enter` - Insert newline
-- `Backspace` - Delete character before cursor
-- `Delete` - Delete character after cursor
-- `Esc` - Return to NORMAL mode
+#### Navigation
 
-For complete documentation, see `docs/keybindings.md`.
+| Key | Action | Description |
+|-----|--------|-------------|
+| `h`/`j`/`k`/`l` | Move | Left/Down/Up/Right |
+| `w` | Word Forward | Next word start |
+| `b` | Word Backward | Previous word start |
+| `e` | Word End | End of current word |
+| `0` | Line Start | Jump to line beginning |
+| `$` | Line End | Jump to line end |
+| `gg` | First Line | Jump to top of file |
+| `G` | Last Line | Jump to bottom of file |
+| `<n>G` | Goto Line | Jump to line n (e.g., `42G`) |
+
+#### Scrolling
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Ctrl+E` | Scroll Down | Scroll one line down |
+| `Ctrl+Y` | Scroll Up | Scroll one line up |
+
+#### Search
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `/` | Start Search | Enter search mode |
+| `n` | Next Match | Jump to next result |
+| `Shift+N` | Previous Match | Jump to previous result |
+| `Esc` | Clear Search | Clear search highlights |
+
+### INSERT Mode
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Exit | Return to NORMAL mode |
+| `Enter` | New Line | Insert newline |
+| `Tab` | Insert Tab | Insert tab character |
+| `Backspace` | Delete Back | Delete previous character |
+| `Delete` | Delete Forward | Delete next character |
+| Arrow keys | Navigate | Move cursor while typing |
+
+### VISUAL Mode
+
+#### Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `h`/`j`/`k`/`l` | Extend Selection | Move selection boundaries |
+| `w`/`b`/`e` | Word Motion | Move by words |
+| `0`/`$` | Line Bounds | Move to line start/end |
+| `gg`/`G` | Document Bounds | Extend to top/bottom |
+
+#### Operations
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `c` | Copy | Copy selection to clipboard |
+| `d` | Delete | Delete selected text |
+| `p` | Paste | Paste from clipboard |
+| `v` | Exit | Return to NORMAL mode |
+| `Esc` | Exit | Return to NORMAL mode |
+
+### COMMAND Mode
+
+#### File Operations
+
+| Command | Description |
+|---------|-------------|
+| `:e <file>` | Open file for editing |
+| `:w` | Save current file |
+| `:w <file>` | Save as new file |
+| `:wq` | Save and close |
+| `:q` | Close (fails if unsaved) |
+| `:q!` | Force close (discard changes) |
+
+#### Buffer Management
+
+| Command | Description |
+|---------|-------------|
+| `:bn` or `:bnext` | Next buffer |
+| `:bp` or `:bprev` | Previous buffer |
+| `:bd` or `:bdelete` | Close buffer |
+| `:bd!` | Force close buffer |
+| `:ls` or `:buffers` | List all buffers |
+
+#### File Explorer
+
+| Command | Description |
+|---------|-------------|
+| `:ex` or `:explore` | Toggle file explorer |
+| `:cd <path>` | Change directory |
+| `:pwd` | Print working directory |
+
+### EXPLORER Mode
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `j`/`k` | Navigate | Move up/down in tree |
+| `Enter` | Open/Toggle | Open file or toggle directory |
+| `h` | Collapse | Collapse directory |
+| `l` | Expand | Expand directory |
+| `r` | Rename | Rename file/directory |
+| `d` | Delete | Delete file/directory |
+| `n` | New File | Create new file |
+| `u` | Navigate Up | Go to parent directory |
+| `q` | Quit | Return to editor |
+| `Esc` | Exit | Return to NORMAL mode |
+
+### SEARCH Mode
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| Type text | Build Pattern | Add to search pattern |
+| `Enter` | Execute | Find first match |
+| `Backspace` | Delete Char | Remove last character |
+| `Esc` | Cancel | Exit search mode |
+
+After search, use `n` and `Shift+N` in NORMAL mode to navigate matches.
+
+### FUZZY_FINDER Mode
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| Type text | Filter Files | Show matching files |
+| `↑`/`↓` | Navigate | Select different file |
+| `Enter` | Open | Open selected file |
+| `Backspace` | Delete Char | Remove last character |
+| `Esc` | Cancel | Close fuzzy finder |
 
 ## Documentation
 
-- **[Installation Guide](docs/installation.md)** - Detailed installation instructions for all platforms
-- **[Keybindings Reference](docs/keybindings.md)** - Complete list of all keybindings
-- **[Architecture Guide](docs/Architecture.md)** - Technical architecture and design decisions
-- **[Tutorial](docs/tutorial.md)** - Step-by-step guide for new users
+- **[Keybindings Reference](docs/keybindings.md)** - Complete keybinding documentation
+- **[Pane Splitting Guide](docs/pane-splitting.md)** - Detailed pane management guide
+- **[Installation Guide](docs/installation.md)** - Platform-specific installation instructions
+- **[Architecture Guide](docs/Architecture.md)** - Technical implementation details
+- **[Tutorial](docs/tutorial.md)** - Step-by-step getting started guide
 - **[Navigation Guide](docs/navigation.md)** - Pane navigation and fullscreen features
-- **[Project Description](PROJECT_DESCRIPTION.md)** - Project goals and vision
-- **[Roadmap](ROADMAP.md)** - Development phases and milestones
+- **[Search Guide](docs/search.md)** - Search functionality documentation
+
+## Platform Support
+
+### Linux
+- **Display Servers**: X11 and Wayland
+- **Graphics**: Vulkan
+- **Tested On**: Ubuntu 22.04, Debian 12, Fedora 40, Arch Linux
+
+### macOS
+- **Graphics**: Metal (built-in)
+- **Architecture**: Intel (x86_64) and Apple Silicon (arm64)
+- **Tested On**: macOS 13 (Ventura) and later
+
+### Windows
+- **Graphics**: Direct3D 11 (built-in)
+- **Tested On**: Windows 10, Windows 11
+
+### WebAssembly
+- **Graphics**: WebGL
+- **Support**: Experimental via Gio's WASM backend
 
 ## Project Structure
 
 ```
-ProjectVem/
+Vem/
 ├── main.go                     # Application entry point
 ├── internal/
-│   ├── appcore/               # Main application loop and rendering
-│   │   ├── app.go            # Core event handling and UI layout
-│   │   └── keybindings.go    # Keybinding system and actions
-│   ├── editor/                # Text editing logic
-│   │   ├── buffer.go         # Buffer abstraction (lines, cursor)
-│   │   ├── buffer_test.go    # Buffer unit tests
-│   │   └── buffer_manager.go # Multi-buffer management
-│   └── filesystem/            # File tree navigation
-│       ├── tree.go           # File tree data structure
-│       └── loader.go         # Directory loading and caching
+│   ├── appcore/               # Core application and rendering
+│   │   ├── app.go            # Event handling and UI layout
+│   │   ├── keybindings.go    # Keybinding system
+│   │   ├── pane_actions.go   # Pane management actions
+│   │   ├── pane_rendering.go # Pane rendering logic
+│   │   └── fuzzy.go          # Fuzzy finder implementation
+│   ├── editor/                # Text editing engine
+│   │   ├── buffer.go         # Buffer abstraction
+│   │   ├── buffer_manager.go # Multi-buffer management
+│   │   └── buffer_test.go    # Unit tests
+│   ├── filesystem/            # File system operations
+│   │   ├── tree.go           # File tree data structure
+│   │   ├── loader.go         # Directory loading
+│   │   ├── finder.go         # File finding logic
+│   │   └── icons.go          # File type icons
+│   ├── panes/                 # Pane management
+│   │   ├── manager.go        # Pane layout manager
+│   │   ├── layout.go         # Layout calculations
+│   │   ├── navigation.go     # Pane navigation
+│   │   └── pane.go           # Pane abstraction
+│   └── fonts/                 # Font management
+│       └── fonts.go          # Font loading and rendering
 ├── docs/                      # Documentation
-│   ├── keybindings.md        # Keybinding reference
-│   ├── Architecture.md       # Architecture documentation
-│   ├── tutorial.md           # User tutorial
-│   └── navigation.md         # Navigation features guide
 ├── go.mod                     # Go module definition
-├── go.sum                     # Dependency checksums
-├── PROJECT_DESCRIPTION.md     # Project vision
-├── ROADMAP.md                 # Development roadmap
+├── Makefile                   # Build automation
 └── README.md                  # This file
 ```
 
 ## Dependencies
 
-ProjectVem uses minimal, carefully selected dependencies:
+Vem uses minimal dependencies:
 
-### Core Dependencies
-- **[Gio UI](https://gioui.org)** v0.9.0 - GPU-accelerated cross-platform UI framework
-  - Vulkan backend on Linux
-  - Metal backend on macOS
-  - Direct3D backend on Windows
-  - WebGL backend for WebAssembly
+### Core
+- **[Gio UI](https://gioui.org)** v0.9.0 - GPU-accelerated UI framework
+  - Vulkan (Linux)
+  - Metal (macOS)
+  - Direct3D (Windows)
+  - WebGL (WebAssembly)
 
-### Transitive Dependencies (Automatic)
+### Transitive (Automatic)
 - `gioui.org/shader` v1.0.8 - Shader compilation
-- `github.com/go-text/typesetting` v0.3.0 - Text layout and shaping
-- `golang.org/x/exp/shiny` - Gio platform abstraction
+- `github.com/go-text/typesetting` v0.3.0 - Text layout
+- `golang.org/x/exp/shiny` - Platform abstraction
 - `golang.org/x/image` v0.26.0 - Image handling
 - `golang.org/x/sys` v0.33.0 - System calls
 - `golang.org/x/text` v0.24.0 - Text processing
 
-All dependencies are managed via Go modules and installed automatically with `go build` or `go run`.
-
-## Platform Support
-
-### Linux
-- **Tested on**: Ubuntu 22.04, Debian 12, Fedora 40, Arch Linux
-- **Display servers**: X11 and Wayland
-- **Graphics**: Vulkan (requires `libvulkan-dev` or equivalent)
-
-### macOS
-- **Tested on**: macOS 13 (Ventura) and later
-- **Graphics**: Metal (built-in, no extra dependencies)
-- **Architecture**: Both Intel (x86_64) and Apple Silicon (arm64)
-
-### Windows
-- **Tested on**: Windows 10, Windows 11
-- **Graphics**: Direct3D 11 (built-in, no extra dependencies)
-
-### WebAssembly
-- **Supported**: Experimental support via Gio's WASM backend
-- **Graphics**: WebGL
+All dependencies are managed via Go modules and installed automatically.
 
 ## Development
 
-### Setting Up Development Environment
+### Setup Development Environment
 
 ```bash
-# Clone repository
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 
-# Install dependencies (automatic with Go modules)
+# Install dependencies (automatic)
 go mod download
 
 # Set local build cache
@@ -265,37 +408,31 @@ go test -cover ./...
 
 # Run specific test
 go test -v -run TestBufferInsert ./internal/editor
+
+# Verbose output
+go test -v ./...
 ```
 
 ### Code Style
 
-- Follow standard Go formatting: `gofmt` and `go vet`
-- Use descriptive variable names (no single-letter names except idioms)
+- Follow standard Go formatting (`gofmt`)
+- Run `go vet` to catch common issues
+- Use descriptive variable names
 - Document exported functions and types
 - Keep functions focused and testable
-- See `CLAUDE.md` for detailed coding guidelines
-
-### Contributing
-
-ProjectVem is currently in active development (Phase 1). Contributions are welcome once the architecture stabilizes after Milestone 1 completion.
-
-1. Check the [ROADMAP.md](ROADMAP.md) for current phase and priorities
-2. Open an issue to discuss significant changes
-3. Follow the code style guidelines in `CLAUDE.md`
-4. Write tests for new features
-5. Update documentation to reflect changes
+- Write unit tests for new features
 
 ## Troubleshooting
 
 ### Linux: Vulkan Headers Not Found
 
-If using `make install`, Vulkan headers are installed automatically. If installing manually or if automatic installation fails:
+If using `make install`, Vulkan headers are installed automatically. For manual installation:
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
 
-# Fedora/RHEL/CentOS
+# Fedora/RHEL
 sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
 
 # Arch/Manjaro
@@ -304,7 +441,7 @@ sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
 # openSUSE
 sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
 
-# Alpine Linux
+# Alpine
 sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 ```
 
@@ -317,55 +454,50 @@ make clean
 make build
 ```
 
-For more troubleshooting help, see [docs/installation.md](docs/installation.md#troubleshooting).
-
 ### Platform-Specific Keybinding Issues
 
-Some platforms may not report modifier keys correctly. ProjectVem includes workarounds for these platform quirks. See `DEBUG_FINDINGS.md` for details on modifier key tracking.
+Some platforms may not report modifier keys correctly. Vem includes workarounds for these platform quirks. See `docs/debugging.md` for details.
+
+## Contributing
+
+Vem is in active development. Contributions are welcome once the architecture stabilizes.
+
+1. Check existing issues and documentation
+2. Open an issue to discuss significant changes
+3. Follow the code style guidelines
+4. Write tests for new features
+5. Update documentation to reflect changes
 
 ## License
 
-ProjectVem is licensed under the GNU General Public License v2.0 (GPLv2).
+Vem is licensed under the GNU General Public License v2.0 (GPLv2).
 
 See [LICENSE](LICENSE) for the full license text.
 
 ## Current Status
 
-ProjectVem is currently in **Phase 1: Foundations & Architecture** (Weeks 1-4 of the roadmap).
+Vem is feature-complete for Phase 1 and includes:
 
-### Completed
-- Modal editing system (NORMAL, INSERT, VISUAL, DELETE, EXPLORER, COMMAND)
-- File tree explorer with navigation
+- Full modal editing system
+- Pane splitting and management
+- Fuzzy file finder
+- File explorer with operations
+- Search with highlighting
 - Multi-buffer support
-- Basic Vim commands (`:e`, `:w`, `:q`, `:wq`, `:bd`, etc.)
-- Pane navigation (Ctrl+H, Ctrl+L)
-- Fullscreen mode (Shift+Enter)
-- GPU-accelerated rendering with Gio UI
-- Cross-platform build system
-
-### In Progress
-- Architecture documentation finalization
-- Buffer representation improvements
-- Window split prototyping
-
-### Next Milestones
-- **M2 (Weeks 5-10)**: Core editing experience - Vim-parity motions, macros, multi-buffer improvements
-- **M3 (Weeks 11-18)**: Language intelligence - LSP, syntax highlighting, plugin system
-- **M4 (Weeks 19-24)**: User fluency - Command palette, fuzzy finder, themes
-- **M5 (Weeks 25-28)**: Packaging and community launch
-
-See [ROADMAP.md](ROADMAP.md) for detailed milestone planning.
-
-## Contact
-
-- **Repository**: https://github.com/javanhut/ProjectVem
-- **Issues**: https://github.com/javanhut/ProjectVem/issues
+- Undo functionality
+- Cross-platform support
+- GPU-accelerated rendering
 
 ## Acknowledgments
 
-ProjectVem is inspired by:
-- **NeoVim** - Modal editing paradigm and command interface
-- **Vim** - Classic text editing motions and philosophy
-- **Gio UI** - Cross-platform GPU-accelerated UI framework
+Vem is inspired by:
+- **Vim** - Modal editing philosophy
+- **NeoVim** - Modern text editing paradigm
+- **Gio UI** - Cross-platform GPU-accelerated framework
 
-Special thanks to the Gio community for their excellent documentation and support.
+Special thanks to the Go and Gio communities for excellent tools and documentation.
+
+## Contact
+
+- **Repository**: https://github.com/javanhut/Vem
+- **Issues**: https://github.com/javanhut/Vem/issues
