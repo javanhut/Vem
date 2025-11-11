@@ -27,10 +27,13 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 
+	"golang.design/x/clipboard"
+
 	"github.com/javanhut/ProjectVem/internal/editor"
 	"github.com/javanhut/ProjectVem/internal/filesystem"
 	"github.com/javanhut/ProjectVem/internal/fonts"
 	"github.com/javanhut/ProjectVem/internal/panes"
+	"github.com/javanhut/ProjectVem/internal/syntax"
 )
 
 type mode string
@@ -109,6 +112,7 @@ type appState struct {
 	nextBlink          time.Time
 	caretReset         bool
 	clipLines          []string
+	clipboardIsLine    bool
 	cmdText            string
 	window             *app.Window
 
@@ -149,6 +153,10 @@ type appState struct {
 	viewportTopLine   int // First visible line in viewport (0-based)
 	scrollOffsetLines int // Context lines around cursor (Vim's scrolloff)
 	listPosition      layout.List
+
+	// Syntax highlighting state
+	syntaxHighlighters map[int]*syntax.Highlighter // Map from buffer index to highlighter
+	syntaxEnabled      bool                        // Global toggle for syntax highlighting
 }
 
 func Run(w *app.Window) error {
@@ -232,6 +240,8 @@ func newAppState() *appState {
 		viewportTopLine:      0,
 		scrollOffsetLines:    3,
 		listPosition:         layout.List{Axis: layout.Vertical},
+		syntaxHighlighters:   make(map[int]*syntax.Highlighter),
+		syntaxEnabled:        true,
 	}
 }
 
@@ -247,6 +257,55 @@ func (s *appState) activeBuffer() *editor.Buffer {
 	}
 
 	return s.bufferMgr.GetBuffer(activePane.BufferIndex)
+}
+
+// getOrCreateHighlighter returns the syntax highlighter for the active buffer,
+// creating one if it doesn't exist.
+func (s *appState) getOrCreateHighlighter() *syntax.Highlighter {
+	if !s.syntaxEnabled {
+		return syntax.NewPlainHighlighter()
+	}
+
+	buf := s.activeBuffer()
+	if buf == nil {
+		return syntax.NewPlainHighlighter()
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return syntax.NewPlainHighlighter()
+	}
+
+	bufferIndex := activePane.BufferIndex
+
+	// Check if we already have a highlighter for this buffer
+	if highlighter, exists := s.syntaxHighlighters[bufferIndex]; exists {
+		return highlighter
+	}
+
+	// Create a new highlighter based on file path
+	filePath := buf.FilePath()
+	if filePath == "" || !syntax.ShouldHighlight(filePath) {
+		// No file path or shouldn't highlight - use plain highlighter
+		highlighter := syntax.NewPlainHighlighter()
+		s.syntaxHighlighters[bufferIndex] = highlighter
+		return highlighter
+	}
+
+	// Create syntax highlighter for this file
+	highlighter := syntax.NewHighlighter(filePath)
+	s.syntaxHighlighters[bufferIndex] = highlighter
+	return highlighter
+}
+
+// invalidateSyntaxCache invalidates the syntax highlighting cache for the active buffer.
+// This should be called when the buffer content changes.
+func (s *appState) invalidateSyntaxCache() {
+	if activePane := s.paneManager.ActivePane(); activePane != nil {
+		if highlighter, exists := s.syntaxHighlighters[activePane.BufferIndex]; exists {
+			highlighter.InvalidateAll()
+		}
+	}
 }
 
 // activePaneViewportTop returns the viewport top line for the active pane.
@@ -544,49 +603,84 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	}
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
-			// Important: Add gutter BEFORE expanding tabs so tab stops align with cursor positioning
-			lineText := fmt.Sprintf("%4d  %s", index+1, s.activeBuffer().Line(index))
-			lineText = expandTabs(lineText, 4)
-			label := material.Body1(s.theme, lineText)
-			label.Font.Typeface = "JetBrainsMono"
-			label.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
-			macro := op.Record(gtx.Ops)
-			dims := label.Layout(gtx)
-			call := macro.Stop()
-
-			// Draw selection highlighting
-			if s.visualMode == visualModeChar {
-				s.drawCharSelection(gtx, index, dims.Size.Y)
-			} else if hasSel && index >= selStart && index <= selEnd {
-				// Line selection
-				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
-				paint.Fill(gtx.Ops, selectionColor)
-				rect.Pop()
-			}
-
-			// Draw cursor line highlight (skip in character-wise visual mode to show precise selection)
-			if index == cursorLine && s.visualMode != visualModeChar {
-				rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
-				paint.Fill(gtx.Ops, highlightColor)
-				rect.Pop()
-			}
-
-			// Draw search highlights
-			if s.searchActive && len(s.searchMatches) > 0 {
-				s.drawSearchHighlights(gtx, index, dims.Size.Y)
-			}
-
-			call.Add(gtx.Ops)
-
-			if index == cursorLine {
-				gutter := fmt.Sprintf("%4d  ", index+1)
-				prefix := s.activeBuffer().LinePrefix(index, cursorCol)
-				charUnder := s.getCharAtCursor(index, cursorCol)
-				s.drawCursor(gtx, gutter, prefix, charUnder, dims.Size.Y)
-			}
-			return dims
+			return s.drawBufferLine(gtx, index, cursorLine, cursorCol, selStart, selEnd, hasSel)
 		})
 	})
+}
+
+// drawBufferLine renders a single line with syntax highlighting.
+func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int, cursorCol int, selStart int, selEnd int, hasSel bool) layout.Dimensions {
+	// Get the line text
+	lineText := s.activeBuffer().Line(index)
+	gutter := fmt.Sprintf("%4d  ", index+1)
+
+	// Get syntax highlighter and tokenize the line
+	highlighter := s.getOrCreateHighlighter()
+	tokens := highlighter.HighlightLine(index, lineText)
+
+	// Expand tabs in gutter
+	gutterExpanded := expandTabs(gutter, 4)
+
+	// Create flex children for gutter + tokens
+	var flexChildren []layout.FlexChild
+
+	// Add gutter as first child
+	flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+		label := material.Body1(s.theme, gutterExpanded)
+		label.Font.Typeface = "JetBrainsMono"
+		label.Color = color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff}
+		return label.Layout(gtx)
+	}))
+
+	// Add each token as a flex child with its color
+	for _, token := range tokens {
+		// Capture token in closure
+		t := token
+		tokenText := expandTabs(t.Text, 4)
+
+		flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			label := material.Body1(s.theme, tokenText)
+			label.Font.Typeface = "JetBrainsMono"
+			label.Color = syntax.GetTokenColor(t.Type, t.Style)
+			return label.Layout(gtx)
+		}))
+	}
+
+	// Record the text rendering
+	macro := op.Record(gtx.Ops)
+	dims := layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx, flexChildren...)
+	call := macro.Stop()
+
+	// Draw backgrounds
+	if s.visualMode == visualModeChar {
+		s.drawCharSelection(gtx, index, dims.Size.Y)
+	} else if hasSel && index >= selStart && index <= selEnd {
+		rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, selectionColor)
+		rect.Pop()
+	}
+
+	if index == cursorLine && s.visualMode != visualModeChar {
+		rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, highlightColor)
+		rect.Pop()
+	}
+
+	if s.searchActive && len(s.searchMatches) > 0 {
+		s.drawSearchHighlights(gtx, index, dims.Size.Y)
+	}
+
+	// Draw the text on top
+	call.Add(gtx.Ops)
+
+	// Draw cursor if on cursor line
+	if index == cursorLine {
+		prefix := s.activeBuffer().LinePrefix(index, cursorCol)
+		charUnder := s.getCharAtCursor(index, cursorCol)
+		s.drawCursor(gtx, gutter, prefix, charUnder, dims.Size.Y)
+	}
+
+	return dims
 }
 
 func (s *appState) drawSearchHighlights(gtx layout.Context, lineIdx int, lineHeight int) {
@@ -1861,9 +1955,13 @@ func (s *appState) copyVisualSelection() {
 			s.status = "No selection to copy"
 			return
 		}
-		// Store as a single line in clipboard
+		// Store in system clipboard
+		s.writeToSystemClipboard(text)
+		// Store as a single line in internal clipboard
 		s.clipLines = []string{text}
+		s.clipboardIsLine = false // Character-wise copy is not line mode
 		s.status = fmt.Sprintf("Copied %d character(s)", len(text))
+		log.Printf("[CLIPBOARD] Copied selection (char mode)")
 	} else if s.visualMode == visualModeLine {
 		// Line-wise copy
 		start, end, ok := s.visualSelectionRange()
@@ -1876,15 +1974,32 @@ func (s *appState) copyVisualSelection() {
 			s.status = "No selection to copy"
 			return
 		}
+		// Store in system clipboard with newline to indicate line mode
+		text := strings.Join(lines, "\n") + "\n"
+		s.writeToSystemClipboard(text)
+		// Store in internal clipboard
 		s.clipLines = append([]string(nil), lines...)
+		s.clipboardIsLine = true // Line-wise copy is line mode
 		s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
+		log.Printf("[CLIPBOARD] Copied %d lines (line mode)", len(lines))
 	} else {
 		s.status = "No selection to copy"
 	}
 }
 
 func (s *appState) pasteClipboard() {
-	if len(s.clipLines) == 0 {
+	// Try system clipboard first
+	text, ok := s.readFromSystemClipboard()
+	if !ok || text == "" {
+		// Fallback to internal clipboard
+		if len(s.clipLines) == 0 {
+			s.status = "Clipboard empty"
+			return
+		}
+		text = strings.Join(s.clipLines, "\n")
+	}
+
+	if text == "" {
 		s.status = "Clipboard empty"
 		return
 	}
@@ -1900,7 +2015,6 @@ func (s *appState) pasteClipboard() {
 		// Delete the selected range (this positions cursor at startLine, startCol)
 		buf.DeleteCharRange(startLine, startCol, endLine, endCol)
 		// Insert clipboard text at cursor position
-		text := s.clipLines[0] // Character copy stores as single line
 		buf.InsertText(text)
 		s.exitVisualMode()
 		s.setCursorStatus(fmt.Sprintf("Pasted %d character(s)", len(text)))
@@ -1911,12 +2025,127 @@ func (s *appState) pasteClipboard() {
 			s.status = "Select destination in VISUAL mode"
 			return
 		}
-		lines := append([]string(nil), s.clipLines...)
+		lines := strings.Split(text, "\n")
 		s.activeBuffer().InsertLines(start, lines)
 		s.exitVisualMode()
 		s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
 	} else {
 		s.status = "Select destination in VISUAL mode"
+	}
+}
+
+// writeToSystemClipboard writes text to the system clipboard
+func (s *appState) writeToSystemClipboard(text string) bool {
+	err := clipboard.Init()
+	if err != nil {
+		log.Printf("[CLIPBOARD] Failed to initialize clipboard: %v", err)
+		return false
+	}
+	clipboard.Write(clipboard.FmtText, []byte(text))
+	return true
+}
+
+// readFromSystemClipboard reads text from the system clipboard
+func (s *appState) readFromSystemClipboard() (string, bool) {
+	err := clipboard.Init()
+	if err != nil {
+		log.Printf("[CLIPBOARD] Failed to initialize clipboard: %v", err)
+		return "", false
+	}
+	data := clipboard.Read(clipboard.FmtText)
+	if len(data) == 0 {
+		return "", false
+	}
+	return string(data), true
+}
+
+// copyCurrentLine copies the current line to the system clipboard (Ctrl+C in Normal mode)
+func (s *appState) copyCurrentLine() {
+	buf := s.activeBuffer()
+	cursor := buf.Cursor()
+	line := buf.Line(cursor.Line)
+
+	if line == "" {
+		s.status = "Empty line (nothing to copy)"
+		return
+	}
+
+	// Add newline to indicate this is a line-based copy
+	lineWithNewline := line + "\n"
+
+	// Try system clipboard first
+	if s.writeToSystemClipboard(lineWithNewline) {
+		// Also store in internal clipboard as backup
+		s.clipLines = []string{line}
+		s.clipboardIsLine = true
+		s.status = fmt.Sprintf("Copied line %d (%d chars)", cursor.Line+1, len(line))
+		log.Printf("[CLIPBOARD] Copied line %d to system clipboard (line mode)", cursor.Line+1)
+	} else {
+		// Fallback to internal clipboard only
+		s.clipLines = []string{line}
+		s.clipboardIsLine = true
+		s.status = fmt.Sprintf("Copied line %d (internal only)", cursor.Line+1)
+		log.Printf("[CLIPBOARD] Copied line %d to internal clipboard only (line mode)", cursor.Line+1)
+	}
+}
+
+// pasteAtCursor pastes from clipboard at cursor position (Ctrl+P in Normal/Insert mode)
+func (s *appState) pasteAtCursor() {
+	buf := s.activeBuffer()
+	cursor := buf.Cursor()
+
+	// Try system clipboard first
+	text, ok := s.readFromSystemClipboard()
+	usingSystemClipboard := ok && text != ""
+	isLineMode := s.clipboardIsLine
+
+	if !ok || text == "" {
+		// Fallback to internal clipboard
+		if len(s.clipLines) == 0 {
+			s.status = "Clipboard empty"
+			return
+		}
+		text = strings.Join(s.clipLines, "\n")
+		usingSystemClipboard = false
+	}
+
+	if text == "" {
+		s.status = "Clipboard empty"
+		return
+	}
+
+	// Detect if this is a line-based paste
+	// Line mode if: internal clipboard says so, OR text ends with newline
+	if usingSystemClipboard {
+		isLineMode = strings.HasSuffix(text, "\n")
+	}
+
+	if isLineMode {
+		// Line-based paste: insert as new line below cursor (like Vim's 'p')
+		// Remove trailing newline since we'll insert as lines
+		text = strings.TrimSuffix(text, "\n")
+		lines := strings.Split(text, "\n")
+
+		// Insert lines below current line
+		insertPos := cursor.Line + 1
+		buf.InsertLines(insertPos, lines)
+
+		// Move cursor to start of pasted content
+		buf.MoveToLine(insertPos)
+
+		s.status = fmt.Sprintf("Pasted %d line(s) below", len(lines))
+		log.Printf("[CLIPBOARD] Pasted %d lines (line mode)", len(lines))
+	} else {
+		// Character-based paste: insert at cursor position
+		buf.InsertText(text)
+
+		lines := strings.Split(text, "\n")
+		if len(lines) > 1 {
+			s.status = fmt.Sprintf("Pasted %d lines", len(lines))
+		} else {
+			s.status = fmt.Sprintf("Pasted %d characters", len(text))
+		}
+		log.Printf("[CLIPBOARD] Pasted %d bytes at cursor (char mode)", len(text))
 	}
 }
 

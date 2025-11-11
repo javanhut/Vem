@@ -55,6 +55,10 @@ const (
 	ActionDeleteSelection
 	ActionPasteClipboard
 
+	// Clipboard (Normal mode)
+	ActionCopyLine
+	ActionPaste
+
 	// Explorer
 	ActionOpenNode
 	ActionCollapseNode
@@ -114,6 +118,10 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModCtrl, Key: "u", Modes: nil, Action: ActionUndo},
 	{Modifiers: key.ModShift, Key: key.NameReturn, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
 	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
+
+	// Clipboard operations
+	{Modifiers: key.ModCtrl, Key: "c", Modes: []mode{modeNormal}, Action: ActionCopyLine},
+	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionPaste},
 
 	// Pane navigation (Alt+hjkl)
 	{Modifiers: key.ModAlt, Key: "h", Modes: nil, Action: ActionPaneFocusLeft},
@@ -590,6 +598,12 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionPasteClipboard:
 		s.pasteClipboard()
+
+	case ActionCopyLine:
+		s.copyCurrentLine()
+
+	case ActionPaste:
+		s.pasteAtCursor()
 
 	case ActionOpenNode:
 		s.openSelectedNode()
