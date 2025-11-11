@@ -27,6 +27,8 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 
+	"golang.design/x/clipboard"
+
 	"github.com/javanhut/ProjectVem/internal/editor"
 	"github.com/javanhut/ProjectVem/internal/filesystem"
 	"github.com/javanhut/ProjectVem/internal/fonts"
@@ -110,6 +112,7 @@ type appState struct {
 	nextBlink          time.Time
 	caretReset         bool
 	clipLines          []string
+	clipboardIsLine    bool
 	cmdText            string
 	window             *app.Window
 
@@ -1952,9 +1955,13 @@ func (s *appState) copyVisualSelection() {
 			s.status = "No selection to copy"
 			return
 		}
-		// Store as a single line in clipboard
+		// Store in system clipboard
+		s.writeToSystemClipboard(text)
+		// Store as a single line in internal clipboard
 		s.clipLines = []string{text}
+		s.clipboardIsLine = false // Character-wise copy is not line mode
 		s.status = fmt.Sprintf("Copied %d character(s)", len(text))
+		log.Printf("[CLIPBOARD] Copied selection (char mode)")
 	} else if s.visualMode == visualModeLine {
 		// Line-wise copy
 		start, end, ok := s.visualSelectionRange()
@@ -1967,15 +1974,32 @@ func (s *appState) copyVisualSelection() {
 			s.status = "No selection to copy"
 			return
 		}
+		// Store in system clipboard with newline to indicate line mode
+		text := strings.Join(lines, "\n") + "\n"
+		s.writeToSystemClipboard(text)
+		// Store in internal clipboard
 		s.clipLines = append([]string(nil), lines...)
+		s.clipboardIsLine = true // Line-wise copy is line mode
 		s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
+		log.Printf("[CLIPBOARD] Copied %d lines (line mode)", len(lines))
 	} else {
 		s.status = "No selection to copy"
 	}
 }
 
 func (s *appState) pasteClipboard() {
-	if len(s.clipLines) == 0 {
+	// Try system clipboard first
+	text, ok := s.readFromSystemClipboard()
+	if !ok || text == "" {
+		// Fallback to internal clipboard
+		if len(s.clipLines) == 0 {
+			s.status = "Clipboard empty"
+			return
+		}
+		text = strings.Join(s.clipLines, "\n")
+	}
+
+	if text == "" {
 		s.status = "Clipboard empty"
 		return
 	}
@@ -1991,7 +2015,6 @@ func (s *appState) pasteClipboard() {
 		// Delete the selected range (this positions cursor at startLine, startCol)
 		buf.DeleteCharRange(startLine, startCol, endLine, endCol)
 		// Insert clipboard text at cursor position
-		text := s.clipLines[0] // Character copy stores as single line
 		buf.InsertText(text)
 		s.exitVisualMode()
 		s.setCursorStatus(fmt.Sprintf("Pasted %d character(s)", len(text)))
@@ -2002,12 +2025,127 @@ func (s *appState) pasteClipboard() {
 			s.status = "Select destination in VISUAL mode"
 			return
 		}
-		lines := append([]string(nil), s.clipLines...)
+		lines := strings.Split(text, "\n")
 		s.activeBuffer().InsertLines(start, lines)
 		s.exitVisualMode()
 		s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
 	} else {
 		s.status = "Select destination in VISUAL mode"
+	}
+}
+
+// writeToSystemClipboard writes text to the system clipboard
+func (s *appState) writeToSystemClipboard(text string) bool {
+	err := clipboard.Init()
+	if err != nil {
+		log.Printf("[CLIPBOARD] Failed to initialize clipboard: %v", err)
+		return false
+	}
+	clipboard.Write(clipboard.FmtText, []byte(text))
+	return true
+}
+
+// readFromSystemClipboard reads text from the system clipboard
+func (s *appState) readFromSystemClipboard() (string, bool) {
+	err := clipboard.Init()
+	if err != nil {
+		log.Printf("[CLIPBOARD] Failed to initialize clipboard: %v", err)
+		return "", false
+	}
+	data := clipboard.Read(clipboard.FmtText)
+	if len(data) == 0 {
+		return "", false
+	}
+	return string(data), true
+}
+
+// copyCurrentLine copies the current line to the system clipboard (Ctrl+C in Normal mode)
+func (s *appState) copyCurrentLine() {
+	buf := s.activeBuffer()
+	cursor := buf.Cursor()
+	line := buf.Line(cursor.Line)
+
+	if line == "" {
+		s.status = "Empty line (nothing to copy)"
+		return
+	}
+
+	// Add newline to indicate this is a line-based copy
+	lineWithNewline := line + "\n"
+
+	// Try system clipboard first
+	if s.writeToSystemClipboard(lineWithNewline) {
+		// Also store in internal clipboard as backup
+		s.clipLines = []string{line}
+		s.clipboardIsLine = true
+		s.status = fmt.Sprintf("Copied line %d (%d chars)", cursor.Line+1, len(line))
+		log.Printf("[CLIPBOARD] Copied line %d to system clipboard (line mode)", cursor.Line+1)
+	} else {
+		// Fallback to internal clipboard only
+		s.clipLines = []string{line}
+		s.clipboardIsLine = true
+		s.status = fmt.Sprintf("Copied line %d (internal only)", cursor.Line+1)
+		log.Printf("[CLIPBOARD] Copied line %d to internal clipboard only (line mode)", cursor.Line+1)
+	}
+}
+
+// pasteAtCursor pastes from clipboard at cursor position (Ctrl+P in Normal/Insert mode)
+func (s *appState) pasteAtCursor() {
+	buf := s.activeBuffer()
+	cursor := buf.Cursor()
+
+	// Try system clipboard first
+	text, ok := s.readFromSystemClipboard()
+	usingSystemClipboard := ok && text != ""
+	isLineMode := s.clipboardIsLine
+
+	if !ok || text == "" {
+		// Fallback to internal clipboard
+		if len(s.clipLines) == 0 {
+			s.status = "Clipboard empty"
+			return
+		}
+		text = strings.Join(s.clipLines, "\n")
+		usingSystemClipboard = false
+	}
+
+	if text == "" {
+		s.status = "Clipboard empty"
+		return
+	}
+
+	// Detect if this is a line-based paste
+	// Line mode if: internal clipboard says so, OR text ends with newline
+	if usingSystemClipboard {
+		isLineMode = strings.HasSuffix(text, "\n")
+	}
+
+	if isLineMode {
+		// Line-based paste: insert as new line below cursor (like Vim's 'p')
+		// Remove trailing newline since we'll insert as lines
+		text = strings.TrimSuffix(text, "\n")
+		lines := strings.Split(text, "\n")
+
+		// Insert lines below current line
+		insertPos := cursor.Line + 1
+		buf.InsertLines(insertPos, lines)
+
+		// Move cursor to start of pasted content
+		buf.MoveToLine(insertPos)
+
+		s.status = fmt.Sprintf("Pasted %d line(s) below", len(lines))
+		log.Printf("[CLIPBOARD] Pasted %d lines (line mode)", len(lines))
+	} else {
+		// Character-based paste: insert at cursor position
+		buf.InsertText(text)
+
+		lines := strings.Split(text, "\n")
+		if len(lines) > 1 {
+			s.status = fmt.Sprintf("Pasted %d lines", len(lines))
+		} else {
+			s.status = fmt.Sprintf("Pasted %d characters", len(text))
+		}
+		log.Printf("[CLIPBOARD] Pasted %d bytes at cursor (char mode)", len(text))
 	}
 }
 

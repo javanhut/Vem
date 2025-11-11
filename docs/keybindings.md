@@ -13,6 +13,8 @@ These keybindings work in all modes.
 | `Ctrl+L` | Focus Editor | Switch focus to the text editor |
 | `Ctrl+F` | Fuzzy Finder | Open fuzzy file finder |
 | `Ctrl+U` | Undo | Undo last edit operation |
+| `Ctrl+C` | Copy Line | Copy current line to clipboard (NORMAL mode only) |
+| `Ctrl+P` | Paste | Paste clipboard content at cursor |
 | `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode (NORMAL mode only) |
 | `Shift+Tab` | Cycle Panes | Cycle to next pane (when multiple panes open) |
 | `Ctrl+X` | Close Pane | Close active pane and its buffer |
@@ -426,6 +428,42 @@ Vem provides powerful pane splitting and management capabilities. Press `Ctrl+S`
 **Note**: After splitting, use `:e filename` or `Ctrl+P` to open a file in the new pane.
 
 For detailed pane usage, see [Pane Splitting Guide](pane-splitting.md).
+
+## Clipboard Operations
+
+Vem provides both system clipboard integration and mode-specific clipboard operations:
+
+### System Clipboard (Ctrl+C / Ctrl+P)
+
+| Keybinding | Mode | Action | Description |
+|------------|------|--------|-------------|
+| `Ctrl+C` | NORMAL | Copy Line | Copy current line to system clipboard |
+| `Ctrl+P` | NORMAL, INSERT | Paste | Paste clipboard content at cursor position |
+
+The system clipboard integration:
+- Works with your operating system's clipboard
+- Allows copying/pasting between Vem and other applications
+- In NORMAL mode, `Ctrl+C` copies the entire current line
+- `Ctrl+P` pastes at the cursor position in both NORMAL and INSERT modes
+- Automatically syncs with Visual mode copy operations
+
+### Visual Mode Clipboard (c / p keys)
+
+| Keybinding | Mode | Action | Description |
+|------------|------|--------|-------------|
+| `c` | VISUAL | Copy Selection | Copy selected text/lines to clipboard |
+| `p` | VISUAL | Paste | Replace selection with clipboard content |
+
+Visual mode clipboard operations:
+- `c` in Visual mode copies selection to both system and internal clipboard
+- `p` in Visual mode replaces selection with clipboard content
+- Works with both character-wise (`v`) and line-wise (`Shift+V`) selections
+
+Example usage:
+1. **Copy current line**: In NORMAL mode, press `Ctrl+C`
+2. **Paste at cursor**: Press `Ctrl+P` to paste
+3. **Copy selection**: Press `v` to enter VISUAL mode, select text, press `c`
+4. **Paste in another app**: After copying in Vem, paste in any other application using system shortcuts
 
 ## Undo Functionality
 
