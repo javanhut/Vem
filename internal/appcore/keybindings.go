@@ -439,6 +439,7 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	case ActionMoveUp:
 		if s.mode == modeExplorer && s.fileTree != nil {
 			if s.fileTree.MoveUp() {
+				s.ensureExplorerItemVisible()
 				s.status = "Explorer: moved up"
 			}
 		} else if s.mode == modeFuzzyFinder {
@@ -450,6 +451,7 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	case ActionMoveDown:
 		if s.mode == modeExplorer && s.fileTree != nil {
 			if s.fileTree.MoveDown() {
+				s.ensureExplorerItemVisible()
 				s.status = "Explorer: moved down"
 			}
 		} else if s.mode == modeFuzzyFinder {

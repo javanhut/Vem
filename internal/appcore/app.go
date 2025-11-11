@@ -113,9 +113,10 @@ type appState struct {
 	window             *app.Window
 
 	// Explorer state
-	explorerVisible bool
-	explorerWidth   int
-	explorerFocused bool
+	explorerVisible      bool
+	explorerWidth        int
+	explorerFocused      bool
+	explorerListPosition layout.List
 
 	// File operation state
 	fileOpMode         string
@@ -211,25 +212,26 @@ func newAppState() *appState {
 	}
 
 	return &appState{
-		theme:             theme,
-		bufferMgr:         bufferMgr,
-		paneManager:       paneManager,
-		fileTree:          fileTree,
-		mode:              modeNormal,
-		status:            "Ready",
-		focusTag:          new(int),
-		visualMode:        visualModeNone,
-		visualStartLine:   0,
-		visualStartCol:    0,
-		caretVisible:      true,
-		explorerVisible:   false,
-		explorerWidth:     250,
-		explorerFocused:   false,
-		currentWindowMode: app.Windowed,
-		wasFullscreen:     false,
-		viewportTopLine:   0,
-		scrollOffsetLines: 3,
-		listPosition:      layout.List{Axis: layout.Vertical},
+		theme:                theme,
+		bufferMgr:            bufferMgr,
+		paneManager:          paneManager,
+		fileTree:             fileTree,
+		mode:                 modeNormal,
+		status:               "Ready",
+		focusTag:             new(int),
+		visualMode:           visualModeNone,
+		visualStartLine:      0,
+		visualStartCol:       0,
+		caretVisible:         true,
+		explorerVisible:      false,
+		explorerWidth:        250,
+		explorerFocused:      false,
+		explorerListPosition: layout.List{Axis: layout.Vertical},
+		currentWindowMode:    app.Windowed,
+		wasFullscreen:        false,
+		viewportTopLine:      0,
+		scrollOffsetLines:    3,
+		listPosition:         layout.List{Axis: layout.Vertical},
 	}
 }
 
@@ -931,7 +933,6 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 			nodes := s.fileTree.GetFlatList()
 			selectedIndex := s.fileTree.SelectedIndex()
 
-			list := layout.List{Axis: layout.Vertical}
 			inset := layout.Inset{
 				Top:    unit.Dp(8),
 				Right:  unit.Dp(8),
@@ -940,7 +941,7 @@ func (s *appState) drawFileExplorer(gtx layout.Context) layout.Dimensions {
 			}
 
 			return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return list.Layout(gtx, len(nodes), func(gtx layout.Context, index int) layout.Dimensions {
+				return s.explorerListPosition.Layout(gtx, len(nodes), func(gtx layout.Context, index int) layout.Dimensions {
 					node := nodes[index]
 
 					// Draw selection highlight
@@ -1703,6 +1704,24 @@ func (s *appState) toggleExplorer() {
 		// Show explorer AND focus it immediately
 		s.enterExplorerMode()
 	}
+}
+
+// ensureExplorerItemVisible scrolls the explorer to keep selected item visible
+func (s *appState) ensureExplorerItemVisible() {
+	if s.fileTree == nil {
+		return
+	}
+
+	selectedIndex := s.fileTree.SelectedIndex()
+	nodes := s.fileTree.GetFlatList()
+
+	if selectedIndex < 0 || selectedIndex >= len(nodes) {
+		return
+	}
+
+	// Scroll to show selected item
+	s.explorerListPosition.Position.First = selectedIndex
+	s.explorerListPosition.Position.Offset = 0
 }
 
 func (s *appState) toggleFullscreen() {

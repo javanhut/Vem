@@ -45,6 +45,7 @@ const (
 	IconDatabase   = "\uf1c0" //
 	IconShell      = "\uf489" //
 	IconVim        = "\ue7c5" //
+	IconBird       = "\uedea" //  (for .crl carrion files)
 )
 
 // GetFileIcon returns the Nerd Font icon for a given file or directory
@@ -99,6 +100,10 @@ func GetFileIcon(name string, isDir bool) string {
 		return IconCPlusPlus
 	case ".java":
 		return IconJava
+
+	// Custom file types
+	case ".crl":
+		return IconBird
 
 	// Web
 	case ".html", ".htm":
