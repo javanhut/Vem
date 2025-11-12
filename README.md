@@ -105,8 +105,14 @@ sudo install -m 755 vem /usr/local/bin/vem
 # Launch Vem
 vem
 
-# Or open a specific file
+# Open a specific file
 vem main.go
+
+# Open multiple files
+vem file1.txt file2.go file3.md
+
+# Create a new file
+vem newfile.txt
 ```
 
 ### Basic Workflow

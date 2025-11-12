@@ -17,7 +17,8 @@ func main() {
 			gioapp.Title("Vem - Vim Emulator"),
 			gioapp.Size(unit.Dp(960), unit.Dp(640)),
 		)
-		if err := appcore.Run(w); err != nil {
+		filePaths := os.Args[1:]
+		if err := appcore.Run(w, filePaths); err != nil {
 			log.Printf("app exited: %v", err)
 		}
 		os.Exit(0)

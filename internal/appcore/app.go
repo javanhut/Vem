@@ -166,8 +166,8 @@ type appState struct {
 	lastWindowSize image.Point                // Track window size for terminal resize
 }
 
-func Run(w *app.Window) error {
-	state := newAppState()
+func Run(w *app.Window, filePaths []string) error {
+	state := newAppState(filePaths)
 	return state.run(w)
 }
 
@@ -237,7 +237,7 @@ func (s *appState) handleWindowResize(size image.Point) {
 	}
 }
 
-func newAppState() *appState {
+func newAppState(filePaths []string) *appState {
 	theme := material.NewTheme()
 
 	// Try to load JetBrains Mono Nerd Font, fall back to gofont if it fails
@@ -256,8 +256,16 @@ func newAppState() *appState {
 		)
 	}
 
-	buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
-	bufferMgr := editor.NewBufferManagerWithBuffer(buf)
+	var bufferMgr *editor.BufferManager
+
+	if len(filePaths) > 0 {
+		bufferMgr = createBufferManagerWithFiles(filePaths)
+	}
+
+	if bufferMgr == nil {
+		buf := editor.NewBuffer(strings.TrimSpace(sampleBuffer))
+		bufferMgr = editor.NewBufferManagerWithBuffer(buf)
+	}
 
 	// Initialize pane manager with the initial buffer (index 0)
 	paneManager := panes.NewPaneManager(0)
@@ -300,6 +308,53 @@ func newAppState() *appState {
 		terminals:            make(map[int]*terminal.Terminal),
 		lastWindowSize:       image.Point{},
 	}
+}
+
+// createBufferManagerWithFiles creates a buffer manager with files loaded from paths.
+// Returns nil if all files fail to load.
+func createBufferManagerWithFiles(filePaths []string) *editor.BufferManager {
+	bm := editor.NewBufferManager()
+	loadedAny := false
+
+	for _, path := range filePaths {
+		buf, err := openFileOrCreateEmpty(path)
+		if err != nil {
+			log.Printf("Warning: Failed to open file %s: %v", path, err)
+			continue
+		}
+
+		if !loadedAny {
+			bm = editor.NewBufferManagerWithBuffer(buf)
+			loadedAny = true
+		} else {
+			absPath, _ := filepath.Abs(path)
+			buf.SetFilePath(absPath)
+			bm.OpenFile(path)
+		}
+	}
+
+	if !loadedAny {
+		return nil
+	}
+
+	return bm
+}
+
+// openFileOrCreateEmpty opens an existing file or creates an empty buffer for a new file.
+func openFileOrCreateEmpty(path string) (*editor.Buffer, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid path: %w", err)
+	}
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		buf := editor.NewBuffer("")
+		buf.SetFilePath(absPath)
+		buf.SetModified(false)
+		return buf, nil
+	}
+
+	return editor.NewBufferFromFile(absPath)
 }
 
 // activeBuffer returns the buffer for the active pane.

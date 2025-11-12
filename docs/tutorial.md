@@ -59,7 +59,25 @@ go build -o vem
 
 ## First Launch
 
-When you first launch ProjectVem, you'll see:
+### Opening Files
+
+You can launch ProjectVem in several ways:
+
+```bash
+# Launch with sample text
+vem
+
+# Open a specific file
+vem main.go
+
+# Open multiple files (first file is active, switch with :bn/:bp)
+vem file1.txt file2.go file3.md
+
+# Create a new file
+vem newfile.txt
+```
+
+When you first launch ProjectVem without arguments, you'll see:
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -82,7 +100,7 @@ The interface consists of:
 - **Editor Area**: Text content with line numbers
 - **Status Bar**: Mode, file name, cursor position, status messages
 
-The editor starts in **NORMAL mode** with sample text loaded.
+The editor starts in **NORMAL mode** with sample text loaded (or your specified file).
 
 ## Understanding Modes
 
