@@ -159,10 +159,12 @@ func (t *Terminal) readLoop() {
 		default:
 		}
 
-		// Read from PTY with timeout
+		// Set read timeout to allow checking context
 		if t.pty != nil {
 			t.pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		}
+
+		// Read from PTY
 		n, err := t.pty.Read(buf)
 
 		if n > 0 {
@@ -189,24 +191,14 @@ func (t *Terminal) readLoop() {
 		if err != nil {
 			if err == io.EOF {
 				log.Println("[TERMINAL] PTY closed (EOF)")
-				t.mu.Lock()
-				t.running = false
-				t.mu.Unlock()
-
-				// Call exit callback if set
-				if t.onExit != nil {
-					t.onExit()
-				}
 				return
 			}
-			if os.IsTimeout(err) {
-				continue // Expected timeout, keep reading
+			// Ignore timeout errors
+			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+				continue
 			}
 			log.Printf("[TERMINAL] Read error: %v", err)
 			t.setError(err)
-			t.mu.Lock()
-			t.running = false
-			t.mu.Unlock()
 			return
 		}
 	}
@@ -233,30 +225,26 @@ func (t *Terminal) writeLoop() {
 	}
 }
 
-// Write sends data to the PTY (user input)
+// Write sends input to PTY
 func (t *Terminal) Write(data []byte) error {
-	t.mu.RLock()
-	running := t.running
-	t.mu.RUnlock()
-
-	if !running {
+	if !t.IsRunning() {
 		return fmt.Errorf("terminal not running")
 	}
 
 	select {
 	case t.inputChan <- data:
 		return nil
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
 		return fmt.Errorf("write timeout")
 	}
 }
 
-// GetScreen returns current screen buffer (for rendering)
+// GetScreen returns current screen buffer
 func (t *Terminal) GetScreen() *ScreenBuffer {
 	return t.screen
 }
 
-// Close stops the terminal and cleans up resources
+// Close stops the terminal
 func (t *Terminal) Close() error {
 	log.Println("[TERMINAL] Close() called")
 
@@ -268,21 +256,20 @@ func (t *Terminal) Close() error {
 	t.running = false
 	t.mu.Unlock()
 
-	// Cancel context (stops goroutines)
+	// Cancel context to stop goroutines
 	t.cancel()
 
-	// Close PTY
+	// Close PTY (will cause shell to exit)
 	if t.pty != nil {
 		t.pty.Close()
 	}
 
-	// Kill shell process
+	// Kill process if still running
 	if t.cmd != nil && t.cmd.Process != nil {
 		t.cmd.Process.Kill()
-		t.cmd.Wait() // Reap zombie process
 	}
 
-	// Wait for goroutines
+	// Wait for goroutines with timeout
 	done := make(chan struct{})
 	go func() {
 		t.wg.Wait()

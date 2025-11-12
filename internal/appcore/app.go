@@ -3312,6 +3312,8 @@ func (s *appState) handleOpenTerminal() {
 	term, err := terminal.NewTerminal(terminal.Config{
 		Width:      cols,
 		Height:     rows,
+		Shell:      terminal.DefaultShell(),
+		Args:       terminal.DefaultArgs(),
 		WorkingDir: workDir,
 		Window:     s.window,
 		OnExit: func() {
@@ -3497,8 +3499,9 @@ func (s *appState) handleTerminalKey(ev key.Event) {
 		return
 	}
 
-	// Convert key event to terminal input
+	// Convert key event to terminal input sequence
 	inputSeq := terminal.KeyToTerminalSequence(ev)
+
 	log.Printf("[TERMINAL] Key=%q Modifiers=%v InputSeq=%q", ev.Name, ev.Modifiers, inputSeq)
 	if inputSeq != "" {
 		if err := term.Write([]byte(inputSeq)); err != nil {

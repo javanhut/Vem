@@ -17,7 +17,7 @@ Vem is a lightweight yet powerful text editor that combines Vim's modal editing 
 - **Multi-Buffer Support**: Open and edit multiple files simultaneously, including from command line
 - **Search & Highlight**: Case-insensitive search with match highlighting and navigation
 - **Syntax Highlighting**: Powered by Chroma with support for 200+ languages and multiple color themes
-- **Integrated Terminal**: Full-featured terminal emulator with VT100/ANSI support and true color
+- **Unified Terminal**: Cross-platform Bash interpreter (works identically on Linux, macOS, and Windows) with VT100/ANSI support and true color
 
 ### Window Management
 
@@ -323,6 +323,8 @@ After search, use `n` and `Shift+N` in NORMAL mode to navigate matches.
 - Full VT100/ANSI escape sequence support
 - 256-color and true color (24-bit) support
 - Bold, italic, underline, and other text attributes
+- Unified Bash interpreter (same shell on all platforms)
+- Cross-platform compatibility (Linux, macOS, Windows)
 - Auto-closes when shell exits
 - Integrates with buffer system (switch with `:bn`/`:bp`)
 
@@ -390,11 +392,11 @@ Vem/
 │   │   └── theme.go          # Color theme management
 │   ├── terminal/              # Integrated terminal
 │   │   ├── terminal.go       # Terminal emulator core
-│   │   ├── pty_unix.go       # Unix PTY implementation
-│   │   ├── pty_windows.go    # Windows PTY implementation
 │   │   ├── buffer.go         # Terminal buffer management
 │   │   ├── colors.go         # ANSI color handling
 │   │   └── input.go          # Terminal input processing
+│   ├── shell/                # Unified shell interpreter
+│   │   └── interpreter.go    # Cross-platform Bash interpreter
 │   └── fonts/                 # Font management
 │       ├── fonts.go          # Font loading and rendering
 │       ├── JetBrainsMonoNerdFont-Regular.ttf
@@ -422,7 +424,10 @@ Vem uses minimal dependencies:
 - **[vt10x](https://github.com/hinshun/vt10x)** - VT100/ANSI terminal emulator
   - Full escape sequence support
   - 256-color and true color
-- **[pty](https://github.com/creack/pty)** v1.1.21 - Cross-platform PTY support
+- **[mvdan/sh](https://mvdan.cc/sh)** v3.12.0 - Pure Go Bash interpreter
+  - Unified shell across all platforms
+  - 30+ built-in commands (cd, pwd, echo, test, etc.)
+  - Full Bash scripting support (variables, loops, pipes)
 - **[clipboard](https://golang.design/x/clipboard)** v0.7.1 - System clipboard integration
 
 ### Transitive (Automatic)
@@ -542,7 +547,7 @@ Vem is feature-complete for Phase 1 and includes:
 - File explorer with operations
 - Search with highlighting
 - Multi-buffer support with command line file opening
-- Integrated terminal emulator with full VT100/ANSI support
+- Unified cross-platform terminal with Bash interpreter
 - Built-in help system (:help command)
 - Read-only buffer support
 - Undo functionality
