@@ -20,8 +20,9 @@ import (
 //  4. Character "T" arrives → key.Event with ev.Modifiers == empty
 //
 // Solution: Track the timestamp of modifier Release events. If a character
-// key arrives within 50ms of a modifier Release, we know that modifier was
-// held during the key press.
+// key arrives within 200ms of a modifier Release, we know that modifier was
+// held during the key press. The 200ms window accounts for Windows event
+// buffering and user typing speed variability.
 func (s *appState) handleModifierEvent(e key.Event) bool {
 	if e.Name == key.NameCtrl {
 		if e.State == key.Release {
@@ -56,21 +57,21 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 }
 
 // syncModifierState syncs the tracked modifier state before handling character keys.
-// On Windows, we use temporal logic: if a modifier was released within 50ms,
+// On Windows, we use temporal logic: if a modifier was released within 200ms,
 // it was held during this key press.
 func (s *appState) syncModifierState(e key.Event) {
 	now := time.Now()
 
-	// Check if Ctrl was released within last 50ms
+	// Check if Ctrl was released within last 200ms
 	ctrlWindow := now.Sub(s.ctrlReleaseTime)
-	if ctrlWindow < 50*time.Millisecond && ctrlWindow >= 0 {
+	if ctrlWindow < 200*time.Millisecond && ctrlWindow >= 0 {
 		s.ctrlPressed = true
 		log.Printf("🔍 [WINDOWS-FIX] Ctrl detected via temporal window (released %v ago)", ctrlWindow)
 	}
 
-	// Check if Shift was released within last 50ms
+	// Check if Shift was released within last 200ms
 	shiftWindow := now.Sub(s.shiftReleaseTime)
-	if shiftWindow < 50*time.Millisecond && shiftWindow >= 0 {
+	if shiftWindow < 200*time.Millisecond && shiftWindow >= 0 {
 		s.shiftPressed = true
 		log.Printf("🔍 [WINDOWS-FIX] Shift detected via temporal window (released %v ago)", shiftWindow)
 	}
