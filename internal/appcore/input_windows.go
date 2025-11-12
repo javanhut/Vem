@@ -1,0 +1,87 @@
+//go:build windows
+
+package appcore
+
+import (
+	"log"
+	"time"
+
+	"gioui.org/io/key"
+)
+
+// handleModifierEvent handles modifier key events on Windows.
+// Windows/Gio has a critical bug: Ctrl/Shift Press events NEVER arrive.
+// Only Release events are sent, and they arrive BEFORE character keys.
+//
+// Example timeline when user presses Ctrl+T:
+//  1. User presses Ctrl     → NO EVENT (bug!)
+//  2. User presses T        → NO EVENT YET
+//  3. User releases Ctrl    → Ctrl Release event fires
+//  4. Character "T" arrives → key.Event with ev.Modifiers == empty
+//
+// Solution: Track the timestamp of modifier Release events. If a character
+// key arrives within 50ms of a modifier Release, we know that modifier was
+// held during the key press.
+func (s *appState) handleModifierEvent(e key.Event) bool {
+	if e.Name == key.NameCtrl {
+		if e.State == key.Release {
+			// Mark when Ctrl was released - a character key is coming soon!
+			s.ctrlReleaseTime = time.Now()
+			log.Printf("⌨ [CTRL] Released at %v (Windows: expecting character key soon)", s.ctrlReleaseTime)
+		} else {
+			// Press events don't arrive on Windows, but handle it just in case
+			s.ctrlPressed = true
+			log.Printf("⌨ [CTRL] Pressed (unexpected on Windows!)")
+		}
+		return true
+	}
+
+	if e.Name == key.NameShift {
+		if e.State == key.Release {
+			s.shiftReleaseTime = time.Now()
+			log.Printf("⌨ [SHIFT] Released at %v (Windows: expecting character key soon)", s.shiftReleaseTime)
+		} else {
+			s.shiftPressed = true
+			log.Printf("⌨ [SHIFT] Pressed (unexpected on Windows!)")
+		}
+		return true
+	}
+
+	if e.Name == key.NameAlt {
+		log.Printf("⌨ [ALT] %v", e.State)
+		return true
+	}
+
+	return false
+}
+
+// syncModifierState syncs the tracked modifier state before handling character keys.
+// On Windows, we use temporal logic: if a modifier was released within 50ms,
+// it was held during this key press.
+func (s *appState) syncModifierState(e key.Event) {
+	now := time.Now()
+
+	// Check if Ctrl was released within last 50ms
+	ctrlWindow := now.Sub(s.ctrlReleaseTime)
+	if ctrlWindow < 50*time.Millisecond && ctrlWindow >= 0 {
+		s.ctrlPressed = true
+		log.Printf("🔍 [WINDOWS-FIX] Ctrl detected via temporal window (released %v ago)", ctrlWindow)
+	}
+
+	// Check if Shift was released within last 50ms
+	shiftWindow := now.Sub(s.shiftReleaseTime)
+	if shiftWindow < 50*time.Millisecond && shiftWindow >= 0 {
+		s.shiftPressed = true
+		log.Printf("🔍 [WINDOWS-FIX] Shift detected via temporal window (released %v ago)", shiftWindow)
+	}
+
+	// Also check ev.Modifiers as a fallback (usually empty on Windows, but try anyway)
+	if e.Modifiers.Contain(key.ModCtrl) {
+		s.ctrlPressed = true
+		log.Printf("🔍 [WINDOWS-FIX] Ctrl detected via ev.Modifiers (rare!)")
+	}
+	if e.Modifiers.Contain(key.ModShift) {
+		s.shiftPressed = true
+		log.Printf("🔍 [WINDOWS-FIX] Shift detected via ev.Modifiers (rare!)")
+	}
+}
