@@ -146,6 +146,13 @@ func (bm *BufferManager) CreateTerminalBuffer() int {
 	return len(bm.buffers) - 1
 }
 
+// CreateBufferWithContent creates a new buffer with the given content and returns its index.
+func (bm *BufferManager) CreateBufferWithContent(content string) int {
+	buf := NewBuffer(content)
+	bm.buffers = append(bm.buffers, buf)
+	return len(bm.buffers) - 1
+}
+
 // SaveActiveBuffer saves the currently active buffer.
 func (bm *BufferManager) SaveActiveBuffer() error {
 	buf := bm.ActiveBuffer()

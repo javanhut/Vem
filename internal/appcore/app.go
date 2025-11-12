@@ -889,6 +889,12 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 				modFlag = " [+]"
 			}
 
+			// Add read-only indicator
+			readOnlyFlag := ""
+			if buf.IsReadOnly() {
+				readOnlyFlag = " [RO]"
+			}
+
 			// Add pane information
 			paneInfo := ""
 			if s.paneManager != nil && s.paneManager.PaneCount() > 1 {
@@ -916,8 +922,8 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 				zoomInfo = " | ZOOMED"
 			}
 
-			status = fmt.Sprintf("MODE %s | FILE %s%s | CURSOR %d:%d%s%s%s | %s",
-				s.mode, fileName, modFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status,
+			status = fmt.Sprintf("MODE %s | FILE %s%s%s | CURSOR %d:%d%s%s%s | %s",
+				s.mode, fileName, modFlag, readOnlyFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status,
 			)
 		}
 	}
@@ -1479,6 +1485,14 @@ func (s *appState) enterInsertMode() {
 	if s.mode == modeInsert {
 		return
 	}
+
+	// Check if buffer is read-only
+	buf := s.activeBuffer()
+	if buf != nil && buf.IsReadOnly() {
+		s.status = "Buffer is read-only (cannot edit)"
+		return
+	}
+
 	s.mode = modeInsert
 	s.skipNextEdit = true
 	s.resetCount()
@@ -2335,6 +2349,8 @@ func (s *appState) executeCommandLine() {
 		s.handlePrintWorkingDirectoryCommand()
 	case "term", "terminal":
 		s.handleOpenTerminal()
+	case "help", "h":
+		s.handleHelpCommand(strings.TrimSpace(args))
 	default:
 		s.status = fmt.Sprintf("Unknown command: %s", name)
 	}
@@ -2547,6 +2563,30 @@ func (s *appState) handlePrintWorkingDirectoryCommand() {
 		return
 	}
 	s.status = fmt.Sprintf("Current directory: %s", s.fileTree.CurrentPath())
+}
+
+// handleHelpCommand opens the help buffer showing all keybindings
+func (s *appState) handleHelpCommand(topic string) {
+	// Generate help text
+	helpText := generateHelpText()
+
+	// Create a new buffer with help content
+	bufIdx := s.bufferMgr.CreateBufferWithContent(helpText)
+
+	// Mark buffer as read-only (prevent editing)
+	if buf := s.bufferMgr.GetBuffer(bufIdx); buf != nil {
+		buf.SetFilePath("[Help]")
+		buf.SetReadOnly(true)
+	}
+
+	// Update active pane to show help buffer
+	if s.paneManager != nil {
+		if activePane := s.paneManager.ActivePane(); activePane != nil {
+			activePane.SetBufferIndex(bufIdx)
+		}
+	}
+
+	s.status = "Help: Press / to search, :q to close"
 }
 
 func (s *appState) enterRenameMode() {

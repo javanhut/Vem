@@ -31,6 +31,7 @@ type Buffer struct {
 	maxUndos   int
 	bufferType BufferType
 	terminal   interface{} // *terminal.Terminal (avoid import cycle)
+	readOnly   bool        // Prevent edits if true (for help, etc.)
 }
 
 // Cursor stores the current line/column position (1 rune == 1 column).
@@ -125,6 +126,10 @@ func (b *Buffer) DeleteLines(start, end int) {
 	if len(b.lines) == 0 {
 		return
 	}
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
 	if start > end {
 		start, end = end, start
 	}
@@ -157,6 +162,10 @@ func (b *Buffer) InsertLines(at int, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
 	if at < 0 {
 		at = 0
 	}
@@ -181,6 +190,10 @@ func (b *Buffer) InsertLines(at int, lines []string) {
 // to the end of the inserted text.
 func (b *Buffer) InsertText(text string) {
 	if text == "" {
+		return
+	}
+	// Check if buffer is read-only
+	if b.readOnly {
 		return
 	}
 	// Save state before inserting
@@ -211,6 +224,10 @@ func (b *Buffer) InsertText(text string) {
 // DeleteBackward deletes the rune before the cursor (backspace semantics).
 // When invoked at the start of a line, it merges with the previous line.
 func (b *Buffer) DeleteBackward() bool {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return false
+	}
 	// Save state before deleting
 	b.saveState("delete backward")
 
@@ -242,6 +259,10 @@ func (b *Buffer) DeleteBackward() bool {
 // DeleteForward deletes the rune at the cursor (delete semantics).
 // When at the end of a line, it merges with the following line.
 func (b *Buffer) DeleteForward() bool {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return false
+	}
 	// Save state before deleting
 	b.saveState("delete forward")
 
@@ -596,6 +617,16 @@ func (b *Buffer) markModified() {
 	b.modified = true
 }
 
+// SetReadOnly marks buffer as read-only (prevents edits).
+func (b *Buffer) SetReadOnly(readOnly bool) {
+	b.readOnly = readOnly
+}
+
+// IsReadOnly returns whether buffer is read-only.
+func (b *Buffer) IsReadOnly() bool {
+	return b.readOnly
+}
+
 // LoadFromFile loads the buffer content from a file.
 func (b *Buffer) LoadFromFile(path string) error {
 	content, err := os.ReadFile(path)
@@ -719,6 +750,10 @@ func (b *Buffer) GetCharRange(startLine, startCol, endLine, endCol int) string {
 
 // DeleteCharRange deletes the text in the specified character range.
 func (b *Buffer) DeleteCharRange(startLine, startCol, endLine, endCol int) {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
 	if startLine < 0 || startLine >= len(b.lines) {
 		return
 	}
