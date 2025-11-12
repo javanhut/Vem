@@ -185,11 +185,11 @@ func (s *appState) drawTerminalPane(gtx layout.Context, pane *panes.Pane, buf *e
 	}
 
 	// Draw terminal content
-	return s.drawTerminalContent(gtx, screen)
+	return s.drawTerminalContent(gtx, screen, pane.BufferIndex)
 }
 
-// drawTerminalContent renders the terminal screen buffer
-func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.ScreenBuffer) layout.Dimensions {
+// drawTerminalContent renders the terminal screen buffer with viewport scrolling
+func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.ScreenBuffer, bufferIndex int) layout.Dimensions {
 	cols, rows := screen.Dimensions()
 	cursorX, cursorY, cursorStyle := screen.GetCursor()
 
@@ -208,6 +208,33 @@ func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.Scre
 		charHeight = 16
 	}
 
+	// Calculate lines per page for viewport
+	insetDp := 16 // Top + bottom inset
+	availableHeight := gtx.Constraints.Max.Y - gtx.Dp(unit.Dp(insetDp))
+	linesPerPage := availableHeight / charHeight
+	if linesPerPage < 1 {
+		linesPerPage = 1
+	}
+	if linesPerPage > rows {
+		linesPerPage = rows
+	}
+
+	// Ensure cursor is visible (auto-scroll)
+	s.ensureTerminalCursorVisible(bufferIndex, linesPerPage, screen)
+
+	// Get viewport top line
+	viewportTop, exists := s.terminalViewports[bufferIndex]
+	if !exists {
+		viewportTop = 0
+		s.terminalViewports[bufferIndex] = 0
+	}
+
+	// Calculate viewport end
+	viewportEnd := viewportTop + linesPerPage
+	if viewportEnd > rows {
+		viewportEnd = rows
+	}
+
 	inset := layout.Inset{
 		Top:    unit.Dp(8),
 		Right:  unit.Dp(16),
@@ -216,15 +243,15 @@ func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.Scre
 	}
 
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		// Draw each cell individually for proper colors
-		for y := 0; y < rows; y++ {
+		// Draw only visible lines in viewport
+		for y := viewportTop; y < viewportEnd; y++ {
 			line := screen.GetLine(y)
 			for x := 0; x < len(line.Cells) && x < cols; x++ {
 				cell := line.Cells[x]
 
-				// Calculate cell position
+				// Calculate cell position (adjusted for viewport)
 				cellX := x * charWidth
-				cellY := y * charHeight
+				cellY := (y - viewportTop) * charHeight // Subtract viewportTop to adjust Y position
 
 				// Draw cell background
 				bgRect := clip.Rect{
@@ -268,8 +295,9 @@ func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.Scre
 			}
 		}
 
+		// Return dimensions based on visible area
 		return layout.Dimensions{
-			Size: image.Pt(cols*charWidth, rows*charHeight),
+			Size: image.Pt(cols*charWidth, linesPerPage*charHeight),
 		}
 	})
 }

@@ -162,8 +162,10 @@ type appState struct {
 	syntaxEnabled      bool                        // Global toggle for syntax highlighting
 
 	// Terminal state
-	terminals      map[int]*terminal.Terminal // Map from buffer index to terminal
-	lastWindowSize image.Point                // Track window size for terminal resize
+	terminals          map[int]*terminal.Terminal // Map from buffer index to terminal
+	lastWindowSize     image.Point                // Track window size for terminal resize
+	terminalViewports  map[int]int                // Map from buffer index to viewportTopLine for terminals
+	terminalAutoScroll map[int]bool               // Map from buffer index to auto-scroll enabled
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -306,6 +308,8 @@ func newAppState(filePaths []string) *appState {
 		syntaxHighlighters:   make(map[int]*syntax.Highlighter),
 		syntaxEnabled:        true,
 		terminals:            make(map[int]*terminal.Terminal),
+		terminalViewports:    make(map[int]int),
+		terminalAutoScroll:   make(map[int]bool),
 		lastWindowSize:       image.Point{},
 	}
 }
@@ -1747,6 +1751,64 @@ func (s *appState) scrollLineDown() {
 		s.viewportTopLine++
 		s.status = fmt.Sprintf("Scrolled down (top line: %d)", s.viewportTopLine+1)
 	}
+}
+
+// ensureTerminalCursorVisible ensures terminal cursor is visible in viewport with auto-scroll.
+func (s *appState) ensureTerminalCursorVisible(bufferIndex int, linesPerPage int, screen *terminal.ScreenBuffer) {
+	if screen == nil {
+		return
+	}
+
+	_, cursorY, _ := screen.GetCursor()
+	_, rows := screen.Dimensions()
+
+	// Get or initialize viewport for this terminal
+	viewportTop, exists := s.terminalViewports[bufferIndex]
+	if !exists {
+		viewportTop = 0
+		s.terminalViewports[bufferIndex] = 0
+	}
+
+	// Check if auto-scroll is enabled (default: true)
+	autoScroll, exists := s.terminalAutoScroll[bufferIndex]
+	if !exists {
+		autoScroll = true
+		s.terminalAutoScroll[bufferIndex] = true
+	}
+
+	// If auto-scroll disabled, don't adjust viewport (user is browsing history)
+	if !autoScroll {
+		return
+	}
+
+	// Auto-scroll: keep cursor visible with scroll offset
+	scrollOffset := s.scrollOffsetLines // Use same offset as text buffers (3)
+	viewportBottom := viewportTop + linesPerPage - 1
+
+	// If cursor is below visible area, scroll down
+	if cursorY > viewportBottom-scrollOffset {
+		viewportTop = cursorY - linesPerPage + scrollOffset + 1
+	}
+
+	// If cursor is above visible area, scroll up
+	if cursorY < viewportTop+scrollOffset {
+		viewportTop = cursorY - scrollOffset
+	}
+
+	// Clamp viewport to valid range
+	if viewportTop < 0 {
+		viewportTop = 0
+	}
+
+	maxTop := rows - linesPerPage
+	if maxTop < 0 {
+		maxTop = 0
+	}
+	if viewportTop > maxTop {
+		viewportTop = maxTop
+	}
+
+	s.terminalViewports[bufferIndex] = viewportTop
 }
 
 func (s *appState) handleCountDigit(d int) bool {
@@ -3327,6 +3389,8 @@ func (s *appState) closeTerminal(bufIdx int) {
 	}
 
 	delete(s.terminals, bufIdx)
+	delete(s.terminalViewports, bufIdx)
+	delete(s.terminalAutoScroll, bufIdx)
 }
 
 // handleTerminalAutoClose is called when a terminal process exits (shell exits)
@@ -3336,6 +3400,8 @@ func (s *appState) handleTerminalAutoClose(bufIdx int) {
 
 	// Clean up terminal instance
 	delete(s.terminals, bufIdx)
+	delete(s.terminalViewports, bufIdx)
+	delete(s.terminalAutoScroll, bufIdx)
 
 	// If we're currently in this terminal buffer, switch to NORMAL mode
 	if s.paneManager != nil {
