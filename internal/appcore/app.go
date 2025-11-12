@@ -1372,20 +1372,6 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 	}
 
 	if r, ok := s.printableKey(ev); ok {
-		// Check for 'i' in terminal buffer - enter TERMINAL mode
-		if r == 'i' {
-			buf := s.activeBuffer()
-			if buf != nil && buf.IsTerminal() {
-				// Reset modifiers when entering TERMINAL mode
-				s.ctrlPressed = false
-				s.shiftPressed = false
-				s.mode = modeTerminal
-				s.status = "TERMINAL INPUT (Esc to navigate)"
-				log.Printf("[TERMINAL] Entered terminal input mode")
-				return true
-			}
-		}
-
 		if unicode.IsDigit(r) {
 			if s.handleCountDigit(int(r - '0')) {
 				return true
@@ -1534,8 +1520,18 @@ func (s *appState) enterInsertMode() {
 		return
 	}
 
-	// Check if buffer is read-only
+	// Check if buffer is a terminal - enter TERMINAL mode instead
 	buf := s.activeBuffer()
+	if buf != nil && buf.IsTerminal() {
+		s.ctrlPressed = false
+		s.shiftPressed = false
+		s.mode = modeTerminal
+		s.status = "TERMINAL INPUT (Esc to navigate)"
+		log.Printf("[TERMINAL] Entered terminal input mode")
+		return
+	}
+
+	// Check if buffer is read-only
 	if buf != nil && buf.IsReadOnly() {
 		s.status = "Buffer is read-only (cannot edit)"
 		return
