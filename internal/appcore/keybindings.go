@@ -101,6 +101,10 @@ const (
 	ActionPaneClose
 	ActionPaneEqualize
 	ActionPaneZoomToggle
+
+	// Terminal
+	ActionOpenTerminal
+	ActionTerminalExit
 )
 
 type KeyBinding struct {
@@ -131,6 +135,9 @@ var globalKeybindings = []KeyBinding{
 
 	// Pane closing
 	{Modifiers: key.ModCtrl, Key: "x", Modes: nil, Action: ActionPaneClose},
+
+	// Terminal - Ctrl+` opens/toggles terminal
+	{Modifiers: key.ModCtrl, Key: "`", Modes: nil, Action: ActionOpenTerminal},
 }
 
 var modeKeybindings = map[mode][]KeyBinding{
@@ -238,6 +245,10 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
+	},
+	modeTerminal: {
+		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionTerminalExit},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionTerminalExit},
 	},
 }
 
@@ -727,5 +738,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionPaneZoomToggle:
 		s.handlePaneZoomToggle()
+
+	case ActionOpenTerminal:
+		s.handleOpenTerminal()
+
+	case ActionTerminalExit:
+		s.handleTerminalExit()
 	}
 }

@@ -1107,6 +1107,104 @@ Vem adds additional abstractions:
 - **Performance Tests**: Benchmark large files and operations
 - **Cross-platform**: Automated testing on Linux/macOS/Windows
 
+## Terminal Emulator Architecture
+
+### Overview
+
+Vem includes an embedded terminal emulator that provides a full VT100/xterm-256color compatible terminal within the editor. The terminal integrates seamlessly with Vem's buffer and pane system.
+
+### Components
+
+**Terminal Package** (`internal/terminal/`)
+- `terminal.go` - Core Terminal struct with PTY management
+- `buffer.go` - ScreenBuffer (grid of cells) with thread-safe operations
+- `colors.go` - ANSI color palette (16-256 colors)
+- `input.go` - Gio key events → terminal escape sequences
+- `pty_unix.go` - Unix PTY implementation (Linux/macOS)
+- `pty_windows.go` - Windows ConPTY implementation
+
+### Terminal Lifecycle
+
+1. **Creation**: `handleOpenTerminal()` creates a terminal buffer and Terminal instance
+2. **Start**: PTY is spawned with shell process (bash, zsh, etc.)
+3. **I/O Loops**:
+   - **Read Loop**: Reads from PTY → updates screen buffer → invalidates window
+   - **Write Loop**: Reads from input channel → writes to PTY
+4. **Rendering**: Screen buffer is rendered as grid of cells with colors
+5. **Cleanup**: Context cancellation → close PTY → kill process → wait for goroutines
+
+### Thread Safety
+
+- **Goroutines**: Separate read/write loops with context cancellation
+- **Mutexes**: ScreenBuffer protected by RWMutex for concurrent access
+- **Channels**: Buffered channels for input (256) and updates (1)
+- **Timeouts**: Read operations timeout at 100ms to allow clean shutdown
+- **WaitGroup**: Ensures all goroutines finish before cleanup completes
+
+### Terminal Modes
+
+**TERMINAL Mode**: All input is sent directly to the PTY
+- Arrow keys, function keys → VT100 escape sequences
+- Ctrl+key → Control characters (Ctrl+C = 0x03)
+- Alt+key → ESC prefix + key
+- Text input → Direct byte stream to PTY
+- **Escape key**: Returns to NORMAL mode (handled before sending to PTY)
+
+### Integration with Buffers
+
+- Terminal buffers have `bufferType = BufferTypeTerminal`
+- Terminal buffers skip unsaved changes checks (volatile content)
+- Terminal instance stored in `appState.terminals` map (key = buffer index)
+- Buffer stores reference to Terminal via `SetTerminal()` method
+
+### Platform Support
+
+- **Linux**: PTY via `/dev/ptmx` (pty.Start syscall)
+- **macOS**: PTY via `posix_openpt` (pty.Start syscall)
+- **Windows**: ConPTY API (CreatePseudoConsole)
+- **WebAssembly**: Stub implementation (graceful error)
+
+### Terminal Resizing
+
+- Window resize events trigger `handleWindowResize()`
+- Calculate cols/rows from window dimensions (rough: 8px per char, 16px per line)
+- Call `Terminal.Resize(rows, cols)` for each terminal
+- PTY is resized via `TIOCSWINSZ` ioctl (Unix) or `ResizePseudoConsole` (Windows)
+
+### Rendering
+
+**Terminal-specific rendering** (`drawTerminalPane` in `pane_rendering.go`):
+1. Get Terminal instance from `appState.terminals` map
+2. Check if terminal is running (show error if exited)
+3. Get ScreenBuffer via `Terminal.GetScreen()`
+4. Iterate through rows and cells
+5. Render text with monospace font (JetBrainsMono)
+6. Draw cursor at current position (block cursor)
+
+### Error Handling
+
+- **Terminal not found**: Show "Terminal not initialized" message
+- **Terminal exited**: Show "Terminal exited (press Ctrl+X to close)"
+- **Write timeout**: Log error, continue (non-blocking)
+- **PTY errors**: Set `lastError`, stop read/write loops
+- **Zombie processes**: Explicitly call `cmd.Wait()` in cleanup
+
+### Performance Characteristics
+
+- **Screen Buffer**: O(1) cell access, O(rows×cols) full render
+- **Input**: Buffered channel (256 bytes) for responsiveness
+- **Output Parsing**: Simplified (raw byte→cell), future: full VT100 parser
+- **Goroutine Overhead**: 2 goroutines per terminal (minimal)
+- **Memory**: ~(rows×cols×sizeof(Cell)) per terminal (~80KB for 80×24)
+
+### Future Enhancements
+
+- Full VT100/ANSI parser (currently simplified)
+- Scrollback buffer (currently only visible screen)
+- Selection and copy/paste from terminal
+- Terminal multiplexer integration (tmux/screen)
+- Configurable shell and environment variables
+
 ## Code Organization
 
 ```
@@ -1115,10 +1213,10 @@ internal/
 │   ├── app.go           # Main application state
 │   ├── keybindings.go   # Keybinding system
 │   ├── pane_actions.go  # Pane management actions
-│   ├── pane_rendering.go # Pane rendering
+│   ├── pane_rendering.go # Pane rendering (includes terminal)
 │   └── fuzzy.go         # Fuzzy finder
 ├── editor/               # Text editing logic
-│   ├── buffer.go        # Buffer abstraction
+│   ├── buffer.go        # Buffer abstraction (terminal support)
 │   ├── buffer_test.go   # Buffer tests
 │   └── buffer_manager.go # Multi-buffer management
 ├── filesystem/           # File tree and operations
@@ -1131,15 +1229,26 @@ internal/
 │   ├── layout.go        # Layout calculation
 │   ├── navigation.go    # Geometric navigation
 │   └── pane.go          # Pane abstraction
-└── fonts/                # Font management
-    └── fonts.go         # Font loading and rendering
+├── terminal/             # Terminal emulator
+│   ├── terminal.go      # Core Terminal with PTY
+│   ├── buffer.go        # ScreenBuffer (grid of cells)
+│   ├── colors.go        # ANSI color palette
+│   ├── input.go         # Key event conversion
+│   ├── pty_unix.go      # Unix PTY implementation
+│   └── pty_windows.go   # Windows ConPTY
+├── fonts/                # Font management
+│   └── fonts.go         # Font loading and rendering
+└── syntax/               # Syntax highlighting
+    ├── highlighter.go   # Tree-sitter integration
+    └── theme.go         # Color themes
 ```
 
 **Design Principles:**
-- **Separation of Concerns**: UI, editing, filesystem, panes are independent
+- **Separation of Concerns**: UI, editing, filesystem, panes, terminal are independent
 - **Testability**: Core logic has no UI dependencies
 - **Extensibility**: Clear interfaces for future plugins
 - **Immutability**: Minimize mutable state where possible
+- **Thread Safety**: Explicit synchronization for concurrent access
 
 ## See Also
 

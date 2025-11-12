@@ -34,6 +34,7 @@ import (
 	"github.com/javanhut/ProjectVem/internal/fonts"
 	"github.com/javanhut/ProjectVem/internal/panes"
 	"github.com/javanhut/ProjectVem/internal/syntax"
+	"github.com/javanhut/ProjectVem/internal/terminal"
 )
 
 type mode string
@@ -67,6 +68,7 @@ const (
 	modeExplorer    mode = "EXPLORER"
 	modeSearch      mode = "SEARCH"
 	modeFuzzyFinder mode = "FUZZY_FINDER"
+	modeTerminal    mode = "TERMINAL"
 )
 
 const caretBlinkInterval = 600 * time.Millisecond
@@ -89,32 +91,33 @@ var (
 )
 
 type appState struct {
-	theme              *material.Theme
-	bufferMgr          *editor.BufferManager
-	paneManager        *panes.PaneManager
-	fileTree           *filesystem.FileTree
-	mode               mode
-	status             string
-	lastKey            string
-	focusTag           *int
-	pendingCount       int
-	pendingGoto        bool
-	pendingScroll      bool
-	pendingPaneCmd     bool
-	visualMode         visualModeType
-	visualStartLine    int
-	visualStartCol     int
-	skipNextEdit       bool
-	skipNextFileOpEdit bool
-	skipNextSearchEdit bool
-	skipNextFuzzyEdit  bool
-	caretVisible       bool
-	nextBlink          time.Time
-	caretReset         bool
-	clipLines          []string
-	clipboardIsLine    bool
-	cmdText            string
-	window             *app.Window
+	theme                *material.Theme
+	bufferMgr            *editor.BufferManager
+	paneManager          *panes.PaneManager
+	fileTree             *filesystem.FileTree
+	mode                 mode
+	status               string
+	lastKey              string
+	focusTag             *int
+	pendingCount         int
+	pendingGoto          bool
+	pendingScroll        bool
+	pendingPaneCmd       bool
+	visualMode           visualModeType
+	visualStartLine      int
+	visualStartCol       int
+	skipNextEdit         bool
+	skipNextFileOpEdit   bool
+	skipNextSearchEdit   bool
+	skipNextFuzzyEdit    bool
+	skipNextTerminalEdit bool
+	caretVisible         bool
+	nextBlink            time.Time
+	caretReset           bool
+	clipLines            []string
+	clipboardIsLine      bool
+	cmdText              string
+	window               *app.Window
 
 	// Explorer state
 	explorerVisible      bool
@@ -157,6 +160,10 @@ type appState struct {
 	// Syntax highlighting state
 	syntaxHighlighters map[int]*syntax.Highlighter // Map from buffer index to highlighter
 	syntaxEnabled      bool                        // Global toggle for syntax highlighting
+
+	// Terminal state
+	terminals      map[int]*terminal.Terminal // Map from buffer index to terminal
+	lastWindowSize image.Point                // Track window size for terminal resize
 }
 
 func Run(w *app.Window) error {
@@ -166,6 +173,7 @@ func Run(w *app.Window) error {
 
 func (s *appState) run(w *app.Window) error {
 	s.window = w
+	defer s.cleanup()
 	var ops op.Ops
 	for {
 		switch e := w.Event().(type) {
@@ -174,10 +182,57 @@ func (s *appState) run(w *app.Window) error {
 		case app.ConfigEvent:
 			// Track window mode changes (fullscreen, maximized, etc.)
 			s.currentWindowMode = e.Config.Mode
+			// Handle window resize for terminals
+			newSize := image.Pt(e.Config.Size.X, e.Config.Size.Y)
+			if s.lastWindowSize != newSize {
+				s.lastWindowSize = newSize
+				s.handleWindowResize(newSize)
+			}
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
 			s.layout(gtx)
 			e.Frame(gtx.Ops)
+		}
+	}
+}
+
+// cleanup performs shutdown tasks, including closing all terminals
+func (s *appState) cleanup() {
+	log.Printf("[CLEANUP] Cleaning up terminals...")
+	for bufIdx, term := range s.terminals {
+		if term != nil {
+			log.Printf("[CLEANUP] Closing terminal for buffer %d", bufIdx)
+			if err := term.Close(); err != nil {
+				log.Printf("[CLEANUP] Error closing terminal %d: %v", bufIdx, err)
+			}
+		}
+	}
+	log.Printf("[CLEANUP] Cleanup complete")
+}
+
+// handleWindowResize resizes all terminals when the window size changes
+func (s *appState) handleWindowResize(size image.Point) {
+	if len(s.terminals) == 0 {
+		return
+	}
+	// Calculate terminal dimensions (rough estimate: 80x24 standard, adjust based on window size)
+	cols := 80
+	rows := 24
+	if size.X > 0 && size.Y > 0 {
+		cols = size.X / 8
+		rows = size.Y / 16
+		if cols < 20 {
+			cols = 20
+		}
+		if rows < 6 {
+			rows = 6
+		}
+	}
+	for bufIdx, term := range s.terminals {
+		if term != nil {
+			if err := term.Resize(rows, cols); err != nil {
+				log.Printf("[TERMINAL] Error resizing terminal %d: %v", bufIdx, err)
+			}
 		}
 	}
 }
@@ -242,6 +297,8 @@ func newAppState() *appState {
 		listPosition:         layout.List{Axis: layout.Vertical},
 		syntaxHighlighters:   make(map[int]*syntax.Highlighter),
 		syntaxEnabled:        true,
+		terminals:            make(map[int]*terminal.Terminal),
+		lastWindowSize:       image.Point{},
 	}
 }
 
@@ -466,6 +523,17 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				continue
 			}
 
+			// Handle terminal input if in terminal mode
+			if s.mode == modeTerminal {
+				if s.skipNextTerminalEdit {
+					s.skipNextTerminalEdit = false
+					log.Printf("[TERMINAL] Skipped EditEvent %q (from Ctrl+` keybinding)", e.Text)
+					continue
+				}
+				s.handleTerminalEdit(e.Text)
+				continue
+			}
+
 			// Handle file operation input if active
 			if s.fileOpMode == "rename" || s.fileOpMode == "create" {
 				if s.skipNextFileOpEdit {
@@ -476,8 +544,8 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				continue
 			}
 
-			// Check for colon to enter command mode (except in INSERT and COMMAND modes)
-			if e.Text == ":" && s.mode != modeInsert && s.mode != modeCommand {
+			// Check for colon to enter command mode (except in INSERT, COMMAND, and TERMINAL modes)
+			if e.Text == ":" && s.mode != modeInsert && s.mode != modeCommand && s.mode != modeTerminal {
 				s.enterCommandMode()
 				continue
 			}
@@ -809,7 +877,11 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 			// Build status line with file info
 			fileName := buf.FilePath()
 			if fileName == "" {
-				fileName = "[No Name]"
+				if buf.IsTerminal() {
+					fileName = "[Terminal]"
+				} else {
+					fileName = "[No Name]"
+				}
 			}
 
 			modFlag := ""
@@ -1117,6 +1189,12 @@ func (s *appState) handleKey(ev key.Event) {
 		s.skipNextEdit = false
 	}
 
+	// Handle terminal input if in terminal mode
+	if s.mode == modeTerminal {
+		s.handleTerminalKey(ev)
+		return
+	}
+
 	// Handle file operation input if active
 	if s.fileOpMode != "" {
 		if s.handleFileOpKey(ev) {
@@ -1240,6 +1318,20 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 	}
 
 	if r, ok := s.printableKey(ev); ok {
+		// Check for 'i' in terminal buffer - enter TERMINAL mode
+		if r == 'i' {
+			buf := s.activeBuffer()
+			if buf != nil && buf.IsTerminal() {
+				// Reset modifiers when entering TERMINAL mode
+				s.ctrlPressed = false
+				s.shiftPressed = false
+				s.mode = modeTerminal
+				s.status = "TERMINAL INPUT (Esc to navigate)"
+				log.Printf("[TERMINAL] Entered terminal input mode")
+				return true
+			}
+		}
+
 		if unicode.IsDigit(r) {
 			if s.handleCountDigit(int(r - '0')) {
 				return true
@@ -2207,6 +2299,10 @@ func (s *appState) executeCommandLine() {
 		s.handleQuitCommand(false)
 	case "q!":
 		s.handleQuitCommand(true)
+	case "qa", "qall":
+		s.handleQuitAll(false)
+	case "qa!":
+		s.handleQuitAll(true)
 	case "w", "write":
 		s.handleWriteCommand(strings.TrimSpace(args), false)
 	case "wq":
@@ -2237,6 +2333,8 @@ func (s *appState) executeCommandLine() {
 		s.handleChangeDirectoryCommand(strings.TrimSpace(args))
 	case "pwd":
 		s.handlePrintWorkingDirectoryCommand()
+	case "term", "terminal":
+		s.handleOpenTerminal()
 	default:
 		s.status = fmt.Sprintf("Unknown command: %s", name)
 	}
@@ -2245,13 +2343,11 @@ func (s *appState) executeCommandLine() {
 func (s *appState) handleQuitCommand(force bool) {
 	// With pane system, quit closes the active pane and its buffer
 	if s.paneManager == nil {
-		s.requestClose()
 		return
 	}
 
 	activePane := s.paneManager.ActivePane()
 	if activePane == nil {
-		s.requestClose()
 		return
 	}
 
@@ -2263,34 +2359,69 @@ func (s *appState) handleQuitCommand(force bool) {
 			s.paneManager.ClosePane()
 			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		} else {
-			s.requestClose()
+			// Last pane with no buffer - switch to buffer 0 (sample buffer)
+			activePane.SetBufferIndex(0)
+			s.status = "No buffer to close"
 		}
 		return
 	}
 
-	// Check if buffer is modified (unless force)
-	if !force && buf.Modified() {
+	// Check if buffer is modified (unless force or terminal)
+	if !force && buf.Modified() && !buf.IsTerminal() {
 		s.status = "Buffer has unsaved changes (use :q! to force)"
 		return
 	}
 
-	// Close the buffer
-	if err := s.bufferMgr.CloseBuffer(activePane.BufferIndex, force); err != nil {
-		s.status = fmt.Sprintf("Error closing buffer: %v", err)
-		return
-	}
+	bufferIndex := activePane.BufferIndex
 
-	// Close the pane
+	// Close terminal if this buffer has one
+	s.closeTerminal(bufferIndex)
+
+	// Multiple panes - close this pane and buffer
 	if s.paneManager.PaneCount() > 1 {
 		if err := s.paneManager.ClosePane(); err != nil {
 			s.status = fmt.Sprintf("Error closing pane: %v", err)
-		} else {
-			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+			return
 		}
-	} else {
-		// Last pane - close the application
-		s.requestClose()
+		s.bufferMgr.CloseBuffer(bufferIndex, force)
+		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		return
 	}
+
+	// Last pane - close buffer but keep editor open
+	s.bufferMgr.CloseBuffer(bufferIndex, force)
+
+	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
+	if s.bufferMgr.BufferCount() == 0 || s.bufferMgr.GetBuffer(0) == nil {
+		// This shouldn't happen, but handle gracefully
+		activePane.SetBufferIndex(0)
+		s.status = "Buffer closed"
+	} else {
+		// Switch to buffer 0 (sample buffer)
+		activePane.SetBufferIndex(0)
+		s.status = "Buffer closed"
+	}
+}
+
+func (s *appState) handleQuitAll(force bool) {
+	// Check all buffers for unsaved changes (unless force)
+	if !force {
+		for i := 0; i < s.bufferMgr.BufferCount(); i++ {
+			buf := s.bufferMgr.GetBuffer(i)
+			if buf != nil && buf.Modified() && !buf.IsTerminal() {
+				s.status = "Some buffers have unsaved changes (use :qa! to force)"
+				return
+			}
+		}
+	}
+
+	// Close all terminals
+	for bufIdx := range s.terminals {
+		s.closeTerminal(bufIdx)
+	}
+
+	// Actually close the application
+	s.requestClose()
 }
 
 func (s *appState) handleWriteCommand(arg string, andQuit bool) {
@@ -2991,6 +3122,262 @@ func (s *appState) fuzzyFinderConfirm() {
 
 	s.exitFuzzyFinder()
 	s.status = fmt.Sprintf("Opened %s", match.FilePath)
+}
+
+// handleOpenTerminal creates a new terminal buffer and enters TERMINAL INPUT mode immediately
+// If already in a terminal buffer, switch to TERMINAL INPUT mode
+func (s *appState) handleOpenTerminal() {
+	// Reset modifier flags when entering terminal mode
+	// This prevents stuck modifiers from Ctrl+` or other key combinations
+	s.ctrlPressed = false
+	s.shiftPressed = false
+
+	// Check if current buffer is already a terminal
+	buf := s.activeBuffer()
+	if buf != nil && buf.IsTerminal() {
+		// Already in a terminal buffer - enter TERMINAL INPUT mode
+		s.mode = modeTerminal
+		s.status = "TERMINAL INPUT (Esc to navigate, Shift+Tab to switch)"
+		s.skipNextTerminalEdit = true // Prevent backtick from leaking
+		log.Printf("[TERMINAL] Switched to terminal input mode")
+		return
+	}
+
+	// Get working directory for shell
+	workDir := s.getWorkingDirectory()
+
+	// Create terminal buffer
+	bufIdx := s.bufferMgr.CreateTerminalBuffer()
+
+	// Get terminal dimensions from window size
+	cols, rows := 80, 24
+	if s.lastWindowSize.X > 0 && s.lastWindowSize.Y > 0 {
+		cols = s.lastWindowSize.X / 8
+		rows = s.lastWindowSize.Y / 16
+		if cols < 20 {
+			cols = 20
+		}
+		if rows < 6 {
+			rows = 6
+		}
+	}
+
+	// Create terminal instance with exit callback
+	term, err := terminal.NewTerminal(terminal.Config{
+		Width:      cols,
+		Height:     rows,
+		WorkingDir: workDir,
+		Window:     s.window,
+		OnExit: func() {
+			// Terminal exited (shell closed) - auto-close the buffer
+			log.Printf("[TERMINAL] Terminal exited, auto-closing buffer %d", bufIdx)
+			s.handleTerminalAutoClose(bufIdx)
+		},
+	})
+	if err != nil {
+		s.status = fmt.Sprintf("Error creating terminal: %v", err)
+		log.Printf("[TERMINAL] Failed to create terminal: %v", err)
+		return
+	}
+
+	// Start terminal
+	if err := term.Start(); err != nil {
+		s.status = fmt.Sprintf("Error starting terminal: %v", err)
+		log.Printf("[TERMINAL] Failed to start terminal: %v", err)
+		return
+	}
+
+	// Store terminal instance
+	s.terminals[bufIdx] = term
+
+	// Store terminal reference in buffer
+	newBuf := s.bufferMgr.GetBuffer(bufIdx)
+	if newBuf != nil {
+		newBuf.SetTerminal(term)
+	}
+
+	// Update active pane to show terminal buffer
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			activePane.SetBufferIndex(bufIdx)
+		}
+	}
+
+	// Enter TERMINAL INPUT mode immediately - ready to type
+	s.mode = modeTerminal
+	s.status = "TERMINAL INPUT (Esc to navigate, Shift+Tab to switch)"
+	s.skipNextTerminalEdit = true // Prevent backtick from leaking
+	log.Printf("[TERMINAL] Opened terminal in buffer %d (%dx%d)", bufIdx, cols, rows)
+}
+
+// handleTerminalExit exits terminal mode and returns to normal mode
+func (s *appState) handleTerminalExit() {
+	if s.mode == modeTerminal {
+		s.mode = modeNormal
+		s.status = "Back to NORMAL"
+	}
+}
+
+// closeTerminal closes a terminal instance and cleans up
+func (s *appState) closeTerminal(bufIdx int) {
+	term, exists := s.terminals[bufIdx]
+	if !exists {
+		return
+	}
+
+	log.Printf("[TERMINAL] Closing terminal for buffer %d", bufIdx)
+	if err := term.Close(); err != nil {
+		log.Printf("[TERMINAL] Error closing terminal %d: %v", bufIdx, err)
+	}
+
+	delete(s.terminals, bufIdx)
+}
+
+// handleTerminalAutoClose is called when a terminal process exits (shell exits)
+// It automatically closes the terminal buffer
+func (s *appState) handleTerminalAutoClose(bufIdx int) {
+	log.Printf("[TERMINAL] Auto-closing buffer %d after terminal exit", bufIdx)
+
+	// Clean up terminal instance
+	delete(s.terminals, bufIdx)
+
+	// If we're currently in this terminal buffer, switch to NORMAL mode
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil && activePane.BufferIndex == bufIdx {
+			// Switch mode to NORMAL to prevent EditEvent issues
+			if s.mode == modeTerminal {
+				s.mode = modeNormal
+			}
+
+			// Close this buffer/pane (like :q)
+			// Multiple panes: close the pane
+			if s.paneManager.PaneCount() > 1 {
+				s.paneManager.ClosePane()
+				s.bufferMgr.CloseBuffer(bufIdx, true) // Force close (no unsaved warning for terminals)
+				s.status = fmt.Sprintf("Terminal exited - %d panes remaining", s.paneManager.PaneCount())
+			} else {
+				// Last pane: close buffer, switch to buffer 0
+				s.bufferMgr.CloseBuffer(bufIdx, true)
+				activePane.SetBufferIndex(0)
+				s.status = "Terminal exited"
+			}
+		} else {
+			// Terminal is in a background pane/buffer - just close it silently
+			s.bufferMgr.CloseBuffer(bufIdx, true)
+		}
+	}
+
+	// Invalidate window to trigger redraw
+	if s.window != nil {
+		s.window.Invalidate()
+	}
+}
+
+// getWorkingDirectory determines the working directory for the shell
+func (s *appState) getWorkingDirectory() string {
+	// Try to get directory from file tree first
+	if s.fileTree != nil {
+		path := s.fileTree.CurrentPath()
+		if path != "" {
+			return path
+		}
+	}
+
+	// Try to get directory from current buffer's file path
+	buf := s.activeBuffer()
+	if buf != nil {
+		filePath := buf.FilePath()
+		if filePath != "" {
+			dir := filepath.Dir(filePath)
+			if dir != "" && dir != "." {
+				return dir
+			}
+		}
+	}
+
+	// Fallback to current working directory
+	workDir, err := os.Getwd()
+	if err != nil {
+		workDir = "."
+	}
+	return workDir
+}
+
+// handleTerminalKey processes key events in terminal mode
+func (s *appState) handleTerminalKey(ev key.Event) {
+	// Reset modifier tracking flags at start of terminal input
+	// This prevents stuck modifiers from previous key presses (e.g., Ctrl+` to open terminal)
+	// Terminal input should be clean - the terminal will handle its own Ctrl sequences
+	s.ctrlPressed = false
+	s.shiftPressed = false
+
+	// Check for Escape to exit terminal mode
+	if ev.Name == key.NameEscape {
+		s.handleTerminalExit()
+		return
+	}
+
+	// Check for actual Ctrl+X from event modifiers (not tracked state) to close pane
+	if ev.Modifiers.Contain(key.ModCtrl) && strings.ToLower(string(ev.Name)) == "x" {
+		log.Printf("[TERMINAL] Ctrl+X detected (from modifiers), closing pane")
+		s.handleQuitCommand(false)
+		return
+	}
+
+	// Get active buffer and its terminal
+	buf := s.activeBuffer()
+	if buf == nil || !buf.IsTerminal() {
+		s.status = "Not a terminal buffer"
+		log.Printf("[TERMINAL] Not a terminal buffer, ignoring key")
+		return
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		log.Printf("[TERMINAL] No active pane")
+		return
+	}
+
+	term, exists := s.terminals[activePane.BufferIndex]
+	if !exists || term == nil {
+		s.status = "Terminal not found"
+		log.Printf("[TERMINAL] Terminal not found for buffer %d", activePane.BufferIndex)
+		return
+	}
+
+	// Convert key event to terminal input
+	inputSeq := terminal.KeyToTerminalSequence(ev)
+	log.Printf("[TERMINAL] Key=%q Modifiers=%v InputSeq=%q", ev.Name, ev.Modifiers, inputSeq)
+	if inputSeq != "" {
+		if err := term.Write([]byte(inputSeq)); err != nil {
+			log.Printf("[TERMINAL] Error writing to terminal: %v", err)
+		}
+	}
+}
+
+// handleTerminalEdit processes text input in terminal mode
+func (s *appState) handleTerminalEdit(text string) {
+	buf := s.activeBuffer()
+	if buf == nil || !buf.IsTerminal() {
+		return
+	}
+
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return
+	}
+
+	term, exists := s.terminals[activePane.BufferIndex]
+	if !exists || term == nil {
+		return
+	}
+
+	// Send text to terminal
+	if err := term.Write([]byte(text)); err != nil {
+		log.Printf("[TERMINAL] Error writing to terminal: %v", err)
+	}
 }
 
 const sampleBuffer = ``

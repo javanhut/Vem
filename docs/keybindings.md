@@ -17,11 +17,12 @@ These keybindings work in all modes.
 | `Ctrl+P` | Paste | Paste clipboard content at cursor |
 | `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode (NORMAL mode only) |
 | `Shift+Tab` | Cycle Panes | Cycle to next pane (when multiple panes open) |
-| `Ctrl+X` | Close Pane | Close active pane and its buffer |
+| `Ctrl+X` | Close Pane | Close active pane/buffer (like `:q`, keeps editor open) |
 | `Alt+h` | Focus Left Pane | Move focus to pane on the left |
 | `Alt+j` | Focus Down Pane | Move focus to pane below |
 | `Alt+k` | Focus Up Pane | Move focus to pane above |
 | `Alt+l` | Focus Right Pane | Move focus to pane on the right |
+| ``Ctrl+` `` | Open/Toggle Terminal | Open new terminal or switch to TERMINAL INPUT mode |
 
 ## NORMAL Mode
 
@@ -200,8 +201,10 @@ COMMAND mode provides a Vim-style command-line interface.
 | `:w` | Save current buffer to its file |
 | `:w <file>` | Save current buffer as `<file>` |
 | `:wq` | Save and close current buffer |
-| `:q` | Close current buffer (fails if modified) |
-| `:q!` | Force close current buffer (discard changes) |
+| `:q` | Close current pane/buffer (keeps editor open, switches to buffer 0 if last pane) |
+| `:q!` | Force close current pane/buffer (discard changes) |
+| `:qa` or `:qall` | Quit entire application (fails if buffers have unsaved changes) |
+| `:qa!` | Force quit entire application (discard all unsaved changes) |
 
 #### Buffer Management
 
@@ -221,6 +224,7 @@ COMMAND mode provides a Vim-style command-line interface.
 | `:cd <path>` | Change working directory to `<path>` |
 | `:cd` | Change to home directory |
 | `:pwd` | Print current working directory |
+| `:term` or `:terminal` | Open embedded terminal in current pane |
 
 ## SEARCH Mode
 
@@ -327,6 +331,74 @@ FUZZY_FINDER mode provides quick file navigation using fuzzy matching.
 |-----|--------|-------------|
 | `↑` | Move Up | Move selection up in the results list |
 | `↓` | Move Down | Move selection down in the results list |
+
+## TERMINAL Mode
+
+TERMINAL mode provides an embedded terminal emulator within Vem.
+
+### Opening a Terminal
+
+| Method | Description |
+|--------|-------------|
+| ``Ctrl+` `` | Open new terminal and enter TERMINAL INPUT mode immediately |
+| `:term` or `:terminal` | Open new terminal and enter TERMINAL INPUT mode immediately |
+
+### Mode Control
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| ``Ctrl+` `` | Open/Toggle Terminal | Open new terminal or switch to TERMINAL INPUT mode |
+| `i` | Enter TERMINAL INPUT | Enter TERMINAL INPUT mode (when in terminal buffer in NORMAL mode) |
+| `Esc` | Exit to NORMAL | Return to NORMAL mode (can navigate terminal output) |
+| `Shift+Tab` | Exit to NORMAL | Alternative way to return to NORMAL mode (also cycles panes) |
+| `Ctrl+X` | Close Terminal | Close terminal pane/buffer (works in TERMINAL INPUT mode) |
+
+### Terminal Features
+
+- Full VT100/xterm-256color terminal emulation with ANSI color support
+- Runs your default shell (bash, zsh, fish, etc.)
+- Properly renders colors, bold, italic, underline attributes
+- Integrates with Vem's pane system (can split terminals)
+- Automatically starts in current working directory
+- Easy access with ``Ctrl+` `` keybinding
+
+### Usage
+
+**Quick Start:**
+1. Press ``Ctrl+` `` → Terminal opens and enters TERMINAL INPUT mode immediately
+2. Type commands → Works like a normal terminal
+3. Press `Esc` → Return to NORMAL mode
+4. Press ``Ctrl+` `` or `i` → Re-enter TERMINAL INPUT mode
+5. Press `Shift+Tab` → Switch to other panes/buffers
+
+**Alternative (Command Mode):**
+1. Type `:term` and press Enter → Opens terminal in TERMINAL INPUT mode
+2. Type commands as you would in a normal terminal
+3. Press `Esc` → Return to NORMAL mode
+4. Press `i` → Resume typing commands
+
+### Terminal Input (When in TERMINAL INPUT Mode)
+
+All keyboard input is sent directly to the terminal:
+
+- Arrow keys, function keys, and special keys work as expected
+- Ctrl+key combinations are sent to the terminal (except ``Ctrl+` `` which toggles mode)
+- Alt+key combinations are sent to the terminal
+- Tab completion works normally
+- Colors and text attributes are properly displayed
+
+### Example Workflow
+
+1. Press ``Ctrl+` `` → Opens terminal in TERMINAL INPUT mode
+2. Type `ls -la` → Run command with colored output
+3. Type `git status` → Check git status
+4. Press `Esc` → Return to NORMAL mode (output visible, can't type)
+5. Use `:e file.go` → Open a file
+6. Press `Shift+Tab` → Cycle back to terminal
+7. Press `i` or ``Ctrl+` `` → Resume typing in terminal
+8. Use `Ctrl+S v` → Split vertically for side-by-side terminal and editor
+9. Press `Alt+h/j/k/l` → Navigate between panes
+10. Press ``Ctrl+` `` while in another pane → Quickly jump back to terminal
 
 ### Search Pattern
 

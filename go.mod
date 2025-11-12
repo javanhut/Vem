@@ -7,8 +7,10 @@ require gioui.org v0.9.0
 require (
 	gioui.org/shader v1.0.8 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
+	github.com/creack/pty v1.1.21 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/go-text/typesetting v0.3.0 // indirect
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02 // indirect
 	golang.design/x/clipboard v0.7.1 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/image v0.28.0 // indirect

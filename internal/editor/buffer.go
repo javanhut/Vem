@@ -6,6 +6,14 @@ import (
 	"unicode/utf8"
 )
 
+// BufferType represents the type of buffer content
+type BufferType int
+
+const (
+	BufferTypeText BufferType = iota
+	BufferTypeTerminal
+)
+
 // UndoEntry represents a single undo operation
 type UndoEntry struct {
 	lines       []string
@@ -15,12 +23,14 @@ type UndoEntry struct {
 
 // Buffer represents an in-memory text buffer with a Vim-style cursor.
 type Buffer struct {
-	lines     []string
-	cursor    Cursor
-	filePath  string
-	modified  bool
-	undoStack []UndoEntry
-	maxUndos  int
+	lines      []string
+	cursor     Cursor
+	filePath   string
+	modified   bool
+	undoStack  []UndoEntry
+	maxUndos   int
+	bufferType BufferType
+	terminal   interface{} // *terminal.Terminal (avoid import cycle)
 }
 
 // Cursor stores the current line/column position (1 rune == 1 column).
@@ -800,4 +810,25 @@ func (b *Buffer) Undo() bool {
 	b.markModified()
 
 	return true
+}
+
+// BufferType returns the type of this buffer
+func (b *Buffer) BufferType() BufferType {
+	return b.bufferType
+}
+
+// Terminal returns the terminal instance (nil if not terminal buffer)
+func (b *Buffer) Terminal() interface{} {
+	return b.terminal
+}
+
+// SetTerminal associates a terminal with this buffer
+func (b *Buffer) SetTerminal(term interface{}) {
+	b.bufferType = BufferTypeTerminal
+	b.terminal = term
+}
+
+// IsTerminal returns whether this is a terminal buffer
+func (b *Buffer) IsTerminal() bool {
+	return b.bufferType == BufferTypeTerminal
 }

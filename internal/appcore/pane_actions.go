@@ -178,31 +178,61 @@ func (s *appState) handlePaneClose() {
 		return
 	}
 
-	// Check if buffer is modified
-	buf := s.activeBuffer()
-	if buf != nil && buf.Modified() {
-		s.status = "Buffer has unsaved changes (use :q! to force close)"
-		return
-	}
-
-	// Get the buffer index before closing
 	activePane := s.paneManager.ActivePane()
 	if activePane == nil {
 		return
 	}
-	bufferIndex := activePane.BufferIndex
 
-	// Close the pane
-	if err := s.paneManager.ClosePane(); err != nil {
-		s.status = fmt.Sprintf("Close failed: %v", err)
+	// Get the buffer for this pane
+	buf := s.bufferMgr.GetBuffer(activePane.BufferIndex)
+	if buf == nil {
+		// No buffer, just close the pane if multiple exist
+		if s.paneManager.PaneCount() > 1 {
+			s.paneManager.ClosePane()
+			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		} else {
+			// Last pane with no buffer - switch to buffer 0 (sample buffer)
+			activePane.SetBufferIndex(0)
+			s.status = "No buffer to close"
+		}
 		return
 	}
 
-	// Close the buffer (since it's unique to this pane)
+	// Check if buffer is modified (unless terminal)
+	if buf.Modified() && !buf.IsTerminal() {
+		s.status = "Buffer has unsaved changes (use :q! to force close)"
+		return
+	}
+
+	bufferIndex := activePane.BufferIndex
+
+	// Close terminal if this buffer has one
+	s.closeTerminal(bufferIndex)
+
+	// Multiple panes - close this pane and buffer
+	if s.paneManager.PaneCount() > 1 {
+		if err := s.paneManager.ClosePane(); err != nil {
+			s.status = fmt.Sprintf("Error closing pane: %v", err)
+			return
+		}
+		s.bufferMgr.CloseBuffer(bufferIndex, false)
+		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
+		return
+	}
+
+	// Last pane - close buffer but keep editor open
 	s.bufferMgr.CloseBuffer(bufferIndex, false)
 
-	paneCount := s.paneManager.PaneCount()
-	s.status = fmt.Sprintf("Pane closed - %d panes remaining", paneCount)
+	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
+	if s.bufferMgr.BufferCount() == 0 || s.bufferMgr.GetBuffer(0) == nil {
+		// This shouldn't happen, but handle gracefully
+		activePane.SetBufferIndex(0)
+		s.status = "Buffer closed"
+	} else {
+		// Switch to buffer 0 (sample buffer)
+		activePane.SetBufferIndex(0)
+		s.status = "Buffer closed"
+	}
 }
 
 // handlePaneEqualize makes all panes equal size.
