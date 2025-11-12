@@ -12,9 +12,9 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget/material"
 
-	"github.com/javanhut/ProjectVem/internal/editor"
-	"github.com/javanhut/ProjectVem/internal/panes"
-	"github.com/javanhut/ProjectVem/internal/terminal"
+	"github.com/javanhut/vem/internal/editor"
+	"github.com/javanhut/vem/internal/panes"
+	"github.com/javanhut/vem/internal/terminal"
 )
 
 // drawPanes is the entry point for rendering all panes.

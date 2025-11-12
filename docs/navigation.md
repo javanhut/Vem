@@ -1,10 +1,10 @@
-# Navigation in ProjectVem
+# Navigation in Vem
 
-This document describes the navigation features in ProjectVem, including cursor movement, viewport scrolling, pane navigation between the file tree explorer and the text editor, and fullscreen mode management.
+This document describes the navigation features in Vem, including cursor movement, viewport scrolling, pane navigation between the file tree explorer and the text editor, and fullscreen mode management.
 
 ## Cursor Movement
 
-ProjectVem provides Vim-compatible cursor movement commands for efficient navigation.
+Vem provides Vim-compatible cursor movement commands for efficient navigation.
 
 ### Character Movement
 
@@ -61,7 +61,7 @@ b → moves to '1' (start of previous word)
 
 ## Visual Mode
 
-ProjectVem implements Vim-style visual selection with two distinct modes for selecting text: character-wise and line-wise.
+Vem implements Vim-style visual selection with two distinct modes for selecting text: character-wise and line-wise.
 
 ### Visual Mode Types
 
@@ -131,7 +131,7 @@ Once text is selected in either visual mode, you can perform these operations:
 
 ### Visual Mode Highlighting
 
-ProjectVem uses different highlighting strategies for character-wise and line-wise visual modes to maximize clarity:
+Vem uses different highlighting strategies for character-wise and line-wise visual modes to maximize clarity:
 
 #### Character-Wise Mode Highlighting
 
@@ -229,7 +229,7 @@ c           # Copy entire block
 
 ### Visual Mode vs Vem Keybindings
 
-ProjectVem uses **Vem-style copy/delete/paste** keybindings instead of Vim's traditional `y` (yank):
+Vem uses **Vem-style copy/delete/paste** keybindings instead of Vim's traditional `y` (yank):
 
 | Operation | Vem Key | Vim Key | Notes |
 |-----------|---------|---------|-------|
@@ -241,7 +241,7 @@ This makes the keybindings more intuitive for new users while maintaining the Vi
 
 ## Viewport Scrolling
 
-ProjectVem implements Vim-style viewport scrolling to ensure the cursor is always visible and to provide fine-grained control over the viewport position.
+Vem implements Vim-style viewport scrolling to ensure the cursor is always visible and to provide fine-grained control over the viewport position.
 
 ### Automatic Scrolling
 
@@ -286,7 +286,7 @@ The viewport automatically scrolls to keep the cursor visible with a configurabl
 
 ### Scroll Offset
 
-By default, ProjectVem maintains a scroll offset of 3 lines around the cursor. This means:
+By default, Vem maintains a scroll offset of 3 lines around the cursor. This means:
 
 - When scrolling up, the cursor stays at least 3 lines from the top edge
 - When scrolling down, the cursor stays at least 3 lines from the bottom edge
@@ -331,7 +331,7 @@ zb      # Move to bottom
 
 ### Shift+Enter - Toggle Fullscreen
 
-ProjectVem supports fullscreen mode for a distraction-free editing experience.
+Vem supports fullscreen mode for a distraction-free editing experience.
 
 #### Key Binding
 - **Shift+Enter**: Toggle fullscreen mode (works in all modes)
@@ -361,7 +361,7 @@ ProjectVem supports fullscreen mode for a distraction-free editing experience.
 
 ## Pane Navigation
 
-ProjectVem supports Vim-like split pane navigation with keyboard shortcuts to quickly jump between the file tree explorer and the text editor.
+Vem supports Vim-like split pane navigation with keyboard shortcuts to quickly jump between the file tree explorer and the text editor.
 
 ### Key Bindings
 
@@ -509,10 +509,10 @@ For detailed architecture documentation, see `docs/keybindings.md`.
 
 ### Keyboard Input Handling
 
-ProjectVem handles keyboard input with special attention to platform quirks:
+Vem handles keyboard input with special attention to platform quirks:
 
 - **Letter Case Handling**: Gio UI reports all letter keys as uppercase in the key name (e.g., `ev.Name = "G"` for both `g` and `Shift+G`). The `printableKey()` method checks the tracked shift state to correctly convert letters to lowercase when shift is not pressed, ensuring commands like `gg` (jump to top) and `G` (jump to bottom) work correctly.
 
-- **Modifier Tracking**: Due to platform limitations where `ev.Modifiers` is not reliably reported, ProjectVem tracks modifier key state (Ctrl, Shift) through explicit press/release events in `s.ctrlPressed` and `s.shiftPressed`.
+- **Modifier Tracking**: Due to platform limitations where `ev.Modifiers` is not reliably reported, Vem tracks modifier key state (Ctrl, Shift) through explicit press/release events in `s.ctrlPressed` and `s.shiftPressed`.
 
 - **Smart Reset**: After executing commands, modifiers are automatically reset to prevent them from "sticking" between keypress events.

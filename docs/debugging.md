@@ -2,7 +2,7 @@
 
 ## Debug Logging
 
-ProjectVem includes comprehensive debug logging to help diagnose keybinding issues, mode transitions, and explorer behavior.
+Vem includes comprehensive debug logging to help diagnose keybinding issues, mode transitions, and explorer behavior.
 
 ### Running with Debug Output
 

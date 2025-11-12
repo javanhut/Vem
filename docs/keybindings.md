@@ -1,6 +1,6 @@
 # Keybindings Reference
 
-Complete reference for all keybindings in ProjectVem.
+Complete reference for all keybindings in Vem.
 
 ## Global Keybindings
 
@@ -462,7 +462,7 @@ Type digits to build a count before a motion or command:
 
 ### Modifier Keys
 
-ProjectVem uses robust modifier key tracking to handle platform differences:
+Vem uses robust modifier key tracking to handle platform differences:
 
 - **Linux (X11/Wayland)**: Ctrl and Shift are tracked explicitly due to platform quirks
 - **macOS**: Command key is mapped to Ctrl for consistency
@@ -559,7 +559,7 @@ Example usage:
 
 ## Keybinding Conflicts
 
-ProjectVem uses a priority-based keybinding system to prevent conflicts:
+Vem uses a priority-based keybinding system to prevent conflicts:
 
 1. **Global keybindings** (highest priority): Ctrl+T, Ctrl+H, Ctrl+L, Ctrl+F, Ctrl+U, Alt+hjkl, Shift+Tab, Ctrl+X
 2. **Mode-specific keybindings**: Commands that only work in specific modes (e.g., Shift+Enter for fullscreen only in NORMAL mode)

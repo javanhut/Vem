@@ -7,7 +7,7 @@ import (
 	gioapp "gioui.org/app"
 	"gioui.org/unit"
 
-	"github.com/javanhut/ProjectVem/internal/appcore"
+	"github.com/javanhut/vem/internal/appcore"
 )
 
 func main() {

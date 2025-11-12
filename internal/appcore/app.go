@@ -29,12 +29,12 @@ import (
 
 	"golang.design/x/clipboard"
 
-	"github.com/javanhut/ProjectVem/internal/editor"
-	"github.com/javanhut/ProjectVem/internal/filesystem"
-	"github.com/javanhut/ProjectVem/internal/fonts"
-	"github.com/javanhut/ProjectVem/internal/panes"
-	"github.com/javanhut/ProjectVem/internal/syntax"
-	"github.com/javanhut/ProjectVem/internal/terminal"
+	"github.com/javanhut/vem/internal/editor"
+	"github.com/javanhut/vem/internal/filesystem"
+	"github.com/javanhut/vem/internal/fonts"
+	"github.com/javanhut/vem/internal/panes"
+	"github.com/javanhut/vem/internal/syntax"
+	"github.com/javanhut/vem/internal/terminal"
 )
 
 type mode string

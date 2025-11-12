@@ -1,4 +1,4 @@
-module github.com/javanhut/ProjectVem
+module github.com/javanhut/vem
 
 go 1.25.3
 

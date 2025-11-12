@@ -77,11 +77,13 @@ type appState struct {
 **Responsibilities:**
 - Window creation and lifecycle management
 - Event loop (keyboard, mouse, window events)
-- Modal state machine (NORMAL, INSERT, VISUAL, DELETE, COMMAND, EXPLORER, SEARCH, FUZZY_FINDER)
+- Modal state machine (NORMAL, INSERT, VISUAL, DELETE, COMMAND, EXPLORER, SEARCH, FUZZY_FINDER, TERMINAL)
 - Rendering pipeline orchestration
 - Status bar and UI chrome
 - Caret blinking animation
 - Pane layout coordination
+- Command line argument processing
+- Help system integration
 
 **Key Methods:**
 - `run()` - Main event loop
@@ -165,6 +167,16 @@ Fuzzy file finder implementation:
 - Match highlighting
 - Result caching and sorting
 
+#### `help.go`
+
+Built-in help system:
+
+**Responsibilities:**
+- Generate comprehensive keybindings reference
+- Format help text with sections and categories
+- Create read-only help buffer
+- Provide quick `:help` / `:h` command access
+
 ### 2. Buffer Management (`internal/editor/`)
 
 Text buffer abstraction and multi-buffer management.
@@ -175,11 +187,13 @@ Core text buffer implementation:
 
 ```go
 type Buffer struct {
-    lines    []string
-    cursor   Cursor
-    filePath string
-    modified bool
-    undoStack []UndoState
+    lines      []string
+    cursor     Cursor
+    filePath   string
+    modified   bool
+    readOnly   bool         // New: Read-only buffer support
+    bufferType BufferType   // New: Terminal, Text, or Special
+    undoStack  []UndoState
 
     // Visual mode state
     visualStart *Cursor
@@ -188,6 +202,13 @@ type Buffer struct {
     // Search state
     searchMatches []SearchMatch
 }
+
+type BufferType int
+
+const (
+    BufferTypeText     BufferType = iota
+    BufferTypeTerminal
+)
 
 type Cursor struct {
     Line int
@@ -208,6 +229,8 @@ type UndoState struct {
 - Undo/redo support (up to 100 operations)
 - Visual mode selection tracking
 - Search match storage and navigation
+- Read-only buffer support (help pages, system buffers)
+- Buffer type tracking (text, terminal)
 
 **Key Methods:**
 - `InsertText(text string)` - Insert text at cursor
@@ -249,6 +272,8 @@ type BufferManager struct {
 - `CloseActiveBuffer(force)` - Close with modified check
 - `ListBuffers()` - Get all open buffers
 - `FindBufferByPath(path)` - Check if file already open
+- `CreateBufferWithContent(content)` - Create buffer with text (for help system)
+- `CreateTerminalBuffer()` - Create terminal buffer
 
 ### 3. Pane Management (`internal/panes/`)
 
@@ -1211,6 +1236,7 @@ Vem includes an embedded terminal emulator that provides a full VT100/xterm-256c
 internal/
 ├── appcore/              # UI and event handling
 │   ├── app.go           # Main application state
+│   ├── help.go          # Built-in help system
 │   ├── keybindings.go   # Keybinding system
 │   ├── pane_actions.go  # Pane management actions
 │   ├── pane_rendering.go # Pane rendering (includes terminal)
@@ -1249,6 +1275,236 @@ internal/
 - **Extensibility**: Clear interfaces for future plugins
 - **Immutability**: Minimize mutable state where possible
 - **Thread Safety**: Explicit synchronization for concurrent access
+
+## Command Line File Opening
+
+### Architecture
+
+Command line arguments are processed in `main.go` and passed to `appcore.Run()`:
+
+```go
+// main.go
+func main() {
+    filePaths := os.Args[1:]  // Parse command line arguments
+    appcore.Run(window, filePaths)
+}
+
+// internal/appcore/app.go
+func Run(w *app.Window, filePaths []string) error {
+    state := newAppState(filePaths)
+    return state.run(w)
+}
+
+func newAppState(filePaths []string) *appState {
+    var bufferMgr *editor.BufferManager
+    
+    if len(filePaths) > 0 {
+        bufferMgr = createBufferManagerWithFiles(filePaths)
+    }
+    
+    if bufferMgr == nil {
+        // Fallback to sample buffer
+        buf := editor.NewBuffer(sampleBuffer)
+        bufferMgr = editor.NewBufferManagerWithBuffer(buf)
+    }
+    
+    // ... rest of initialization
+}
+```
+
+### File Loading Process
+
+1. **Parse Arguments**: `os.Args[1:]` extracts file paths
+2. **Create Buffer Manager**: `createBufferManagerWithFiles()` processes paths
+3. **Load Each File**:
+   - Convert to absolute path with `filepath.Abs()`
+   - Check if file exists with `os.Stat()`
+   - If exists: Load with `editor.NewBufferFromFile()`
+   - If doesn't exist: Create empty buffer with `editor.NewBuffer("")`
+4. **Handle Errors**: Log warnings for invalid paths, continue with remaining files
+5. **Fallback**: If all files fail, use sample buffer
+
+### Helper Functions
+
+**`createBufferManagerWithFiles(filePaths []string)`**:
+- Iterates through file paths
+- Calls `openFileOrCreateEmpty()` for each
+- Returns BufferManager with first file active
+- Returns nil if all files fail
+
+**`openFileOrCreateEmpty(path string)`**:
+- Converts path to absolute path
+- Checks file existence
+- Returns Buffer with content or empty buffer
+- Preserves file path for later save
+
+### Behavior Examples
+
+```bash
+# Single file (exists)
+vem main.go
+# Result: Buffer 0 = main.go content
+
+# Multiple files
+vem file1.txt file2.go file3.md
+# Result: Buffer 0 = file1.txt (active)
+#         Buffer 1 = file2.go
+#         Buffer 2 = file3.md
+# Use :bn/:bp to switch
+
+# New file
+vem newfile.txt
+# Result: Buffer 0 = empty, path = newfile.txt
+# Save with :w creates the file
+
+# No arguments
+vem
+# Result: Buffer 0 = sample buffer text
+
+# Mixed (valid + invalid)
+vem exists.txt invalid.txt
+# Result: Buffer 0 = exists.txt
+#         Warning logged for invalid.txt
+```
+
+### Integration with Buffer System
+
+- Files become buffers immediately on startup
+- `:ls` shows all loaded files
+- `:bn` / `:bp` switches between them
+- Each buffer tracks modified state independently
+- Closing buffer with `:q` doesn't exit editor if multiple buffers exist
+
+## Help System
+
+### Architecture
+
+The help system provides comprehensive keybindings documentation via the `:help` command:
+
+```go
+// internal/appcore/help.go
+func generateHelpText() string {
+    var sb strings.Builder
+    
+    // Header
+    sb.WriteString("VEM KEYBINDINGS REFERENCE\n\n")
+    
+    // Sections
+    writeSection(&sb, "Global Keybindings", globalKeybindings)
+    writeSection(&sb, "NORMAL Mode", normalModeKeybindings)
+    writeSection(&sb, "INSERT Mode", insertModeKeybindings)
+    // ... more sections
+    
+    return sb.String()
+}
+
+func (s *appState) handleHelpCommand() {
+    helpText := generateHelpText()
+    bufIndex := s.bufferMgr.CreateBufferWithContent(helpText)
+    buf := s.bufferMgr.GetBuffer(bufIndex)
+    buf.SetReadOnly(true)
+    s.bufferMgr.SwitchToBuffer(bufIndex)
+    s.mode = modeNormal
+}
+```
+
+### Read-Only Buffer Implementation
+
+Help buffers are read-only to prevent accidental modification:
+
+**Buffer struct additions**:
+```go
+type Buffer struct {
+    readOnly bool  // New field
+    // ... existing fields
+}
+
+func (b *Buffer) SetReadOnly(ro bool) {
+    b.readOnly = ro
+}
+
+func (b *Buffer) IsReadOnly() bool {
+    return b.readOnly
+}
+```
+
+**Edit operation guards**:
+```go
+func (b *Buffer) InsertText(text string) bool {
+    if b.readOnly {
+        return false  // Silently ignore
+    }
+    // ... normal insertion logic
+}
+```
+
+All edit operations check `readOnly` flag:
+- `InsertText()` - Blocked
+- `DeleteBackward()` - Blocked
+- `DeleteForward()` - Blocked
+- `DeleteLines()` - Blocked
+- INSERT mode entry - Blocked (checked in `enterInsertMode()`)
+
+### Status Bar Indicator
+
+Read-only buffers show `[RO]` in status bar:
+
+```go
+func (s *appState) drawStatusBar(gtx layout.Context) {
+    buf := s.activeBuffer()
+    
+    var roFlag string
+    if buf.IsReadOnly() {
+        roFlag = " [RO]"
+    }
+    
+    status := fmt.Sprintf("FILE %s%s", buf.FilePath(), roFlag)
+    // ... render status
+}
+```
+
+### Help Text Structure
+
+Help text is organized into sections:
+
+1. **Global Keybindings**: Work in all modes
+2. **Pane Management**: Ctrl+S prefix sequences
+3. **NORMAL Mode**: Navigation, mode switching
+4. **INSERT Mode**: Text insertion
+5. **VISUAL Mode**: Selection operations
+6. **EXPLORER Mode**: File tree navigation
+7. **SEARCH Mode**: Search pattern building
+8. **FUZZY_FINDER Mode**: File finding
+9. **TERMINAL Mode**: Terminal interaction
+10. **Commands**: Colon commands (`:w`, `:q`, etc.)
+11. **Special Sequences**: `gg`, `G`, number prefixes
+
+### User Workflow
+
+```
+1. User types :help or :h
+2. handleCommandExecute() detects help command
+3. handleHelpCommand() called:
+   - Generate help text
+   - Create new buffer with content
+   - Set buffer as read-only
+   - Switch to help buffer
+4. Help displayed in current pane
+5. User can:
+   - Read help (scroll with j/k)
+   - Search help with /
+   - Navigate with all NORMAL mode commands
+   - Cannot edit (INSERT blocked)
+6. Close with :q or :bd
+```
+
+### Benefits
+
+- **No external files**: Help is generated programmatically
+- **Always available**: No dependency on filesystem
+- **Searchable**: Use `/` to find keybindings
+- **Safe**: Read-only prevents accidental changes
+- **Integrated**: Uses same buffer system as text files
 
 ## See Also
 
