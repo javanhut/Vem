@@ -3,59 +3,51 @@
 package terminal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 
-	"github.com/creack/pty"
+	"github.com/UserExistsError/conpty"
 )
 
 // startPTY creates ConPTY and starts shell (Windows implementation)
 func (t *Terminal) startPTY() error {
-	// creack/pty handles Windows ConPTY automatically
-	ptyFile, ttyFile, err := pty.Open()
+	// Build command line - Windows ConPTY API requires a single command line string
+	commandLine := t.shell
+	if len(t.args) > 0 {
+		// For PowerShell, join args with spaces
+		commandLine = t.shell + " " + strings.Join(t.args, " ")
+	}
+
+	// Create ConPTY with proper dimensions
+	cpty, err := conpty.Start(
+		commandLine,
+		conpty.ConPtyDimensions(t.width, t.height),
+		conpty.ConPtyWorkDir(t.workingDir),
+		conpty.ConPtyEnv(t.getEnvironment()),
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create ConPTY: %w", err)
 	}
 
-	t.pty = ptyFile
+	// Store ConPTY instance
+	t.conpty = &ConPtyWrapper{cpty}
 
-	// Set PTY size
-	if err := pty.Setsize(ptyFile, &pty.Winsize{
-		Rows: uint16(t.height),
-		Cols: uint16(t.width),
-	}); err != nil {
-		ptyFile.Close()
-		return err
-	}
-
-	// Create command
-	cmd := exec.Command(t.shell, t.args...)
-	cmd.Dir = t.workingDir
-	cmd.Env = t.getEnvironment()
-
-	// Connect to TTY
-	cmd.Stdin = ttyFile
-	cmd.Stdout = ttyFile
-	cmd.Stderr = ttyFile
-
-	// Start process
-	if err := cmd.Start(); err != nil {
-		ptyFile.Close()
-		ttyFile.Close()
-		return err
-	}
-
-	// Close TTY in parent process
-	ttyFile.Close()
-
-	t.cmd = cmd
-
-	// Wait for process in goroutine
+	// Start wait goroutine
 	go func() {
-		cmd.Wait()
-		log.Println("[TERMINAL] Shell process exited")
+		exitCode, waitErr := cpty.Wait(context.Background())
+		if waitErr != nil {
+			log.Printf("[TERMINAL] ConPTY wait error: %v", waitErr)
+		}
+		log.Printf("[TERMINAL] Shell process exited with code %d", exitCode)
+
+		// Call onExit callback if set
+		if t.onExit != nil {
+			t.onExit()
+		}
 	}()
 
 	return nil
@@ -66,10 +58,10 @@ func (t *Terminal) Resize(width, height int) error {
 	t.mu.Lock()
 	t.width = width
 	t.height = height
-	ptyFile := t.pty
+	cpty := t.conpty
 	t.mu.Unlock()
 
-	if ptyFile == nil {
+	if cpty == nil {
 		return fmt.Errorf("ConPTY not initialized")
 	}
 
@@ -78,10 +70,7 @@ func (t *Terminal) Resize(width, height int) error {
 		t.screen.Resize(width, height)
 	}
 
-	return pty.Setsize(ptyFile, &pty.Winsize{
-		Rows: uint16(height),
-		Cols: uint16(width),
-	})
+	return cpty.Resize(width, height)
 }
 
 // DefaultShell returns default shell for Windows

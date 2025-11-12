@@ -15,11 +15,20 @@ import (
 	"github.com/hinshun/vt10x"
 )
 
+// ConPtyIO is an interface for reading/writing to PTY/ConPTY
+type ConPtyIO interface {
+	Read(p []byte) (int, error)
+	Write(p []byte) (int, error)
+	Close() error
+	Resize(width, height int) error
+}
+
 // Terminal represents a running terminal emulator session
 type Terminal struct {
 	// PTY and process
-	pty *os.File  // PTY master file descriptor
-	cmd *exec.Cmd // Shell process
+	pty    *os.File  // PTY master file descriptor (Unix)
+	conpty ConPtyIO  // ConPTY instance (Windows)
+	cmd    *exec.Cmd // Shell process
 
 	// VT100 emulator
 	vt vt10x.Terminal // Terminal interface (VT100)
@@ -159,13 +168,18 @@ func (t *Terminal) readLoop() {
 		default:
 		}
 
-		// Set read timeout to allow checking context
-		if t.pty != nil {
-			t.pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		}
+		// Read from PTY or ConPTY
+		var n int
+		var err error
 
-		// Read from PTY
-		n, err := t.pty.Read(buf)
+		if t.conpty != nil {
+			// Windows: read from ConPTY
+			n, err = t.conpty.Read(buf)
+		} else if t.pty != nil {
+			// Unix: read from PTY file with timeout
+			t.pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			n, err = t.pty.Read(buf)
+		}
 
 		if n > 0 {
 			// Write to vt10x parser - it will parse ANSI sequences and update its internal state
@@ -214,7 +228,15 @@ func (t *Terminal) writeLoop() {
 		case <-t.ctx.Done():
 			return
 		case data := <-t.inputChan:
-			if t.pty != nil {
+			if t.conpty != nil {
+				// Windows: write to ConPTY
+				if _, err := t.conpty.Write(data); err != nil {
+					log.Printf("[TERMINAL] Write error: %v", err)
+					t.setError(err)
+					return
+				}
+			} else if t.pty != nil {
+				// Unix: write to PTY file
 				if _, err := t.pty.Write(data); err != nil {
 					log.Printf("[TERMINAL] Write error: %v", err)
 					t.setError(err)
@@ -258,6 +280,11 @@ func (t *Terminal) Close() error {
 
 	// Cancel context to stop goroutines
 	t.cancel()
+
+	// Close ConPTY (Windows)
+	if t.conpty != nil {
+		t.conpty.Close()
+	}
 
 	// Close PTY (will cause shell to exit)
 	if t.pty != nil {
