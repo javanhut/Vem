@@ -516,23 +516,27 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.status = "Ready"
 			}
 		case key.Event:
-			// Track Ctrl key press/release
+			// Track Ctrl key press ONLY (ignore release - it comes too early on Windows)
 			if e.Name == key.NameCtrl {
-				s.ctrlPressed = (e.State == key.Press)
 				if e.State == key.Press {
+					s.ctrlPressed = true
 					log.Printf("⌨ [CTRL] Pressed")
 				} else {
-					log.Printf("⌨ [CTRL] Released")
+					// WINDOWS FIX: Don't reset on Release - Windows sends Release before character key!
+					// The modifier will be reset after the character key is processed (see lines 572-579)
+					log.Printf("⌨ [CTRL] Released (ignoring - will reset after character key)")
 				}
 				continue
 			}
-			// Track Shift key press/release
+			// Track Shift key press ONLY (ignore release - it comes too early on Windows)
 			if e.Name == key.NameShift {
-				s.shiftPressed = (e.State == key.Press)
 				if e.State == key.Press {
-					log.Printf("⌨ [SHIFT] Pressed (waiting for character key...)")
+					s.shiftPressed = true
+					log.Printf("⌨ [SHIFT] Pressed")
 				} else {
-					log.Printf("⌨ [SHIFT] Released")
+					// WINDOWS FIX: Don't reset on Release - Windows sends Release before character key!
+					// The modifier will be reset after the character key is processed (see lines 572-579)
+					log.Printf("⌨ [SHIFT] Released (ignoring - will reset after character key)")
 				}
 				continue
 			}
@@ -540,6 +544,20 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			if e.Name == key.NameAlt {
 				log.Printf("⌨ [ALT] %v", e.State)
 				continue
+			}
+
+			// WINDOWS FIX: On Windows, Gio doesn't send modifier Press events for Ctrl/Shift.
+			// Instead, ev.Modifiers contains the modifier state when character keys arrive.
+			// Sync our tracked state from ev.Modifiers to support both platforms.
+			log.Printf("🔍 [DEBUG] Before sync: ctrlPressed=%v shiftPressed=%v | ev.Modifiers has Ctrl=%v Shift=%v",
+				s.ctrlPressed, s.shiftPressed, e.Modifiers.Contain(key.ModCtrl), e.Modifiers.Contain(key.ModShift))
+
+			// Sync modifier state from event (supports Windows where Press events don't arrive)
+			if e.Modifiers.Contain(key.ModCtrl) {
+				s.ctrlPressed = true
+			}
+			if e.Modifiers.Contain(key.ModShift) {
+				s.shiftPressed = true
 			}
 
 			// Save modifier state before handling key
