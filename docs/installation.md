@@ -38,27 +38,27 @@ Vem requires several system libraries for GUI rendering and input handling on Li
 
 #### Debian/Ubuntu
 ```bash
-sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
+sudo apt-get install libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols
 ```
 
 #### Fedora/RHEL/CentOS
 ```bash
-sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
+sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libxcb-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel libXrandr-devel libXinerama-devel libXi-devel mesa-libGL-devel wayland-protocols-devel
 ```
 
 #### Arch Linux/Manjaro
 ```bash
-sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 libxcb mesa libxcursor libxfixes
 ```
 
 #### openSUSE
 ```bash
-sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+sudo zypper install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libxcb-devel Mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel
 ```
 
 #### Alpine Linux
 ```bash
-sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev libxkbcommon-x11 wayland-dev wayland-protocols libx11-dev libxcb-dev mesa-dev libxcursor-dev libxfixes-dev
 ```
 
 **What these libraries do:**
@@ -143,19 +143,19 @@ If you prefer not to use Make, you can build manually:
 
 ```bash
 # Debian/Ubuntu
-sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
+sudo apt-get install libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols
 
 # Fedora/RHEL/CentOS
-sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
+sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libxcb-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel libXrandr-devel libXinerama-devel libXi-devel mesa-libGL-devel wayland-protocols-devel
 
 # Arch/Manjaro
-sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 libxcb mesa libxcursor libxfixes
 
 # openSUSE
-sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+sudo zypper install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libxcb-devel Mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel
 
 # Alpine Linux
-sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev libxkbcommon-x11 wayland-dev wayland-protocols libx11-dev libxcb-dev mesa-dev libxcursor-dev libxfixes-dev
 ```
 
 #### 2. Build the Binary
@@ -222,19 +222,19 @@ If the automatic installation fails:
 ```bash
 # Try installing manually based on your distribution
 # Debian/Ubuntu
-sudo apt-get update && sudo apt-get install libvulkan-dev libxkbcommon-dev libwayland-dev
+sudo apt-get update && sudo apt-get install libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols
 
 # Fedora/RHEL/CentOS
-sudo dnf install vulkan-devel libxkbcommon-devel wayland-devel
+sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libxcb-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel libXrandr-devel libXinerama-devel libXi-devel mesa-libGL-devel wayland-protocols-devel
 
 # Arch/Manjaro
-sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon wayland
+sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 libxcb mesa libxcursor libxfixes
 
 # openSUSE
-sudo zypper install vulkan-devel libxkbcommon-devel wayland-devel
+sudo zypper install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libxcb-devel Mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel
 
 # Alpine Linux
-sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
+sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev libxkbcommon-x11 wayland-dev wayland-protocols libx11-dev libxcb-dev mesa-dev libxcursor-dev libxfixes-dev
 ```
 
 Then retry:
@@ -284,7 +284,13 @@ If you're using a distribution with a different package manager, install the req
 
 - **Vulkan development files**: `libvulkan-dev`, `vulkan-devel`, or `vulkan-headers`
 - **xkbcommon development files**: `libxkbcommon-dev`, `libxkbcommon-devel`, or `libxkbcommon`
+- **xkbcommon-x11 development files**: `libxkbcommon-x11-dev`, `libxkbcommon-x11-devel`, or `libxkbcommon-x11`
 - **Wayland client development files**: `libwayland-dev`, `wayland-devel`, or `wayland`
+- **X11 development files**: `libx11-dev`, `libX11-devel`, or `libx11`
+- **X11-XCB development files**: `libx11-xcb-dev`, `libxcb-devel`, or `libxcb`
+- **EGL development files**: `libegl1-mesa-dev`, `mesa-libEGL-devel`, or `mesa-dev`
+- **Xcursor development files**: `libxcursor-dev`, `libXcursor-devel`, or `libxcursor`
+- **Xfixes development files**: `libxfixes-dev`, `libXfixes-devel`, or `libxfixes`
 
 Then build:
 ```bash
