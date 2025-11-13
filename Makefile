@@ -1,7 +1,7 @@
 # Makefile for ProjectVem
 # Cross-platform build, install, and dependency management
 
-.PHONY: help build install uninstall clean test check-deps check-deps-linux check-deps-windows check-deps-darwin check-go check-vulkan check-xkbcommon check-xkbcommon-x11 check-wayland check-wayland-cursor check-x11 check-egl check-xcursor check-xfixes install-linux-deps build-windows build-linux build-darwin
+.PHONY: help build install uninstall clean test check-deps check-deps-linux check-deps-windows check-deps-darwin check-go check-vulkan check-xkbcommon check-xkbcommon-x11 check-wayland check-wayland-cursor check-x11 check-x11-xcb check-egl check-xcursor check-xfixes install-linux-deps build-windows build-linux build-darwin
 
 # Detect OS and Architecture
 GOOS := $(shell go env GOOS 2>/dev/null)
@@ -160,6 +160,19 @@ else
 	@echo "libxfixes check not required on $(GOOS)"
 endif
 
+check-x11-xcb: ## Check if x11-xcb is installed (Linux only)
+ifeq ($(GOOS),linux)
+	@echo "Checking for x11-xcb..."
+	@if pkg-config --exists x11-xcb 2>/dev/null; then \
+		echo "✓ x11-xcb found."; \
+	else \
+		echo "✗ x11-xcb not found."; \
+		exit 1; \
+	fi
+else
+	@echo "x11-xcb check not required on $(GOOS)"
+endif
+
 check-wayland-cursor: ## Check if wayland-cursor is installed (Linux only)
 ifeq ($(GOOS),linux)
 	@echo "Checking for wayland-cursor..."
@@ -258,6 +271,7 @@ ifeq ($(GOOS),linux)
 	if ! $(MAKE) check-wayland 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-wayland-cursor 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-x11 2>/dev/null; then MISSING=1; fi; \
+	if ! $(MAKE) check-x11-xcb 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-egl 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-xcursor 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-xfixes 2>/dev/null; then MISSING=1; fi; \
