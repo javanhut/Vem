@@ -213,7 +213,7 @@ ifeq ($(GOOS),linux)
 		sudo apt-get update && sudo apt-get install -y libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols; \
 	elif command -v dnf >/dev/null 2>&1; then \
 		echo "Using dnf (Fedora/RHEL/CentOS)..."; \
-		sudo dnf install -y vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel; \
+		sudo dnf install -y vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel libXrandr-devel libXinerama-devel libXi-devel mesa-libGL-devel wayland-protocols-devel; \
 	elif command -v pacman >/dev/null 2>&1; then \
 		echo "Using pacman (Arch/Manjaro)..."; \
 		sudo pacman -S --noconfirm vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 mesa libxcursor libxfixes; \
@@ -231,7 +231,7 @@ ifeq ($(GOOS),linux)
 		echo "  sudo apt-get install libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols"; \
 		echo ""; \
 		echo "Fedora/RHEL/CentOS:"; \
-		echo "  sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel"; \
+		echo "  sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel libXrandr-devel libXinerama-devel libXi-devel mesa-libGL-devel wayland-protocols-devel"; \
 		echo ""; \
 		echo "Arch/Manjaro:"; \
 		echo "  sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 mesa libxcursor libxfixes"; \
