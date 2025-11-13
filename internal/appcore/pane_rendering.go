@@ -101,6 +101,12 @@ func (s *appState) drawSinglePane(gtx layout.Context, pane *panes.Pane) layout.D
 		return layout.Dimensions{}
 	}
 
+	// Debug: Log pane geometry
+	if s.mode == modeInsert && pane.Active {
+		fmt.Printf("[PANE_GEOMETRY] Pane=%s Active=%v Constraints: Min=%v Max=%v IsTerminal=%v\n",
+			pane.ID, pane.Active, gtx.Constraints.Min, gtx.Constraints.Max, buf.IsTerminal())
+	}
+
 	// Determine background color based on active state
 	bgColor := inactivePaneBg
 	if pane.Active {
@@ -117,27 +123,48 @@ func (s *appState) drawSinglePane(gtx layout.Context, pane *panes.Pane) layout.D
 		return s.drawTerminalPane(gtx, pane, buf)
 	}
 
-	// Temporarily switch active pane for rendering
-	oldActivePane := s.paneManager.ActivePane()
+	// For non-active panes, we need to render with the correct buffer context
+	// but without actually changing the global active pane state (which would
+	// interfere with input handling).
+	//
+	// We temporarily swap the viewport state so drawBuffer renders the right view.
 	wasActive := pane.Active
-
-	// If this is not the active pane, temporarily make it active for cursor rendering
-	// but restore it after
 	if !wasActive {
-		pane.SetActive(true)
-		s.paneManager.SetActivePane(pane)
+		// Save current viewport state
+		oldViewportTop := s.viewportTopLine
+
+		// Use this pane's viewport
+		s.viewportTopLine = pane.ViewportTop
+
+		// Temporarily override activeBuffer to return this pane's buffer
+		// by quietly swapping the pane manager's active pane ONLY for rendering
+		oldActivePane := s.paneManager.ActivePane()
+		s.paneManager.SetActivePaneQuiet(pane)
+
+		// Draw buffer content
+		dims := s.drawBuffer(gtx)
+
+		// Restore original active pane (quietly, without triggering side effects)
+		s.paneManager.SetActivePaneQuiet(oldActivePane)
+
+		// Restore viewport state
+		s.viewportTopLine = oldViewportTop
+
+		return dims
 	}
 
-	// Draw buffer content using existing drawBuffer logic
+	// For active pane, sync viewport state between pane and global state
+	// This ensures that each pane maintains its own scroll position
+	oldViewportTop := s.viewportTopLine
+	s.viewportTopLine = pane.ViewportTop // Sync FROM pane TO global for rendering
+
 	dims := s.drawBuffer(gtx)
 
-	// Restore active pane
-	if !wasActive {
-		pane.SetActive(false)
-		if oldActivePane != nil {
-			s.paneManager.SetActivePane(oldActivePane)
-		}
-	}
+	// Save any viewport changes back to the pane
+	pane.SetViewportTop(s.viewportTopLine) // Sync back FROM global TO pane
+
+	// Restore previous global viewport state
+	s.viewportTopLine = oldViewportTop
 
 	return dims
 }

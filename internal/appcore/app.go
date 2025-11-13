@@ -677,10 +677,28 @@ func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
 }
 
 func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
-	lines := s.activeBuffer().LineCount()
-	cursorLine := s.activeBuffer().Cursor().Line
+	buf := s.activeBuffer()
+	lines := buf.LineCount()
+	cursorLine := buf.Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
-	cursorCol := s.activeBuffer().Cursor().Col
+	cursorCol := buf.Cursor().Col
+
+	// Debug: Log what we're about to render (only log occasionally to avoid spam)
+	if s.mode == modeInsert && lines > 0 {
+		activePane := s.paneManager.ActivePane()
+		paneID := "unknown"
+		bufIdx := -1
+		if activePane != nil {
+			paneID = activePane.ID
+			bufIdx = activePane.BufferIndex
+		}
+		firstLine := ""
+		if lines > 0 {
+			firstLine = buf.Line(0)
+		}
+		log.Printf("[RENDER_DEBUG] Drawing buffer | Pane=%s BufIdx=%d Lines=%d ViewportTop=%d FirstLine=%q",
+			paneID, bufIdx, lines, s.viewportTopLine, firstLine)
+	}
 
 	// Calculate approximate lines per page for viewport scrolling
 	// Use a rough estimate: line height ~20dp, inset ~16dp top+bottom
@@ -717,11 +735,23 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 		Bottom: unit.Dp(8),
 		Left:   unit.Dp(16),
 	}
-	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+
+	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
 			return s.drawBufferLine(gtx, index, cursorLine, cursorCol, selStart, selEnd, hasSel)
 		})
 	})
+
+	// Debug: Log rendering result
+	if s.mode == modeInsert && lines > 0 {
+		firstLine := ""
+		if lines > 0 {
+			firstLine = s.activeBuffer().Line(0)
+		}
+		log.Printf("[RENDER_RESULT] RenderedLines=%d Dimensions=%v FirstLine=%q", lines, dims.Size, firstLine)
+	}
+
+	return dims
 }
 
 // drawBufferLine renders a single line with syntax highlighting.
@@ -733,6 +763,14 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	// Get syntax highlighter and tokenize the line
 	highlighter := s.getOrCreateHighlighter()
 	tokens := highlighter.HighlightLine(index, lineText)
+
+	// Debug: Log token generation for first line in INSERT mode
+	if s.mode == modeInsert && index == 0 && len(lineText) > 0 {
+		log.Printf("[TOKEN_DEBUG] Line=%d Text=%q TokenCount=%d", index, lineText, len(tokens))
+		if len(tokens) > 0 {
+			log.Printf("[TOKEN_DEBUG] FirstToken: Text=%q Type=%v", tokens[0].Text, tokens[0].Type)
+		}
+	}
 
 	// Expand tabs in gutter
 	gutterExpanded := expandTabs(gutter, 4)
@@ -1520,28 +1558,44 @@ func (s *appState) enterInsertMode() {
 		return
 	}
 
-	// Check if buffer is a terminal - enter TERMINAL mode instead
+	// Get the buffer for the currently active pane
 	buf := s.activeBuffer()
+
+	// Debug: Log pane and buffer information
+	if s.paneManager != nil {
+		activePane := s.paneManager.ActivePane()
+		if activePane != nil {
+			log.Printf("[INSERT_MODE] Active pane ID=%s, BufferIndex=%d, IsTerminal=%v",
+				activePane.ID, activePane.BufferIndex, buf != nil && buf.IsTerminal())
+		} else {
+			log.Printf("[INSERT_MODE] Active pane is nil")
+		}
+	}
+
+	// Check if buffer is a terminal - enter TERMINAL mode instead
 	if buf != nil && buf.IsTerminal() {
 		s.ctrlPressed = false
 		s.shiftPressed = false
 		s.mode = modeTerminal
 		s.status = "TERMINAL INPUT (Esc to navigate)"
-		log.Printf("[TERMINAL] Entered terminal input mode")
+		log.Printf("[TERMINAL] Entered terminal input mode for buffer")
 		return
 	}
 
 	// Check if buffer is read-only
 	if buf != nil && buf.IsReadOnly() {
 		s.status = "Buffer is read-only (cannot edit)"
+		log.Printf("[INSERT_MODE] Cannot enter insert mode - buffer is read-only")
 		return
 	}
 
+	// Enter INSERT mode for normal text buffers
 	s.mode = modeInsert
 	s.skipNextEdit = true
 	s.resetCount()
 	s.status = "Switched to INSERT"
 	s.caretReset = true
+	log.Printf("[INSERT_MODE] Entered INSERT mode successfully")
 }
 
 func (s *appState) getCharAtCursor(lineIdx, col int) string {
@@ -2889,6 +2943,17 @@ func (s *appState) insertText(text string) {
 	}
 	buf := s.activeBuffer()
 	buf.InsertText(text)
+
+	// Debug: Log buffer content and cursor position after insertion
+	cursor := buf.Cursor()
+	lineCount := buf.LineCount()
+	currentLine := ""
+	if lineCount > 0 && cursor.Line < lineCount {
+		currentLine = buf.Line(cursor.Line)
+	}
+	log.Printf("[INSERT_DEBUG] Inserted %q | Cursor: Line=%d Col=%d | LineCount=%d | CurrentLine=%q",
+		text, cursor.Line, cursor.Col, lineCount, currentLine)
+
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
 }
 

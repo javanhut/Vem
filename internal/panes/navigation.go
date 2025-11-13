@@ -1,6 +1,9 @@
 package panes
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // Direction represents a navigation direction.
 type Direction int
@@ -41,23 +44,30 @@ func (pm *PaneManager) NavigateDirection(dir Direction) bool {
 	}
 
 	var nextIdx int
+	dirName := "unknown"
 	switch dir {
 	case DirLeft:
+		dirName = "left"
 		// Move to previous pane (wraps around)
 		nextIdx = (currentIdx - 1 + len(allPanes)) % len(allPanes)
 	case DirRight:
+		dirName = "right"
 		// Move to next pane (wraps around)
 		nextIdx = (currentIdx + 1) % len(allPanes)
 	case DirUp:
+		dirName = "up"
 		// Move to previous pane (wraps around)
 		nextIdx = (currentIdx - 1 + len(allPanes)) % len(allPanes)
 	case DirDown:
+		dirName = "down"
 		// Move to next pane (wraps around)
 		nextIdx = (currentIdx + 1) % len(allPanes)
 	default:
 		return false
 	}
 
+	fmt.Printf("[PANE_NAV] Navigating %s from pane %d to pane %d (total panes: %d)\n",
+		dirName, currentIdx, nextIdx, len(allPanes))
 	pm.SetActivePane(allPanes[nextIdx])
 	return true
 }
