@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -150,14 +149,12 @@ func (t *Terminal) Start() error {
 	go t.readLoop()
 	go t.writeLoop()
 
-	log.Printf("[TERMINAL] Started: %dx%d shell=%s", t.width, t.height, t.shell)
 	return nil
 }
 
 // readLoop reads from PTY and feeds to emulator
 func (t *Terminal) readLoop() {
 	defer t.wg.Done()
-	defer log.Println("[TERMINAL] Read loop exited")
 
 	buf := make([]byte, 4096)
 
@@ -184,7 +181,7 @@ func (t *Terminal) readLoop() {
 		if n > 0 {
 			// Write to vt10x parser - it will parse ANSI sequences and update its internal state
 			if _, writeErr := t.vt.Write(buf[:n]); writeErr != nil {
-				log.Printf("[TERMINAL] vt10x write error: %v", writeErr)
+				// Silently handle vt10x write errors
 			}
 
 			// Update our screen buffer from vt10x state
@@ -204,14 +201,12 @@ func (t *Terminal) readLoop() {
 
 		if err != nil {
 			if err == io.EOF {
-				log.Println("[TERMINAL] PTY closed (EOF)")
 				return
 			}
 			// Ignore timeout errors
 			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
 				continue
 			}
-			log.Printf("[TERMINAL] Read error: %v", err)
 			t.setError(err)
 			return
 		}
@@ -221,7 +216,6 @@ func (t *Terminal) readLoop() {
 // writeLoop writes input to PTY
 func (t *Terminal) writeLoop() {
 	defer t.wg.Done()
-	defer log.Println("[TERMINAL] Write loop exited")
 
 	for {
 		select {
@@ -231,14 +225,12 @@ func (t *Terminal) writeLoop() {
 			if t.conpty != nil {
 				// Windows: write to ConPTY
 				if _, err := t.conpty.Write(data); err != nil {
-					log.Printf("[TERMINAL] Write error: %v", err)
 					t.setError(err)
 					return
 				}
 			} else if t.pty != nil {
 				// Unix: write to PTY file
 				if _, err := t.pty.Write(data); err != nil {
-					log.Printf("[TERMINAL] Write error: %v", err)
 					t.setError(err)
 					return
 				}
@@ -268,8 +260,6 @@ func (t *Terminal) GetScreen() *ScreenBuffer {
 
 // Close stops the terminal
 func (t *Terminal) Close() error {
-	log.Println("[TERMINAL] Close() called")
-
 	t.mu.Lock()
 	if !t.running {
 		t.mu.Unlock()
@@ -305,9 +295,7 @@ func (t *Terminal) Close() error {
 
 	select {
 	case <-done:
-		log.Println("[TERMINAL] Cleanup complete")
 	case <-time.After(2 * time.Second):
-		log.Println("[TERMINAL] Cleanup timeout")
 	}
 
 	return nil

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 
 	gioapp "gioui.org/app"
@@ -19,7 +18,7 @@ func main() {
 		)
 		filePaths := os.Args[1:]
 		if err := appcore.Run(w, filePaths); err != nil {
-			log.Printf("app exited: %v", err)
+			// Silently handle app exit errors
 		}
 		os.Exit(0)
 	}()

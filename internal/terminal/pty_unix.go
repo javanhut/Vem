@@ -4,7 +4,6 @@ package terminal
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"syscall"
@@ -60,7 +59,6 @@ func (t *Terminal) startPTY() error {
 	// Wait for process in goroutine
 	go func() {
 		cmd.Wait()
-		log.Println("[TERMINAL] Shell process exited")
 	}()
 
 	return nil

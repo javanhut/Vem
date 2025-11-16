@@ -3,7 +3,6 @@
 package appcore
 
 import (
-	"log"
 	"time"
 
 	"gioui.org/io/key"
@@ -28,11 +27,9 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 		if e.State == key.Release {
 			// Mark when Ctrl was released - a character key is coming soon!
 			s.ctrlReleaseTime = time.Now()
-			log.Printf("⌨ [CTRL] Released at %v (Windows: expecting character key soon)", s.ctrlReleaseTime)
 		} else {
 			// Press events don't arrive on Windows, but handle it just in case
 			s.ctrlPressed = true
-			log.Printf("⌨ [CTRL] Pressed (unexpected on Windows!)")
 		}
 		return true
 	}
@@ -40,16 +37,13 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 	if e.Name == key.NameShift {
 		if e.State == key.Release {
 			s.shiftReleaseTime = time.Now()
-			log.Printf("⌨ [SHIFT] Released at %v (Windows: expecting character key soon)", s.shiftReleaseTime)
 		} else {
 			s.shiftPressed = true
-			log.Printf("⌨ [SHIFT] Pressed (unexpected on Windows!)")
 		}
 		return true
 	}
 
 	if e.Name == key.NameAlt {
-		log.Printf("⌨ [ALT] %v", e.State)
 		return true
 	}
 
@@ -66,23 +60,19 @@ func (s *appState) syncModifierState(e key.Event) {
 	ctrlWindow := now.Sub(s.ctrlReleaseTime)
 	if ctrlWindow < 200*time.Millisecond && ctrlWindow >= 0 {
 		s.ctrlPressed = true
-		log.Printf("🔍 [WINDOWS-FIX] Ctrl detected via temporal window (released %v ago)", ctrlWindow)
 	}
 
 	// Check if Shift was released within last 200ms
 	shiftWindow := now.Sub(s.shiftReleaseTime)
 	if shiftWindow < 200*time.Millisecond && shiftWindow >= 0 {
 		s.shiftPressed = true
-		log.Printf("🔍 [WINDOWS-FIX] Shift detected via temporal window (released %v ago)", shiftWindow)
 	}
 
 	// Also check ev.Modifiers as a fallback (usually empty on Windows, but try anyway)
 	if e.Modifiers.Contain(key.ModCtrl) {
 		s.ctrlPressed = true
-		log.Printf("🔍 [WINDOWS-FIX] Ctrl detected via ev.Modifiers (rare!)")
 	}
 	if e.Modifiers.Contain(key.ModShift) {
 		s.shiftPressed = true
-		log.Printf("🔍 [WINDOWS-FIX] Shift detected via ev.Modifiers (rare!)")
 	}
 }

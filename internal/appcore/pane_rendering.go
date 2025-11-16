@@ -1,7 +1,6 @@
 package appcore
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 
@@ -24,8 +23,6 @@ func (s *appState) drawPanes(gtx layout.Context) layout.Dimensions {
 		return s.drawBuffer(gtx)
 	}
 
-	paneCount := s.paneManager.PaneCount()
-
 	// If zoomed, just draw the zoomed pane
 	if s.paneManager.IsZoomed() {
 		zoomedPane := s.paneManager.ZoomedPane()
@@ -37,12 +34,7 @@ func (s *appState) drawPanes(gtx layout.Context) layout.Dimensions {
 	// Render the pane tree
 	root := s.paneManager.Root()
 	if root == nil {
-		fmt.Printf("[PANE_RENDER] WARNING: Root is nil, paneCount=%d\n", paneCount)
 		return s.drawBuffer(gtx)
-	}
-
-	if paneCount > 1 {
-		fmt.Printf("[PANE_RENDER] Rendering %d panes\n", paneCount)
 	}
 
 	return s.renderPaneNode(gtx, root)
@@ -99,12 +91,6 @@ func (s *appState) drawSinglePane(gtx layout.Context, pane *panes.Pane) layout.D
 	buf := s.bufferMgr.GetBuffer(pane.BufferIndex)
 	if buf == nil {
 		return layout.Dimensions{}
-	}
-
-	// Debug: Log pane geometry
-	if s.mode == modeInsert && pane.Active {
-		fmt.Printf("[PANE_GEOMETRY] Pane=%s Active=%v Constraints: Min=%v Max=%v IsTerminal=%v\n",
-			pane.ID, pane.Active, gtx.Constraints.Min, gtx.Constraints.Max, buf.IsTerminal())
 	}
 
 	// Determine background color based on active state

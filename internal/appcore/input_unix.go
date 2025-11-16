@@ -3,8 +3,6 @@
 package appcore
 
 import (
-	"log"
-
 	"gioui.org/io/key"
 )
 
@@ -14,26 +12,15 @@ import (
 func (s *appState) handleModifierEvent(e key.Event) bool {
 	if e.Name == key.NameCtrl {
 		s.ctrlPressed = (e.State == key.Press)
-		if e.State == key.Press {
-			log.Printf("⌨ [CTRL] Pressed")
-		} else {
-			log.Printf("⌨ [CTRL] Released")
-		}
 		return true
 	}
 
 	if e.Name == key.NameShift {
 		s.shiftPressed = (e.State == key.Press)
-		if e.State == key.Press {
-			log.Printf("⌨ [SHIFT] Pressed")
-		} else {
-			log.Printf("⌨ [SHIFT] Released")
-		}
 		return true
 	}
 
 	if e.Name == key.NameAlt {
-		log.Printf("⌨ [ALT] %v", e.State)
 		return true
 	}
 
@@ -48,10 +35,8 @@ func (s *appState) syncModifierState(e key.Event) {
 	// Use it as a fallback to catch any missed Press events
 	if e.Modifiers.Contain(key.ModCtrl) && !s.ctrlPressed {
 		s.ctrlPressed = true
-		log.Printf("🔍 [UNIX-SYNC] Ctrl detected via ev.Modifiers (missed Press event)")
 	}
 	if e.Modifiers.Contain(key.ModShift) && !s.shiftPressed {
 		s.shiftPressed = true
-		log.Printf("🔍 [UNIX-SYNC] Shift detected via ev.Modifiers (missed Press event)")
 	}
 }

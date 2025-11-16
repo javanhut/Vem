@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -205,16 +204,13 @@ func (s *appState) run(w *app.Window) error {
 
 // cleanup performs shutdown tasks, including closing all terminals
 func (s *appState) cleanup() {
-	log.Printf("[CLEANUP] Cleaning up terminals...")
-	for bufIdx, term := range s.terminals {
+	for _, term := range s.terminals {
 		if term != nil {
-			log.Printf("[CLEANUP] Closing terminal for buffer %d", bufIdx)
 			if err := term.Close(); err != nil {
-				log.Printf("[CLEANUP] Error closing terminal %d: %v", bufIdx, err)
+				// Silently handle terminal close errors
 			}
 		}
 	}
-	log.Printf("[CLEANUP] Cleanup complete")
 }
 
 // handleWindowResize resizes all terminals when the window size changes
@@ -235,10 +231,10 @@ func (s *appState) handleWindowResize(size image.Point) {
 			rows = 6
 		}
 	}
-	for bufIdx, term := range s.terminals {
+	for _, term := range s.terminals {
 		if term != nil {
 			if err := term.Resize(rows, cols); err != nil {
-				log.Printf("[TERMINAL] Error resizing terminal %d: %v", bufIdx, err)
+				// Silently handle terminal resize errors
 			}
 		}
 	}
@@ -250,13 +246,11 @@ func newAppState(filePaths []string) *appState {
 	// Try to load JetBrains Mono Nerd Font, fall back to gofont if it fails
 	customFonts, err := fonts.Collection()
 	if err != nil {
-		log.Printf("Warning: Failed to load JetBrains Mono Nerd Font, using default: %v", err)
 		theme.Shaper = text.NewShaper(
 			text.NoSystemFonts(),
 			text.WithCollection(gofont.Collection()),
 		)
 	} else {
-		log.Printf("Loaded JetBrains Mono Nerd Font successfully")
 		theme.Shaper = text.NewShaper(
 			text.NoSystemFonts(),
 			text.WithCollection(customFonts),
@@ -328,7 +322,6 @@ func createBufferManagerWithFiles(filePaths []string) *editor.BufferManager {
 	for _, path := range filePaths {
 		buf, err := openFileOrCreateEmpty(path)
 		if err != nil {
-			log.Printf("Warning: Failed to open file %s: %v", path, err)
 			continue
 		}
 
@@ -575,7 +568,6 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			if s.mode == modeTerminal {
 				if s.skipNextTerminalEdit {
 					s.skipNextTerminalEdit = false
-					log.Printf("[TERMINAL] Skipped EditEvent %q (from Ctrl+` keybinding)", e.Text)
 					continue
 				}
 				s.handleTerminalEdit(e.Text)
@@ -602,30 +594,24 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			case modeInsert:
 				if s.skipNextEdit {
 					s.skipNextEdit = false
-					log.Printf("✓ [FIX_ACTIVE] Skipped EditEvent %q (already handled by KeyEvent)", e.Text)
 					continue
 				}
 				// Platform didn't send KeyEvent, only EditEvent - use it
-				log.Printf("⚠ [PLATFORM_QUIRK] EditEvent %q arrived without KeyEvent (platform limitation)", e.Text)
 				s.insertText(e.Text)
 				// Reset modifiers after EditEvent insertion
 				if s.shiftPressed {
-					log.Printf("⚠ [PLATFORM_QUIRK] Resetting Shift after EditEvent")
 					s.shiftPressed = false
 				}
 				if s.ctrlPressed {
-					log.Printf("⚠ [PLATFORM_QUIRK] Resetting Ctrl after EditEvent")
 					s.ctrlPressed = false
 				}
 			case modeCommand:
 				s.appendCommandText(e.Text)
 				// Reset modifiers after text insertion to prevent sticking
 				if s.shiftPressed {
-					log.Printf("[EDIT_RESET] Resetting Shift after command text=%q", e.Text)
 					s.shiftPressed = false
 				}
 				if s.ctrlPressed {
-					log.Printf("[EDIT_RESET] Resetting Ctrl after command text=%q", e.Text)
 					s.ctrlPressed = false
 				}
 			case modeSearch:
@@ -636,11 +622,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.appendSearchText(e.Text)
 				// Reset modifiers after text insertion to prevent sticking
 				if s.shiftPressed {
-					log.Printf("[EDIT_RESET] Resetting Shift after search text=%q", e.Text)
 					s.shiftPressed = false
 				}
 				if s.ctrlPressed {
-					log.Printf("[EDIT_RESET] Resetting Ctrl after search text=%q", e.Text)
 					s.ctrlPressed = false
 				}
 			case modeFuzzyFinder:
@@ -651,11 +635,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.appendFuzzyInput(e.Text)
 				// Reset modifiers after text insertion to prevent sticking
 				if s.shiftPressed {
-					log.Printf("[EDIT_RESET] Resetting Shift after fuzzy text=%q", e.Text)
 					s.shiftPressed = false
 				}
 				if s.ctrlPressed {
-					log.Printf("[EDIT_RESET] Resetting Ctrl after fuzzy text=%q", e.Text)
 					s.ctrlPressed = false
 				}
 			}
@@ -682,23 +664,6 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 	cursorLine := buf.Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
 	cursorCol := buf.Cursor().Col
-
-	// Debug: Log what we're about to render (only log occasionally to avoid spam)
-	if s.mode == modeInsert && lines > 0 {
-		activePane := s.paneManager.ActivePane()
-		paneID := "unknown"
-		bufIdx := -1
-		if activePane != nil {
-			paneID = activePane.ID
-			bufIdx = activePane.BufferIndex
-		}
-		firstLine := ""
-		if lines > 0 {
-			firstLine = buf.Line(0)
-		}
-		log.Printf("[RENDER_DEBUG] Drawing buffer | Pane=%s BufIdx=%d Lines=%d ViewportTop=%d FirstLine=%q",
-			paneID, bufIdx, lines, s.viewportTopLine, firstLine)
-	}
 
 	// Calculate approximate lines per page for viewport scrolling
 	// Use a rough estimate: line height ~20dp, inset ~16dp top+bottom
@@ -742,15 +707,6 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 		})
 	})
 
-	// Debug: Log rendering result
-	if s.mode == modeInsert && lines > 0 {
-		firstLine := ""
-		if lines > 0 {
-			firstLine = s.activeBuffer().Line(0)
-		}
-		log.Printf("[RENDER_RESULT] RenderedLines=%d Dimensions=%v FirstLine=%q", lines, dims.Size, firstLine)
-	}
-
 	return dims
 }
 
@@ -763,14 +719,6 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	// Get syntax highlighter and tokenize the line
 	highlighter := s.getOrCreateHighlighter()
 	tokens := highlighter.HighlightLine(index, lineText)
-
-	// Debug: Log token generation for first line in INSERT mode
-	if s.mode == modeInsert && index == 0 && len(lineText) > 0 {
-		log.Printf("[TOKEN_DEBUG] Line=%d Text=%q TokenCount=%d", index, lineText, len(tokens))
-		if len(tokens) > 0 {
-			log.Printf("[TOKEN_DEBUG] FirstToken: Text=%q Type=%v", tokens[0].Text, tokens[0].Type)
-		}
-	}
 
 	// Expand tabs in gutter
 	gutterExpanded := expandTabs(gutter, 4)
@@ -1307,16 +1255,10 @@ func (s *appState) handleKey(ev key.Event) {
 		return
 	}
 
-	// Debug logging
-	modStr := s.formatModifiers(ev.Modifiers)
-	log.Printf("[KEY] Key=%q Modifiers=%s Mode=%s ExplorerVisible=%v ExplorerFocused=%v",
-		ev.Name, modStr, s.mode, s.explorerVisible, s.explorerFocused)
-
 	// Phase 1: Try mode-specific keybindings first for COMMAND mode
 	// (COMMAND mode keys should take priority over global shortcuts)
 	if s.mode == modeCommand {
 		if action := s.matchModeKeybinding(s.mode, ev); action != ActionNone {
-			log.Printf("[MATCH] Mode-specific keybinding matched: Mode=%s Action=%v", s.mode, action)
 			s.executeAction(action, ev)
 			return
 		}
@@ -1324,14 +1266,12 @@ func (s *appState) handleKey(ev key.Event) {
 
 	// Phase 2: Try global keybindings (highest priority for other modes)
 	if action := s.matchGlobalKeybinding(ev); action != ActionNone {
-		log.Printf("[MATCH] Global keybinding matched: Action=%v", action)
 		s.executeAction(action, ev)
 		return
 	}
 
 	// Phase 3: Try mode-specific keybindings
 	if action := s.matchModeKeybinding(s.mode, ev); action != ActionNone {
-		log.Printf("[MATCH] Mode-specific keybinding matched: Mode=%s Action=%v", s.mode, action)
 		s.executeAction(action, ev)
 		return
 	}
@@ -1340,22 +1280,18 @@ func (s *appState) handleKey(ev key.Event) {
 	switch s.mode {
 	case modeNormal:
 		if s.handleNormalModeSpecial(ev) {
-			log.Printf("[SPECIAL] Normal mode special handler matched")
 			return
 		}
 	case modeInsert:
 		if s.handleInsertModeSpecial(ev) {
-			log.Printf("[SPECIAL] Insert mode special handler matched")
 			return
 		}
 	case modeDelete:
 		if s.handleDeleteModeSpecial(ev) {
-			log.Printf("[SPECIAL] Delete mode special handler matched")
 			return
 		}
 	case modeVisual:
 		if s.handleVisualModeSpecial(ev) {
-			log.Printf("[SPECIAL] Visual mode special handler matched")
 			return
 		}
 	case modeCommand:
@@ -1363,7 +1299,6 @@ func (s *appState) handleKey(ev key.Event) {
 	case modeExplorer:
 		return
 	}
-	log.Printf("[NO_MATCH] No keybinding matched for key=%q modifiers=%s", ev.Name, modStr)
 	s.status = "Waiting for motion"
 }
 
@@ -1444,22 +1379,15 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 
 func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
 	if r, ok := s.printableKey(ev); ok {
-		// FIX WORKING: Insert character immediately from KeyEvent (bypassing delayed EditEvent)
-		log.Printf("✓ [FIX_ACTIVE] KeyEvent insert: %q | Shift=%v Ctrl=%v", string(r), s.shiftPressed, s.ctrlPressed)
+		// Insert character immediately from KeyEvent (bypassing delayed EditEvent)
 		s.insertText(string(r))
 
 		// Reset modifiers immediately after insertion
-		modifiersReset := false
 		if s.shiftPressed {
 			s.shiftPressed = false
-			modifiersReset = true
 		}
 		if s.ctrlPressed {
 			s.ctrlPressed = false
-			modifiersReset = true
-		}
-		if modifiersReset {
-			log.Printf("✓ [FIX_ACTIVE] Modifiers reset (no sticking)")
 		}
 
 		// Mark that we should skip the corresponding EditEvent
@@ -1561,31 +1489,18 @@ func (s *appState) enterInsertMode() {
 	// Get the buffer for the currently active pane
 	buf := s.activeBuffer()
 
-	// Debug: Log pane and buffer information
-	if s.paneManager != nil {
-		activePane := s.paneManager.ActivePane()
-		if activePane != nil {
-			log.Printf("[INSERT_MODE] Active pane ID=%s, BufferIndex=%d, IsTerminal=%v",
-				activePane.ID, activePane.BufferIndex, buf != nil && buf.IsTerminal())
-		} else {
-			log.Printf("[INSERT_MODE] Active pane is nil")
-		}
-	}
-
 	// Check if buffer is a terminal - enter TERMINAL mode instead
 	if buf != nil && buf.IsTerminal() {
 		s.ctrlPressed = false
 		s.shiftPressed = false
 		s.mode = modeTerminal
 		s.status = "TERMINAL INPUT (Esc to navigate)"
-		log.Printf("[TERMINAL] Entered terminal input mode for buffer")
 		return
 	}
 
 	// Check if buffer is read-only
 	if buf != nil && buf.IsReadOnly() {
 		s.status = "Buffer is read-only (cannot edit)"
-		log.Printf("[INSERT_MODE] Cannot enter insert mode - buffer is read-only")
 		return
 	}
 
@@ -1595,7 +1510,6 @@ func (s *appState) enterInsertMode() {
 	s.resetCount()
 	s.status = "Switched to INSERT"
 	s.caretReset = true
-	log.Printf("[INSERT_MODE] Entered INSERT mode successfully")
 }
 
 func (s *appState) getCharAtCursor(lineIdx, col int) string {
@@ -2226,7 +2140,6 @@ func (s *appState) copyVisualSelection() {
 		s.clipLines = []string{text}
 		s.clipboardIsLine = false // Character-wise copy is not line mode
 		s.status = fmt.Sprintf("Copied %d character(s)", len(text))
-		log.Printf("[CLIPBOARD] Copied selection (char mode)")
 	} else if s.visualMode == visualModeLine {
 		// Line-wise copy
 		start, end, ok := s.visualSelectionRange()
@@ -2246,7 +2159,6 @@ func (s *appState) copyVisualSelection() {
 		s.clipLines = append([]string(nil), lines...)
 		s.clipboardIsLine = true // Line-wise copy is line mode
 		s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
-		log.Printf("[CLIPBOARD] Copied %d lines (line mode)", len(lines))
 	} else {
 		s.status = "No selection to copy"
 	}
@@ -2303,7 +2215,6 @@ func (s *appState) pasteClipboard() {
 func (s *appState) writeToSystemClipboard(text string) bool {
 	err := clipboard.Init()
 	if err != nil {
-		log.Printf("[CLIPBOARD] Failed to initialize clipboard: %v", err)
 		return false
 	}
 	clipboard.Write(clipboard.FmtText, []byte(text))
@@ -2314,7 +2225,6 @@ func (s *appState) writeToSystemClipboard(text string) bool {
 func (s *appState) readFromSystemClipboard() (string, bool) {
 	err := clipboard.Init()
 	if err != nil {
-		log.Printf("[CLIPBOARD] Failed to initialize clipboard: %v", err)
 		return "", false
 	}
 	data := clipboard.Read(clipboard.FmtText)
@@ -2344,13 +2254,11 @@ func (s *appState) copyCurrentLine() {
 		s.clipLines = []string{line}
 		s.clipboardIsLine = true
 		s.status = fmt.Sprintf("Copied line %d (%d chars)", cursor.Line+1, len(line))
-		log.Printf("[CLIPBOARD] Copied line %d to system clipboard (line mode)", cursor.Line+1)
 	} else {
 		// Fallback to internal clipboard only
 		s.clipLines = []string{line}
 		s.clipboardIsLine = true
 		s.status = fmt.Sprintf("Copied line %d (internal only)", cursor.Line+1)
-		log.Printf("[CLIPBOARD] Copied line %d to internal clipboard only (line mode)", cursor.Line+1)
 	}
 }
 
@@ -2399,7 +2307,6 @@ func (s *appState) pasteAtCursor() {
 		buf.MoveToLine(insertPos)
 
 		s.status = fmt.Sprintf("Pasted %d line(s) below", len(lines))
-		log.Printf("[CLIPBOARD] Pasted %d lines (line mode)", len(lines))
 	} else {
 		// Character-based paste: insert at cursor position
 		buf.InsertText(text)
@@ -2410,7 +2317,6 @@ func (s *appState) pasteAtCursor() {
 		} else {
 			s.status = fmt.Sprintf("Pasted %d characters", len(text))
 		}
-		log.Printf("[CLIPBOARD] Pasted %d bytes at cursor (char mode)", len(text))
 	}
 }
 
@@ -2948,15 +2854,6 @@ func (s *appState) insertText(text string) {
 	buf.InsertText(text)
 
 	// Debug: Log buffer content and cursor position after insertion
-	cursor := buf.Cursor()
-	lineCount := buf.LineCount()
-	currentLine := ""
-	if lineCount > 0 && cursor.Line < lineCount {
-		currentLine = buf.Line(cursor.Line)
-	}
-	log.Printf("[INSERT_DEBUG] Inserted %q | Cursor: Line=%d Col=%d | LineCount=%d | CurrentLine=%q",
-		text, cursor.Line, cursor.Col, lineCount, currentLine)
-
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
 }
 
@@ -3349,7 +3246,6 @@ func (s *appState) handleOpenTerminal() {
 		s.mode = modeTerminal
 		s.status = "TERMINAL INPUT (Esc to navigate, Shift+Tab to switch)"
 		s.skipNextTerminalEdit = true // Prevent backtick from leaking
-		log.Printf("[TERMINAL] Switched to terminal input mode")
 		return
 	}
 
@@ -3382,20 +3278,17 @@ func (s *appState) handleOpenTerminal() {
 		Window:     s.window,
 		OnExit: func() {
 			// Terminal exited (shell closed) - auto-close the buffer
-			log.Printf("[TERMINAL] Terminal exited, auto-closing buffer %d", bufIdx)
 			s.handleTerminalAutoClose(bufIdx)
 		},
 	})
 	if err != nil {
 		s.status = fmt.Sprintf("Error creating terminal: %v", err)
-		log.Printf("[TERMINAL] Failed to create terminal: %v", err)
 		return
 	}
 
 	// Start terminal
 	if err := term.Start(); err != nil {
 		s.status = fmt.Sprintf("Error starting terminal: %v", err)
-		log.Printf("[TERMINAL] Failed to start terminal: %v", err)
 		return
 	}
 
@@ -3420,7 +3313,6 @@ func (s *appState) handleOpenTerminal() {
 	s.mode = modeTerminal
 	s.status = "TERMINAL INPUT (Esc to navigate, Shift+Tab to switch)"
 	s.skipNextTerminalEdit = true // Prevent backtick from leaking
-	log.Printf("[TERMINAL] Opened terminal in buffer %d (%dx%d)", bufIdx, cols, rows)
 }
 
 // handleTerminalExit exits terminal mode and returns to normal mode
@@ -3438,9 +3330,8 @@ func (s *appState) closeTerminal(bufIdx int) {
 		return
 	}
 
-	log.Printf("[TERMINAL] Closing terminal for buffer %d", bufIdx)
 	if err := term.Close(); err != nil {
-		log.Printf("[TERMINAL] Error closing terminal %d: %v", bufIdx, err)
+		// Silently handle terminal close errors
 	}
 
 	delete(s.terminals, bufIdx)
@@ -3451,7 +3342,6 @@ func (s *appState) closeTerminal(bufIdx int) {
 // handleTerminalAutoClose is called when a terminal process exits (shell exits)
 // It automatically closes the terminal buffer
 func (s *appState) handleTerminalAutoClose(bufIdx int) {
-	log.Printf("[TERMINAL] Auto-closing buffer %d after terminal exit", bufIdx)
 
 	// Clean up terminal instance
 	delete(s.terminals, bufIdx)
@@ -3537,7 +3427,6 @@ func (s *appState) handleTerminalKey(ev key.Event) {
 
 	// Check for actual Ctrl+X from event modifiers (not tracked state) to close pane
 	if ev.Modifiers.Contain(key.ModCtrl) && strings.ToLower(string(ev.Name)) == "x" {
-		log.Printf("[TERMINAL] Ctrl+X detected (from modifiers), closing pane")
 		s.handleQuitCommand(false)
 		return
 	}
@@ -3546,30 +3435,26 @@ func (s *appState) handleTerminalKey(ev key.Event) {
 	buf := s.activeBuffer()
 	if buf == nil || !buf.IsTerminal() {
 		s.status = "Not a terminal buffer"
-		log.Printf("[TERMINAL] Not a terminal buffer, ignoring key")
 		return
 	}
 
 	activePane := s.paneManager.ActivePane()
 	if activePane == nil {
-		log.Printf("[TERMINAL] No active pane")
 		return
 	}
 
 	term, exists := s.terminals[activePane.BufferIndex]
 	if !exists || term == nil {
 		s.status = "Terminal not found"
-		log.Printf("[TERMINAL] Terminal not found for buffer %d", activePane.BufferIndex)
 		return
 	}
 
 	// Convert key event to terminal input sequence
 	inputSeq := terminal.KeyToTerminalSequence(ev)
 
-	log.Printf("[TERMINAL] Key=%q Modifiers=%v InputSeq=%q", ev.Name, ev.Modifiers, inputSeq)
 	if inputSeq != "" {
 		if err := term.Write([]byte(inputSeq)); err != nil {
-			log.Printf("[TERMINAL] Error writing to terminal: %v", err)
+			// Silently handle terminal write errors
 		}
 	}
 }
@@ -3593,7 +3478,7 @@ func (s *appState) handleTerminalEdit(text string) {
 
 	// Send text to terminal
 	if err := term.Write([]byte(text)); err != nil {
-		log.Printf("[TERMINAL] Error writing to terminal: %v", err)
+		// Silently handle terminal write errors
 	}
 }
 

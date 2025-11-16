@@ -1,7 +1,6 @@
 package appcore
 
 import (
-	"log"
 	"strings"
 	"unicode"
 
@@ -348,20 +347,13 @@ func (s *appState) matchPrintableKey(ev key.Event, target rune) bool {
 }
 
 func (s *appState) executeAction(action Action, ev key.Event) {
-	log.Printf("[ACTION] Executing action=%v mode=%s", action, s.mode)
-
 	switch action {
 	case ActionToggleExplorer:
-		log.Printf("[TOGGLE_EXPLORER] Before: visible=%v focused=%v mode=%s",
-			s.explorerVisible, s.explorerFocused, s.mode)
 		if s.fileTree == nil {
 			s.status = "File tree not available"
-			log.Printf("[TOGGLE_EXPLORER] Aborted: file tree not available")
 			return
 		}
 		s.toggleExplorer()
-		log.Printf("[TOGGLE_EXPLORER] After: visible=%v focused=%v mode=%s",
-			s.explorerVisible, s.explorerFocused, s.mode)
 
 	case ActionFocusExplorer:
 		if s.fileTree == nil {
@@ -414,13 +406,9 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		s.enterCommandMode()
 
 	case ActionEnterExplorer:
-		log.Printf("[MODE_CHANGE] Entering EXPLORER mode from %s", s.mode)
 		s.enterExplorerMode()
-		log.Printf("[MODE_CHANGE] Now in mode=%s explorerFocused=%v", s.mode, s.explorerFocused)
 
 	case ActionExitMode:
-		log.Printf("[MODE_CHANGE] Exiting mode=%s", s.mode)
-		oldMode := s.mode
 		switch s.mode {
 		case modeInsert:
 			s.mode = modeNormal
@@ -447,7 +435,6 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.resetCount()
 			s.status = "Staying in NORMAL"
 		}
-		log.Printf("[MODE_CHANGE] Exited %s -> now in %s", oldMode, s.mode)
 
 	case ActionMoveLeft:
 		s.moveCursor("left")
@@ -516,58 +503,22 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionInsertNewline:
 		if s.mode == modeInsert {
-			buf := s.activeBuffer()
-			cursorBefore := buf.Cursor()
-			lineCountBefore := buf.LineCount()
-			log.Printf("[NEWLINE_DEBUG] BEFORE: Line=%d Col=%d LineCount=%d",
-				cursorBefore.Line, cursorBefore.Col, lineCountBefore)
-
 			s.insertText("\n")
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
-
-			cursorAfter := buf.Cursor()
-			lineCountAfter := buf.LineCount()
-			log.Printf("[NEWLINE_DEBUG] AFTER: Line=%d Col=%d LineCount=%d (added %d lines)",
-				cursorAfter.Line, cursorAfter.Col, lineCountAfter, lineCountAfter-lineCountBefore)
 		} else if s.mode == modeCommand {
 			s.executeCommandLine()
 		}
 
 	case ActionInsertSpace:
 		if s.mode == modeInsert {
-			buf := s.activeBuffer()
-			cursorBefore := buf.Cursor()
-			lineBefore := buf.Line(cursorBefore.Line)
-			log.Printf("[SPACE_DEBUG] BEFORE: Line=%d Col=%d LineContent=%q",
-				cursorBefore.Line, cursorBefore.Col, lineBefore)
-
 			s.insertText(" ")
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
-
-			cursorAfter := buf.Cursor()
-			lineAfter := buf.Line(cursorAfter.Line)
-			log.Printf("[SPACE_DEBUG] AFTER: Line=%d Col=%d LineContent=%q",
-				cursorAfter.Line, cursorAfter.Col, lineAfter)
-			log.Printf("[SPACE_DEBUG] Cursor moved from Col %d to Col %d (delta: %d)",
-				cursorBefore.Col, cursorAfter.Col, cursorAfter.Col-cursorBefore.Col)
 		}
 
 	case ActionInsertTab:
 		if s.mode == modeInsert {
-			buf := s.activeBuffer()
-			cursorBefore := buf.Cursor()
-			lineBefore := buf.Line(cursorBefore.Line)
-			log.Printf("[TAB_DEBUG] BEFORE: Line=%d Col=%d LineContent=%q",
-				cursorBefore.Line, cursorBefore.Col, lineBefore)
-
 			s.insertText("\t")
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
-
-			cursorAfter := buf.Cursor()
-			lineAfter := buf.Line(cursorAfter.Line)
-			log.Printf("[TAB_DEBUG] AFTER: Line=%d Col=%d LineContent=%q",
-				cursorAfter.Line, cursorAfter.Col, lineAfter)
-			log.Printf("[TAB_DEBUG] Tab character inserted, line now has tab character at correct position")
 		}
 
 	case ActionDeleteBackward:

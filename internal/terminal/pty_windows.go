@@ -5,7 +5,6 @@ package terminal
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,11 +37,7 @@ func (t *Terminal) startPTY() error {
 
 	// Start wait goroutine
 	go func() {
-		exitCode, waitErr := cpty.Wait(context.Background())
-		if waitErr != nil {
-			log.Printf("[TERMINAL] ConPTY wait error: %v", waitErr)
-		}
-		log.Printf("[TERMINAL] Shell process exited with code %d", exitCode)
+		_, _ = cpty.Wait(context.Background())
 
 		// Call onExit callback if set
 		if t.onExit != nil {
