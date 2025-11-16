@@ -1612,8 +1612,11 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		return
 	}
 
-	full := gutter + prefix
-	x := s.measureTextWidth(gtx, full)
+	// Calculate visual column position accounting for tab expansion
+	// measureTextWidth already expands tabs internally, so we just measure each part
+	gutterWidth := s.measureTextWidth(gtx, gutter)
+	prefixWidth := s.measureTextWidth(gtx, prefix)
+	x := gutterWidth + prefixWidth
 
 	// Cursor drawing (debug logs removed for clarity)
 
