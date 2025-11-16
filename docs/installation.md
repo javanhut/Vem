@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide covers all methods for installing ProjectVem on Linux, macOS, and Windows.
+This guide covers all methods for installing Vem on Linux, macOS, and Windows.
 
 ## Table of Contents
 
@@ -18,8 +18,8 @@ This guide covers all methods for installing ProjectVem on Linux, macOS, and Win
 The fastest way to install Vem on Linux or macOS:
 
 ```bash
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 make install
 ```
 
@@ -34,7 +34,7 @@ For Windows, see [Windows Installation](#windows).
 
 ### Linux-Specific
 
-ProjectVem requires several system libraries for GUI rendering and input handling on Linux. The Makefile will automatically detect and install these for you, but you can also install them manually:
+Vem requires several system libraries for GUI rendering and input handling on Linux. The Makefile will automatically detect and install these for you, but you can also install them manually:
 
 #### Debian/Ubuntu
 ```bash
@@ -68,11 +68,11 @@ sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 
 ### macOS
 
-No additional dependencies required. ProjectVem uses Metal for GPU acceleration, which is built into macOS.
+No additional dependencies required. Vem uses Metal for GPU acceleration, which is built into macOS.
 
 ### Windows
 
-No additional dependencies required. ProjectVem uses Direct3D 11 for GPU acceleration, which is built into Windows.
+No additional dependencies required. Vem uses Direct3D 11 for GPU acceleration, which is built into Windows.
 
 ## Installation Methods
 
@@ -83,8 +83,8 @@ The Makefile automates the build and installation process, including dependency 
 #### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 ```
 
 #### 2. View Available Commands
@@ -132,7 +132,7 @@ make build
 ```
 
 On Windows, the Makefile builds `vem.exe` in the current directory. You can then:
-- Add the ProjectVem directory to your PATH, or
+- Add the Vem directory to your PATH, or
 - Move `vem.exe` to a directory already in your PATH
 
 ### Manual Build
@@ -161,8 +161,8 @@ sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev wayland-dev
 #### 2. Build the Binary
 
 ```bash
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 
 # Optional: Use local build cache to avoid permission issues
 export GOCACHE="$(pwd)/.gocache"
@@ -305,7 +305,7 @@ If older than 1.25.3, update Go from [golang.org/dl/](https://golang.org/dl/)
 ### Linux and macOS
 
 ```bash
-cd ProjectVem
+cd Vem
 make uninstall
 ```
 
@@ -323,7 +323,7 @@ Simply delete `vem.exe` from wherever you placed it. If you added a directory to
 To verify your installation is working correctly:
 
 ```bash
-cd ProjectVem
+cd Vem
 make test
 ```
 
@@ -342,6 +342,6 @@ After installation:
 
 ## Getting Help
 
-- **Issues**: [GitHub Issues](https://github.com/javanhut/ProjectVem/issues)
+- **Issues**: [GitHub Issues](https://github.com/javanhut/Vem/issues)
 - **Documentation**: Check the `docs/` directory
-- **Repository**: [github.com/javanhut/ProjectVem](https://github.com/javanhut/ProjectVem)
+- **Repository**: [github.com/javanhut/Vem](https://github.com/javanhut/Vem)

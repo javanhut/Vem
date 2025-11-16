@@ -65,6 +65,14 @@ func (pm *PaneManager) SetActivePane(pane *Pane) {
 	// Activate the target pane
 	pane.SetActive(true)
 	pm.activePane = pane
+
+	fmt.Printf("[PANE_MANAGER] SetActivePane: ID=%s, BufferIndex=%d\n", pane.ID, pane.BufferIndex)
+}
+
+// SetActivePaneQuiet is a low-level setter for the active pane that doesn't
+// trigger side effects like deactivating other panes. Used only for rendering.
+func (pm *PaneManager) SetActivePaneQuiet(pane *Pane) {
+	pm.activePane = pane
 }
 
 // SplitVertical splits the active pane vertically (creates horizontal divider).

@@ -133,6 +133,26 @@ func (bm *BufferManager) CreateEmptyBuffer() int {
 	return len(bm.buffers) - 1
 }
 
+// CreateTerminalBuffer creates a new buffer for a terminal and returns its index.
+func (bm *BufferManager) CreateTerminalBuffer() int {
+	buf := &Buffer{
+		lines:      []string{""},
+		cursor:     Cursor{},
+		bufferType: BufferTypeTerminal,
+		undoStack:  make([]UndoEntry, 0),
+		maxUndos:   100,
+	}
+	bm.buffers = append(bm.buffers, buf)
+	return len(bm.buffers) - 1
+}
+
+// CreateBufferWithContent creates a new buffer with the given content and returns its index.
+func (bm *BufferManager) CreateBufferWithContent(content string) int {
+	buf := NewBuffer(content)
+	bm.buffers = append(bm.buffers, buf)
+	return len(bm.buffers) - 1
+}
+
 // SaveActiveBuffer saves the currently active buffer.
 func (bm *BufferManager) SaveActiveBuffer() error {
 	buf := bm.ActiveBuffer()
@@ -184,9 +204,12 @@ func (bm *BufferManager) CloseBuffer(index int, force bool) error {
 
 	buf := bm.buffers[index]
 
-	// Check for unsaved changes
-	if !force && buf.Modified() {
-		return fmt.Errorf("buffer has unsaved changes (use :q! to force)")
+	// Terminal buffers don't have unsaved changes
+	if !buf.IsTerminal() {
+		// Check for unsaved changes in text buffers
+		if !force && buf.Modified() {
+			return fmt.Errorf("buffer has unsaved changes (use :q! to force)")
+		}
 	}
 
 	// Remove from path mapping
@@ -272,7 +295,11 @@ func (bm *BufferManager) ListBuffers() []string {
 
 		name := buf.FilePath()
 		if name == "" {
-			name = "[No Name]"
+			if buf.IsTerminal() {
+				name = "[Terminal]"
+			} else {
+				name = "[No Name]"
+			}
 		}
 
 		result[i] = fmt.Sprintf("%s %d %s %s", prefix, i+1, modFlag, name)

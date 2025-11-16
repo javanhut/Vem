@@ -6,6 +6,14 @@ import (
 	"unicode/utf8"
 )
 
+// BufferType represents the type of buffer content
+type BufferType int
+
+const (
+	BufferTypeText BufferType = iota
+	BufferTypeTerminal
+)
+
 // UndoEntry represents a single undo operation
 type UndoEntry struct {
 	lines       []string
@@ -15,12 +23,15 @@ type UndoEntry struct {
 
 // Buffer represents an in-memory text buffer with a Vim-style cursor.
 type Buffer struct {
-	lines     []string
-	cursor    Cursor
-	filePath  string
-	modified  bool
-	undoStack []UndoEntry
-	maxUndos  int
+	lines      []string
+	cursor     Cursor
+	filePath   string
+	modified   bool
+	undoStack  []UndoEntry
+	maxUndos   int
+	bufferType BufferType
+	terminal   interface{} // *terminal.Terminal (avoid import cycle)
+	readOnly   bool        // Prevent edits if true (for help, etc.)
 }
 
 // Cursor stores the current line/column position (1 rune == 1 column).
@@ -115,6 +126,10 @@ func (b *Buffer) DeleteLines(start, end int) {
 	if len(b.lines) == 0 {
 		return
 	}
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
 	if start > end {
 		start, end = end, start
 	}
@@ -147,6 +162,10 @@ func (b *Buffer) InsertLines(at int, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
 	if at < 0 {
 		at = 0
 	}
@@ -171,6 +190,10 @@ func (b *Buffer) InsertLines(at int, lines []string) {
 // to the end of the inserted text.
 func (b *Buffer) InsertText(text string) {
 	if text == "" {
+		return
+	}
+	// Check if buffer is read-only
+	if b.readOnly {
 		return
 	}
 	// Save state before inserting
@@ -201,6 +224,10 @@ func (b *Buffer) InsertText(text string) {
 // DeleteBackward deletes the rune before the cursor (backspace semantics).
 // When invoked at the start of a line, it merges with the previous line.
 func (b *Buffer) DeleteBackward() bool {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return false
+	}
 	// Save state before deleting
 	b.saveState("delete backward")
 
@@ -232,6 +259,10 @@ func (b *Buffer) DeleteBackward() bool {
 // DeleteForward deletes the rune at the cursor (delete semantics).
 // When at the end of a line, it merges with the following line.
 func (b *Buffer) DeleteForward() bool {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return false
+	}
 	// Save state before deleting
 	b.saveState("delete forward")
 
@@ -586,6 +617,16 @@ func (b *Buffer) markModified() {
 	b.modified = true
 }
 
+// SetReadOnly marks buffer as read-only (prevents edits).
+func (b *Buffer) SetReadOnly(readOnly bool) {
+	b.readOnly = readOnly
+}
+
+// IsReadOnly returns whether buffer is read-only.
+func (b *Buffer) IsReadOnly() bool {
+	return b.readOnly
+}
+
 // LoadFromFile loads the buffer content from a file.
 func (b *Buffer) LoadFromFile(path string) error {
 	content, err := os.ReadFile(path)
@@ -709,6 +750,10 @@ func (b *Buffer) GetCharRange(startLine, startCol, endLine, endCol int) string {
 
 // DeleteCharRange deletes the text in the specified character range.
 func (b *Buffer) DeleteCharRange(startLine, startCol, endLine, endCol int) {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
 	if startLine < 0 || startLine >= len(b.lines) {
 		return
 	}
@@ -800,4 +845,25 @@ func (b *Buffer) Undo() bool {
 	b.markModified()
 
 	return true
+}
+
+// BufferType returns the type of this buffer
+func (b *Buffer) BufferType() BufferType {
+	return b.bufferType
+}
+
+// Terminal returns the terminal instance (nil if not terminal buffer)
+func (b *Buffer) Terminal() interface{} {
+	return b.terminal
+}
+
+// SetTerminal associates a terminal with this buffer
+func (b *Buffer) SetTerminal(term interface{}) {
+	b.bufferType = BufferTypeTerminal
+	b.terminal = term
+}
+
+// IsTerminal returns whether this is a terminal buffer
+func (b *Buffer) IsTerminal() bool {
+	return b.bufferType == BufferTypeTerminal
 }

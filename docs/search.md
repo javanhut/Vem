@@ -1,6 +1,6 @@
 # Search Feature
 
-This document describes the search functionality in ProjectVem, including basic text search and the planned fuzzy file finder.
+This document describes the search functionality in Vem, including basic text search and the planned fuzzy file finder.
 
 ## Text Search (Implemented)
 

@@ -1,13 +1,12 @@
 package main
 
 import (
-	"log"
 	"os"
 
 	gioapp "gioui.org/app"
 	"gioui.org/unit"
 
-	"github.com/javanhut/ProjectVem/internal/appcore"
+	"github.com/javanhut/vem/internal/appcore"
 )
 
 func main() {
@@ -17,8 +16,9 @@ func main() {
 			gioapp.Title("Vem - Vim Emulator"),
 			gioapp.Size(unit.Dp(960), unit.Dp(640)),
 		)
-		if err := appcore.Run(w); err != nil {
-			log.Printf("app exited: %v", err)
+		filePaths := os.Args[1:]
+		if err := appcore.Run(w, filePaths); err != nil {
+			// Silently handle app exit errors
 		}
 		os.Exit(0)
 	}()

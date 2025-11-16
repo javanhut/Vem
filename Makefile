@@ -1,11 +1,14 @@
 # Makefile for ProjectVem
 # Cross-platform build, install, and dependency management
 
-.PHONY: help build install uninstall clean test check-deps check-vulkan check-xkbcommon check-xkbcommon-x11 check-wayland check-wayland-cursor check-x11 check-egl check-xcursor check-xfixes install-linux-deps
+.PHONY: help build install uninstall clean test check-deps check-deps-linux check-deps-windows check-deps-darwin check-go check-vulkan check-xkbcommon check-xkbcommon-x11 check-wayland check-wayland-cursor check-x11 check-egl check-xcursor check-xfixes install-linux-deps build-windows build-linux build-darwin
 
 # Detect OS and Architecture
-GOOS := $(shell go env GOOS)
-GOARCH := $(shell go env GOARCH)
+GOOS := $(shell go env GOOS 2>/dev/null)
+GOARCH := $(shell go env GOARCH 2>/dev/null)
+
+# Minimum required Go version
+MIN_GO_VERSION := 1.21
 
 # Binary name
 BINARY_NAME := vem
@@ -27,7 +30,31 @@ help: ## Show this help message
 	@echo "Detected Architecture: $(GOARCH)"
 	@echo ""
 	@echo "Available targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
+
+check-go: ## Check if Go is installed and meets version requirements
+	@echo "Checking Go installation..."
+	@if ! command -v go >/dev/null 2>&1; then \
+		echo "✗ Go is not installed."; \
+		echo "Please install Go from https://golang.org/dl/"; \
+		exit 1; \
+	fi
+	@echo "✓ Go is installed: $$(go version)"
+	@GO_VERSION=$$(go version | sed -n 's/.*go\([0-9]*\.[0-9]*\).*/\1/p'); \
+	MAJOR=$$(echo $$GO_VERSION | cut -d. -f1); \
+	MINOR=$$(echo $$GO_VERSION | cut -d. -f2); \
+	MIN_MAJOR=$$(echo $(MIN_GO_VERSION) | cut -d. -f1); \
+	MIN_MINOR=$$(echo $(MIN_GO_VERSION) | cut -d. -f2); \
+	if [ $$MAJOR -lt $$MIN_MAJOR ] || ([ $$MAJOR -eq $$MIN_MAJOR ] && [ $$MINOR -lt $$MIN_MINOR ]); then \
+		echo "✗ Go version $$GO_VERSION is too old. Minimum required: $(MIN_GO_VERSION)"; \
+		exit 1; \
+	fi
+	@echo "✓ Go version meets requirements (>= $(MIN_GO_VERSION))"
+	@if [ -z "$(GOOS)" ] || [ -z "$(GOARCH)" ]; then \
+		echo "✗ Cannot detect GOOS or GOARCH"; \
+		exit 1; \
+	fi
+	@echo "✓ GOOS=$(GOOS), GOARCH=$(GOARCH)"
 
 check-vulkan: ## Check if Vulkan headers are installed (Linux only)
 ifeq ($(GOOS),linux)
@@ -146,6 +173,38 @@ else
 	@echo "wayland-cursor check not required on $(GOOS)"
 endif
 
+check-windows-conpty: ## Check if Windows supports ConPTY (Windows 10 1809+)
+ifeq ($(GOOS),windows)
+	@echo "Checking Windows version for ConPTY support..."
+	@powershell -Command "if ([System.Environment]::OSVersion.Version.Build -lt 17763) { Write-Host '✗ Windows version too old. ConPTY requires Windows 10 1809 (build 17763) or later'; exit 1 } else { Write-Host '✓ Windows version supports ConPTY' }"
+else
+	@echo "Windows ConPTY check not required on $(GOOS)"
+endif
+
+check-windows-shell: ## Check if a suitable shell is available on Windows
+ifeq ($(GOOS),windows)
+	@echo "Checking for available shells on Windows..."
+	@SHELL_FOUND=0; \
+	if command -v pwsh.exe >/dev/null 2>&1; then \
+		echo "✓ PowerShell Core (pwsh.exe) found"; \
+		SHELL_FOUND=1; \
+	fi; \
+	if command -v powershell.exe >/dev/null 2>&1; then \
+		echo "✓ Windows PowerShell (powershell.exe) found"; \
+		SHELL_FOUND=1; \
+	fi; \
+	if [ ! -z "$$COMSPEC" ]; then \
+		echo "✓ Command Prompt ($$COMSPEC) found"; \
+		SHELL_FOUND=1; \
+	fi; \
+	if [ $$SHELL_FOUND -eq 0 ]; then \
+		echo "✗ No suitable shell found"; \
+		exit 1; \
+	fi
+else
+	@echo "Windows shell check not required on $(GOOS)"
+endif
+
 install-linux-deps: ## Install all required Linux dependencies (Vulkan, xkbcommon, wayland, X11, EGL, etc.)
 ifeq ($(GOOS),linux)
 	@echo "Detecting package manager and installing dependencies..."
@@ -189,7 +248,7 @@ else
 	@echo "Linux dependency installation not required on $(GOOS)"
 endif
 
-check-deps: ## Check and install all dependencies
+check-deps-linux: ## Check all Linux-specific dependencies
 ifeq ($(GOOS),linux)
 	@echo "Checking all Linux dependencies..."
 	@MISSING=0; \
@@ -208,16 +267,130 @@ ifeq ($(GOOS),linux)
 		$(MAKE) install-linux-deps; \
 	else \
 		echo ""; \
-		echo "✓ All dependencies satisfied!"; \
+		echo "✓ All Linux dependencies satisfied!"; \
 	fi
 else
-	@echo "Dependency checks not required on $(GOOS)"
+	@echo "Linux dependency checks not required on $(GOOS)"
 endif
 
+check-deps-windows: ## Check all Windows-specific dependencies
+ifeq ($(GOOS),windows)
+	@echo "Checking all Windows dependencies..."
+	@MISSING=0; \
+	if ! $(MAKE) check-windows-conpty 2>/dev/null; then MISSING=1; fi; \
+	if ! $(MAKE) check-windows-shell 2>/dev/null; then MISSING=1; fi; \
+	if [ $$MISSING -eq 1 ]; then \
+		echo ""; \
+		echo "✗ Some Windows dependencies are missing."; \
+		echo "Please ensure you have:"; \
+		echo "  - Windows 10 1809 (build 17763) or later for ConPTY support"; \
+		echo "  - PowerShell or Command Prompt available"; \
+		exit 1; \
+	else \
+		echo ""; \
+		echo "✓ All Windows dependencies satisfied!"; \
+	fi
+else
+	@echo "Windows dependency checks not required on $(GOOS)"
+endif
+
+check-deps-darwin: ## Check all macOS-specific dependencies
+ifeq ($(GOOS),darwin)
+	@echo "Checking macOS dependencies..."
+	@echo "✓ macOS has all required dependencies built-in (Metal, Cocoa)"
+else
+	@echo "macOS dependency checks not required on $(GOOS)"
+endif
+
+check-deps: check-go ## Check and install all platform-specific dependencies
+	@echo ""
+	@echo "Checking platform-specific dependencies for $(GOOS)..."
+ifeq ($(GOOS),linux)
+	@$(MAKE) check-deps-linux
+else ifeq ($(GOOS),windows)
+	@$(MAKE) check-deps-windows
+else ifeq ($(GOOS),darwin)
+	@$(MAKE) check-deps-darwin
+else
+	@echo "✓ No platform-specific dependencies required for $(GOOS)"
+endif
+	@echo ""
+	@echo "Checking Go module dependencies..."
+	@go mod download
+	@go mod verify
+	@echo "✓ All dependencies satisfied!"
+
 build: check-deps ## Build Vem binary for current OS/architecture
-	@echo "Building $(BINARY_NAME) for $(GOOS)/$(GOARCH)..."
-	@go build -o $(BINARY_NAME) .
-	@echo "Build complete: $(BINARY_NAME)"
+	@echo ""
+	@echo "==========================================="
+	@echo "Building Vem for $(GOOS)/$(GOARCH)..."
+	@echo "==========================================="
+	@echo ""
+	@echo "Target binary: $(BINARY_NAME)"
+	@if go build -v -o $(BINARY_NAME) . 2>&1; then \
+		echo ""; \
+		echo "✓ Build successful: $(BINARY_NAME)"; \
+		echo ""; \
+		if [ "$(GOOS)" = "windows" ]; then \
+			echo "Windows build complete."; \
+			echo "You can run the editor with: ./$(BINARY_NAME)"; \
+		else \
+			echo "Run 'make install' to install to $(INSTALL_DIR)"; \
+			echo "Or run directly with: ./$(BINARY_NAME)"; \
+		fi; \
+	else \
+		echo ""; \
+		echo "✗ Build failed!"; \
+		echo ""; \
+		if [ "$(GOOS)" = "windows" ]; then \
+			echo "Windows build troubleshooting:"; \
+			echo "  - Ensure you have Windows 10 1809 or later for ConPTY support"; \
+			echo "  - Check that Go CGO is properly configured"; \
+			echo "  - Verify all Go module dependencies are available"; \
+		elif [ "$(GOOS)" = "linux" ]; then \
+			echo "Linux build troubleshooting:"; \
+			echo "  - Run 'make check-deps' to verify all dependencies"; \
+			echo "  - Ensure development headers are installed"; \
+		else \
+			echo "Build troubleshooting:"; \
+			echo "  - Run 'make check-go' to verify Go installation"; \
+			echo "  - Run 'go mod tidy' to fix module issues"; \
+		fi; \
+		exit 1; \
+	fi
+
+build-windows: check-go ## Cross-compile for Windows (amd64)
+	@echo "Cross-compiling for Windows (amd64)..."
+	@GOOS=windows GOARCH=amd64 go build -v -o vem.exe .
+	@echo "✓ Windows build complete: vem.exe"
+
+build-linux: check-go ## Cross-compile for Linux (amd64)
+	@echo "Cross-compiling for Linux (amd64)..."
+	@GOOS=linux GOARCH=amd64 go build -v -o vem .
+	@echo "✓ Linux build complete: vem"
+	@echo "Note: This binary may require Linux system libraries (Vulkan, X11, Wayland) on the target system."
+
+build-darwin: check-go ## Cross-compile for macOS (amd64 and arm64)
+	@echo "Cross-compiling for macOS (amd64)..."
+	@if GOOS=darwin GOARCH=amd64 go build -v -o vem-darwin-amd64 . 2>&1; then \
+		echo "✓ macOS amd64 build complete: vem-darwin-amd64"; \
+		echo ""; \
+		echo "Cross-compiling for macOS (arm64/Apple Silicon)..."; \
+		if GOOS=darwin GOARCH=arm64 go build -v -o vem-darwin-arm64 . 2>&1; then \
+			echo "✓ macOS arm64 build complete: vem-darwin-arm64"; \
+		else \
+			echo "✗ macOS arm64 build failed"; \
+			echo "Note: Cross-compiling to macOS may require macOS SDK and CGO"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "✗ macOS amd64 build failed"; \
+		echo "Note: Cross-compiling to macOS requires:"; \
+		echo "  - macOS SDK (for CGO dependencies)"; \
+		echo "  - Proper CGO cross-compilation setup"; \
+		echo "  - Consider building natively on macOS instead"; \
+		exit 1; \
+	fi
 
 install: build ## Install Vem to system
 ifeq ($(GOOS),windows)

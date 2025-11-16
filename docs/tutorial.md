@@ -1,6 +1,6 @@
-# ProjectVem Tutorial
+# Vem Tutorial
 
-A step-by-step guide to getting started with ProjectVem.
+A step-by-step guide to getting started with Vem.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ A step-by-step guide to getting started with ProjectVem.
 
 ### Prerequisites
 
-Before installing ProjectVem, ensure you have:
+Before installing Vem, ensure you have:
 
 1. **Go 1.25.3 or later**: Download from [golang.org](https://golang.org/dl/)
 2. **Git**: For cloning the repository
@@ -40,8 +40,8 @@ Before installing ProjectVem, ensure you have:
 
 ```bash
 # Clone the repository
-git clone https://github.com/javanhut/ProjectVem.git
-cd ProjectVem
+git clone https://github.com/javanhut/Vem.git
+cd Vem
 
 # Set local build cache (recommended)
 export GOCACHE="$(pwd)/.gocache"
@@ -59,7 +59,25 @@ go build -o vem
 
 ## First Launch
 
-When you first launch ProjectVem, you'll see:
+### Opening Files
+
+You can launch Vem in several ways:
+
+```bash
+# Launch with sample text
+vem
+
+# Open a specific file
+vem main.go
+
+# Open multiple files (first file is active, switch with :bn/:bp)
+vem file1.txt file2.go file3.md
+
+# Create a new file
+vem newfile.txt
+```
+
+When you first launch Vem without arguments, you'll see:
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -82,11 +100,11 @@ The interface consists of:
 - **Editor Area**: Text content with line numbers
 - **Status Bar**: Mode, file name, cursor position, status messages
 
-The editor starts in **NORMAL mode** with sample text loaded.
+The editor starts in **NORMAL mode** with sample text loaded (or your specified file).
 
 ## Understanding Modes
 
-ProjectVem, like Vim, has different modes for different tasks:
+Vem, like Vim, has different modes for different tasks:
 
 ### NORMAL Mode
 
@@ -261,7 +279,7 @@ Or save first, then close:
 
 ### Using the File Explorer
 
-ProjectVem includes a built-in file tree navigator.
+Vem includes a built-in file tree navigator.
 
 **Opening the Explorer**:
 ```
@@ -419,7 +437,7 @@ The `g` key starts a goto sequence:
 ### Example 1: Creating a New File
 
 ```
-1. Launch ProjectVem
+1. Launch Vem
 2. Press :
 3. Type: e mynotes.txt
 4. Press Enter
@@ -433,7 +451,7 @@ The `g` key starts a goto sequence:
 ### Example 2: Editing an Existing File
 
 ```
-1. Launch ProjectVem
+1. Launch Vem
 2. Press Ctrl+T to open file tree
 3. Navigate to your file with j/k
 4. Press Enter to open
@@ -537,7 +555,7 @@ sudo pacman -S vulkan-headers
 
 ### Keybindings not working
 
-Some platforms have quirks with modifier key reporting. ProjectVem includes workarounds, but if you experience issues:
+Some platforms have quirks with modifier key reporting. Vem includes workarounds, but if you experience issues:
 
 1. Check the console output for debug messages
 2. See `DEBUG_FINDINGS.md` for known platform issues
@@ -574,9 +592,9 @@ Now that you know the basics:
 - Read `DEBUG_FINDINGS.md` for known issues and workarounds
 - Open an issue on GitHub if you find bugs
 
-## Welcome to ProjectVem
+## Welcome to Vem
 
-You're now ready to start using ProjectVem productively. Remember:
+You're now ready to start using Vem productively. Remember:
 
 - Start in NORMAL mode
 - Press `i` to insert text

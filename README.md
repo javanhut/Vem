@@ -10,13 +10,14 @@ Vem is a lightweight yet powerful text editor that combines Vim's modal editing 
 
 ### Core Editing
 
-- **Modal Editing**: Full Vim-like modes (NORMAL, INSERT, VISUAL, DELETE, COMMAND, EXPLORER, SEARCH, FUZZY_FINDER)
+- **Modal Editing**: Full Vim-like modes (NORMAL, INSERT, VISUAL, DELETE, COMMAND, EXPLORER, SEARCH, FUZZY_FINDER, TERMINAL)
 - **Vim Motions**: Complete navigation with hjkl, word motions (w/b/e), line jumps (0/$), document jumps (gg/G)
 - **Visual Mode**: Line and character selection with copy/delete/paste operations
 - **Undo System**: Full undo support for all edit operations
-- **Multi-Buffer Support**: Open and edit multiple files simultaneously
+- **Multi-Buffer Support**: Open and edit multiple files simultaneously, including from command line
 - **Search & Highlight**: Case-insensitive search with match highlighting and navigation
 - **Syntax Highlighting**: Powered by Chroma with support for 200+ languages and multiple color themes
+- **Unified Terminal**: Cross-platform Bash interpreter (works identically on Linux, macOS, and Windows) with VT100/ANSI support and true color
 
 ### Window Management
 
@@ -39,7 +40,9 @@ Vem is a lightweight yet powerful text editor that combines Vim's modal editing 
 - **Fullscreen Mode**: Distraction-free editing with Shift+Enter
 - **Status Bar**: Shows mode, file name, cursor position, pane info, and messages
 - **File Type Icons**: Visual file type indicators in the explorer using Nerd Font icons
-- **Command-Line Interface**: Vim-style commands (:e, :w, :q, :wq, :bd, etc.)
+- **Command-Line Interface**: Vim-style commands (:e, :w, :q, :wq, :bd, :help, etc.)
+- **Built-in Help**: Comprehensive help system with :help command
+- **Read-Only Buffers**: Support for read-only buffers (help pages, system info)
 - **GPU-Accelerated**: Smooth, responsive interface using Gio UI
 - **Cross-Platform**: Identical experience on Linux, macOS, Windows, and WebAssembly
 
@@ -105,8 +108,14 @@ sudo install -m 755 vem /usr/local/bin/vem
 # Launch Vem
 vem
 
-# Or open a specific file
+# Open a specific file
 vem main.go
+
+# Open multiple files
+vem file1.txt file2.go file3.md
+
+# Create a new file
+vem newfile.txt
 ```
 
 ### Basic Workflow
@@ -130,6 +139,7 @@ vem main.go
 | `Ctrl+F` | Fuzzy Finder | Quick file search |
 | `Ctrl+U` | Undo | Undo last operation |
 | `Ctrl+X` | Close Pane | Close active pane |
+| `Ctrl+` ` | Toggle Terminal | Open/close integrated terminal |
 | `Shift+Enter` | Fullscreen | Toggle fullscreen mode |
 | `Shift+Tab` | Cycle Panes | Move to next pane |
 
@@ -259,6 +269,12 @@ Press `Ctrl+S` followed by:
 | `:cd <path>` | Change directory |
 | `:pwd` | Print working directory |
 
+#### Help System
+
+| Command | Description |
+|---------|-------------|
+| `:help` or `:h` | Open comprehensive keybindings help |
+
 ### EXPLORER Mode
 
 | Key | Action | Description |
@@ -295,13 +311,31 @@ After search, use `n` and `Shift+N` in NORMAL mode to navigate matches.
 | `Backspace` | Delete Char | Remove last character |
 | `Esc` | Cancel | Close fuzzy finder |
 
+### TERMINAL Mode
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Ctrl+` ` | Toggle Terminal | Open/close terminal |
+| `Esc` | Exit to NORMAL | Return to NORMAL mode |
+| All other keys | Pass to Shell | Direct terminal input |
+
+**Features**:
+- Full VT100/ANSI escape sequence support
+- 256-color and true color (24-bit) support
+- Bold, italic, underline, and other text attributes
+- Unified Bash interpreter (same shell on all platforms)
+- Cross-platform compatibility (Linux, macOS, Windows)
+- Auto-closes when shell exits
+- Integrates with buffer system (switch with `:bn`/`:bp`)
+
 ## Documentation
 
+- **[Reference Guide](docs/reference.md)** - Complete command and feature reference
 - **[Keybindings Reference](docs/keybindings.md)** - Complete keybinding documentation
-- **[Pane Splitting Guide](docs/pane-splitting.md)** - Detailed pane management guide
-- **[Installation Guide](docs/installation.md)** - Platform-specific installation instructions
 - **[Architecture Guide](docs/Architecture.md)** - Technical implementation details
 - **[Tutorial](docs/tutorial.md)** - Step-by-step getting started guide
+- **[Installation Guide](docs/installation.md)** - Platform-specific installation instructions
+- **[Pane Splitting Guide](docs/pane-splitting.md)** - Detailed pane management guide
 - **[Navigation Guide](docs/navigation.md)** - Pane navigation and fullscreen features
 - **[Search Guide](docs/search.md)** - Search functionality documentation
 - **[Syntax Highlighting](docs/syntax-highlighting.md)** - Color themes and language support
@@ -334,12 +368,13 @@ Vem/
 ├── internal/
 │   ├── appcore/               # Core application and rendering
 │   │   ├── app.go            # Event handling and UI layout
+│   │   ├── help.go           # Built-in help system
 │   │   ├── keybindings.go    # Keybinding system
 │   │   ├── pane_actions.go   # Pane management actions
 │   │   ├── pane_rendering.go # Pane rendering logic
 │   │   └── fuzzy.go          # Fuzzy finder implementation
 │   ├── editor/                # Text editing engine
-│   │   ├── buffer.go         # Buffer abstraction
+│   │   ├── buffer.go         # Buffer abstraction with read-only support
 │   │   ├── buffer_manager.go # Multi-buffer management
 │   │   └── buffer_test.go    # Unit tests
 │   ├── filesystem/            # File system operations
@@ -355,8 +390,17 @@ Vem/
 │   ├── syntax/                # Syntax highlighting
 │   │   ├── highlighter.go    # Language detection and tokenization
 │   │   └── theme.go          # Color theme management
+│   ├── terminal/              # Integrated terminal
+│   │   ├── terminal.go       # Terminal emulator core
+│   │   ├── buffer.go         # Terminal buffer management
+│   │   ├── colors.go         # ANSI color handling
+│   │   └── input.go          # Terminal input processing
+│   ├── shell/                # Unified shell interpreter
+│   │   └── interpreter.go    # Cross-platform Bash interpreter
 │   └── fonts/                 # Font management
-│       └── fonts.go          # Font loading and rendering
+│       ├── fonts.go          # Font loading and rendering
+│       ├── JetBrainsMonoNerdFont-Regular.ttf
+│       └── JetBrainsMonoNerdFont-Bold.ttf
 ├── docs/                      # Documentation
 ├── go.mod                     # Go module definition
 ├── Makefile                   # Build automation
@@ -377,15 +421,23 @@ Vem uses minimal dependencies:
   - 200+ language lexers
   - Multiple color themes
   - Fast tokenization
+- **[vt10x](https://github.com/hinshun/vt10x)** - VT100/ANSI terminal emulator
+  - Full escape sequence support
+  - 256-color and true color
+- **[mvdan/sh](https://mvdan.cc/sh)** v3.12.0 - Pure Go Bash interpreter
+  - Unified shell across all platforms
+  - 30+ built-in commands (cd, pwd, echo, test, etc.)
+  - Full Bash scripting support (variables, loops, pipes)
+- **[clipboard](https://golang.design/x/clipboard)** v0.7.1 - System clipboard integration
 
 ### Transitive (Automatic)
 - `gioui.org/shader` v1.0.8 - Shader compilation
 - `github.com/go-text/typesetting` v0.3.0 - Text layout
 - `github.com/dlclark/regexp2` v1.11.5 - Advanced regex (for Chroma)
 - `golang.org/x/exp/shiny` - Platform abstraction
-- `golang.org/x/image` v0.26.0 - Image handling
+- `golang.org/x/image` v0.28.0 - Image handling
 - `golang.org/x/sys` v0.33.0 - System calls
-- `golang.org/x/text` v0.24.0 - Text processing
+- `golang.org/x/text` v0.26.0 - Text processing
 
 All dependencies are managed via Go modules and installed automatically.
 
@@ -488,13 +540,16 @@ See [LICENSE](LICENSE) for the full license text.
 
 Vem is feature-complete for Phase 1 and includes:
 
-- Full modal editing system
+- Full modal editing system (NORMAL, INSERT, VISUAL, DELETE, COMMAND, EXPLORER, SEARCH, FUZZY_FINDER, TERMINAL)
 - Syntax highlighting with 200+ languages
 - Pane splitting and management
 - Fuzzy file finder
 - File explorer with operations
 - Search with highlighting
-- Multi-buffer support
+- Multi-buffer support with command line file opening
+- Unified cross-platform terminal with Bash interpreter
+- Built-in help system (:help command)
+- Read-only buffer support
 - Undo functionality
 - Cross-platform support
 - GPU-accelerated rendering
