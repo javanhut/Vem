@@ -1,7 +1,7 @@
 # Makefile for ProjectVem
 # Cross-platform build, install, and dependency management
 
-.PHONY: help build install uninstall clean test check-deps check-deps-linux check-deps-windows check-deps-darwin check-go check-vulkan check-xkbcommon check-xkbcommon-x11 check-wayland check-wayland-cursor check-x11 check-egl check-xcursor check-xfixes install-linux-deps build-windows build-linux build-darwin
+.PHONY: help build install uninstall clean test check-deps check-deps-linux check-deps-windows check-deps-darwin check-go check-vulkan check-xkbcommon check-xkbcommon-x11 check-wayland check-wayland-cursor check-x11 check-x11-xcb check-egl check-xcursor check-xfixes install-linux-deps build-windows build-linux build-darwin
 
 # Detect OS and Architecture
 GOOS := $(shell go env GOOS 2>/dev/null)
@@ -108,6 +108,19 @@ else
 	@echo "X11 check not required on $(GOOS)"
 endif
 
+check-x11-xcb: ## Check if libx11-xcb is installed (Linux only)
+ifeq ($(GOOS),linux)
+	@echo "Checking for x11-xcb..."
+	@if pkg-config --exists x11-xcb 2>/dev/null; then \
+		echo "✓ x11-xcb found."; \
+	else \
+		echo "✗ x11-xcb not found. Install libx11-xcb-dev (Debian/Ubuntu) or libX11-xcb (Fedora/Arch)"; \
+		exit 1; \
+	fi
+else
+	@echo "x11-xcb check not required on $(GOOS)"
+endif
+
 check-egl: ## Check if EGL (mesa) is installed (Linux only)
 ifeq ($(GOOS),linux)
 	@echo "Checking for EGL..."
@@ -210,16 +223,16 @@ ifeq ($(GOOS),linux)
 	@echo "Detecting package manager and installing dependencies..."
 	@if command -v apt-get >/dev/null 2>&1; then \
 		echo "Using apt-get (Debian/Ubuntu)..."; \
-		sudo apt-get update && sudo apt-get install -y libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols; \
+		sudo apt-get update && sudo apt-get install -y libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols; \
 	elif command -v dnf >/dev/null 2>&1; then \
 		echo "Using dnf (Fedora/RHEL/CentOS)..."; \
-		sudo dnf install -y vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel; \
+		sudo dnf install -y vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libX11-xcb mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel; \
 	elif command -v pacman >/dev/null 2>&1; then \
 		echo "Using pacman (Arch/Manjaro)..."; \
 		sudo pacman -S --noconfirm vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 mesa libxcursor libxfixes; \
 	elif command -v zypper >/dev/null 2>&1; then \
 		echo "Using zypper (openSUSE)..."; \
-		sudo zypper install -y vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel Mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel; \
+		sudo zypper install -y vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libX11-xcb1 Mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel; \
 	elif command -v apk >/dev/null 2>&1; then \
 		echo "Using apk (Alpine Linux)..."; \
 		sudo apk add vulkan-headers vulkan-loader-dev libxkbcommon-dev libxkbcommon-x11 wayland-dev wayland-protocols libx11-dev mesa-dev libxcursor-dev libxfixes-dev; \
@@ -228,10 +241,10 @@ ifeq ($(GOOS),linux)
 		echo "Please install the following dependencies manually:"; \
 		echo ""; \
 		echo "Debian/Ubuntu:"; \
-		echo "  sudo apt-get install libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols"; \
+		echo "  sudo apt-get install libvulkan-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libegl1-mesa-dev libxcursor-dev libxfixes-dev wayland-protocols"; \
 		echo ""; \
 		echo "Fedora/RHEL/CentOS:"; \
-		echo "  sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel"; \
+		echo "  sudo dnf install vulkan-devel libxkbcommon-devel libxkbcommon-x11-devel wayland-devel libX11-devel libX11-xcb mesa-libEGL-devel libXcursor-devel libXfixes-devel wayland-protocols-devel"; \
 		echo ""; \
 		echo "Arch/Manjaro:"; \
 		echo "  sudo pacman -S vulkan-headers vulkan-icd-loader libxkbcommon libxkbcommon-x11 wayland wayland-protocols libx11 mesa libxcursor libxfixes"; \
@@ -258,6 +271,7 @@ ifeq ($(GOOS),linux)
 	if ! $(MAKE) check-wayland 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-wayland-cursor 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-x11 2>/dev/null; then MISSING=1; fi; \
+	if ! $(MAKE) check-x11-xcb 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-egl 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-xcursor 2>/dev/null; then MISSING=1; fi; \
 	if ! $(MAKE) check-xfixes 2>/dev/null; then MISSING=1; fi; \
