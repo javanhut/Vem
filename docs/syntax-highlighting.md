@@ -14,6 +14,7 @@ Vem includes built-in syntax highlighting powered by [Chroma](https://github.com
 
 Vem supports syntax highlighting for all languages recognized by Chroma, including but not limited to:
 
+- **Carrion**: Custom lexer for the Carrion programming language (.crl files)
 - **Programming Languages**: Go, Python, JavaScript, TypeScript, C, C++, Rust, Java, C#, Ruby, PHP, Swift, Kotlin, Scala
 - **Web Technologies**: HTML, CSS, SCSS, SASS, JSX, TSX, Vue, Svelte
 - **Shell Scripts**: Bash, Zsh, Fish, PowerShell
@@ -67,6 +68,7 @@ When you open a file, syntax highlighting is automatically enabled based on the 
 :e myfile.go       # Opens with Go syntax highlighting
 :e script.py       # Opens with Python syntax highlighting
 :e index.html      # Opens with HTML syntax highlighting
+:e program.crl     # Opens with Carrion syntax highlighting
 ```
 
 ### Toggling Syntax Highlighting
@@ -196,6 +198,27 @@ All open buffers immediately update to use the Dracula theme.
 ```
 
 The current buffer displays in plain text without syntax highlighting.
+
+## Carrion Language Support
+
+Vem includes a custom-built syntax highlighter for the Carrion programming language (.crl files). The highlighter supports all major Carrion language features:
+
+### Supported Features
+
+- **Keywords**: `spell`, `grim`, `attempt`, `ensnare`, `resolve`, `diverge`, `converge`, `main`, and more
+- **Built-in Types**: `Array`, `Boolean`, `Float`, `Integer`, `String`, `Map`, `Tuple`, `File`, `OS`, etc.
+- **Built-in Functions**: `print`, `input`, `len`, `type`, `range`, and many more
+- **Operators**: All arithmetic, comparison, logical, and bitwise operators
+- **String Types**: Regular strings, f-strings, interpolated strings, triple-quoted strings
+- **Comments**: Single-line (`#`), multi-line (`/* */`), and triple-backtick (` ``` `)
+- **Special Constructs**: Main entry point (`main:`), goroutines (`diverge:`, `converge`)
+- **Error Handling**: `attempt`, `ensnare`, `resolve`, `raise`, `check`
+- **Control Flow**: `if`, `otherwise`, `else`, `for`, `while`, `match`, `case`
+- **OOP Features**: Classes (`grim`), methods (`spell`), constructors (`init`), `self`, `super`
+
+### Example
+
+A Carrion test file is included at `examples/test.crl` demonstrating all supported syntax features.
 
 ## Future Enhancements
 

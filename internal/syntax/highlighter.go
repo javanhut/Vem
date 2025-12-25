@@ -8,6 +8,8 @@ import (
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+
+	_ "github.com/javanhut/vem/internal/syntax/lexers"
 )
 
 // Token represents a syntax-highlighted token with its text, type, and color.
