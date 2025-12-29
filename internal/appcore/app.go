@@ -6,7 +6,9 @@ import (
 	"image/color"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sync"
 	"strings"
 	"time"
 	"unicode"
@@ -31,6 +33,7 @@ import (
 	"github.com/javanhut/vem/internal/editor"
 	"github.com/javanhut/vem/internal/filesystem"
 	"github.com/javanhut/vem/internal/fonts"
+	"github.com/javanhut/vem/internal/lsp"
 	"github.com/javanhut/vem/internal/panes"
 	"github.com/javanhut/vem/internal/syntax"
 	"github.com/javanhut/vem/internal/terminal"
@@ -170,6 +173,47 @@ type appState struct {
 	lastWindowSize     image.Point                // Track window size for terminal resize
 	terminalViewports  map[int]int                // Map from buffer index to viewportTopLine for terminals
 	terminalAutoScroll map[int]bool               // Map from buffer index to auto-scroll enabled
+
+	// LSP state
+	lspManager     *lsp.Manager                // LSP server manager
+	lspEnabled     bool                        // Whether LSP is enabled
+	lspDiagnostics map[string][]lsp.Diagnostic // File path -> diagnostics
+	lspChangeMu    sync.Mutex
+	lspChangeTimers   map[string]*time.Timer
+	lspChangeContents map[string]string
+	lspChangeSeq      map[string]int
+	lspHint           string
+	lspHintFile       string
+	lspAutoEnabled    bool
+	lspAutoAttempted  map[string]bool
+	lspAutoInFlight   map[string]bool
+	lspCompletionMu      sync.Mutex
+	lspCompletionTimers  map[string]*time.Timer
+	lspCompletionSeq     map[string]int
+	lspCompletionReq     map[string]lspCompletionRequest
+
+	// LSP Completion state
+	completionActive  bool
+	completionItems   []lsp.CompletionItem
+	completionIndex   int
+	completionTrigger editor.Cursor // Where completion was triggered
+	completionResolved map[int]bool
+	completionVersion  int
+
+	// LSP Hover state
+	hoverActive  bool
+	hoverContent string
+	hoverRange   *lsp.Range
+
+	// LSP References state
+	referencesActive bool
+	referencesItems  []lsp.Location
+	referencesIndex  int
+
+	// LSP Code Actions state
+	codeActionsActive bool
+	codeActionItems   []lsp.CodeAction
+	codeActionIndex   int
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -204,12 +248,18 @@ func (s *appState) run(w *app.Window) error {
 
 // cleanup performs shutdown tasks, including closing all terminals
 func (s *appState) cleanup() {
+	// Stop all terminals
 	for _, term := range s.terminals {
 		if term != nil {
 			if err := term.Close(); err != nil {
 				// Silently handle terminal close errors
 			}
 		}
+	}
+
+	// Stop all LSP servers
+	if s.lspManager != nil {
+		s.lspManager.StopAll()
 	}
 }
 
@@ -283,7 +333,10 @@ func newAppState(filePaths []string) *appState {
 		fileTree.LoadInitial()
 	}
 
-	return &appState{
+	// Initialize LSP manager
+	lspManager := lsp.NewManager()
+
+	state := &appState{
 		theme:                theme,
 		bufferMgr:            bufferMgr,
 		paneManager:          paneManager,
@@ -310,7 +363,44 @@ func newAppState(filePaths []string) *appState {
 		terminalViewports:    make(map[int]int),
 		terminalAutoScroll:   make(map[int]bool),
 		lastWindowSize:       image.Point{},
+		lspManager:           lspManager,
+		lspEnabled:           true,
+		lspDiagnostics:       make(map[string][]lsp.Diagnostic),
+		lspChangeTimers:      make(map[string]*time.Timer),
+		lspChangeContents:    make(map[string]string),
+		lspChangeSeq:         make(map[string]int),
+		lspAutoEnabled:       false,
+		lspAutoAttempted:     make(map[string]bool),
+		lspAutoInFlight:      make(map[string]bool),
+		lspCompletionTimers:  make(map[string]*time.Timer),
+		lspCompletionSeq:     make(map[string]int),
+		lspCompletionReq:     make(map[string]lspCompletionRequest),
+		completionResolved:   make(map[int]bool),
 	}
+
+	// Set up LSP callbacks
+	lspManager.OnDiagnostics(func(uri lsp.DocumentURI, diagnostics []lsp.Diagnostic) {
+		filePath := lsp.URIToFilePath(uri)
+		state.lspDiagnostics[filePath] = diagnostics
+	})
+
+	lspManager.OnStatus(func(message string) {
+		state.status = message
+	})
+
+	lspManager.OnError(func(err error) {
+		state.status = fmt.Sprintf("LSP error: %v", err)
+	})
+
+	lspManager.OnInvalidate(func() {
+		if state.window != nil {
+			state.window.Invalidate()
+		}
+	})
+
+	state.setupLSPForBuffer(state.activeBuffer())
+
+	return state
 }
 
 // createBufferManagerWithFiles creates a buffer manager with files loaded from paths.
@@ -658,7 +748,7 @@ func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
 	return inset.Layout(gtx, label.Layout)
 }
 
-func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
+func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dimensions {
 	buf := s.activeBuffer()
 	lines := buf.LineCount()
 	cursorLine := buf.Cursor().Line
@@ -706,6 +796,27 @@ func (s *appState) drawBuffer(gtx layout.Context) layout.Dimensions {
 			return s.drawBufferLine(gtx, index, cursorLine, cursorCol, selStart, selEnd, hasSel)
 		})
 	})
+
+	if showOverlays {
+		lineHeight := s.measureLineHeight(gtx)
+		if lineHeight <= 0 {
+			lineHeight = gtx.Dp(unit.Dp(lineHeightDp))
+		}
+
+		visibleLine := cursorLine - s.viewportTopLine
+		if visibleLine >= 0 && visibleLine < lines {
+			gutter := fmt.Sprintf("%4d  ", cursorLine+1)
+			prefix := buf.LinePrefix(cursorLine, cursorCol)
+			cursorX := gtx.Dp(inset.Left) + s.measureTextWidth(gtx, gutter) + s.measureTextWidth(gtx, prefix)
+			cursorY := gtx.Dp(inset.Top) + visibleLine*lineHeight
+			s.drawCompletionMenu(gtx, cursorX, cursorY)
+			s.drawHoverTooltip(gtx, cursorX, cursorY)
+		}
+
+		if s.referencesActive {
+			s.drawReferencesList(gtx)
+		}
+	}
 
 	return dims
 }
@@ -774,6 +885,9 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 
 	// Draw the text on top
 	call.Add(gtx.Ops)
+
+	gutterWidth := s.measureTextWidth(gtx, gutterExpanded)
+	s.drawDiagnosticUnderlines(gtx, s.activeBuffer(), index, gutterWidth, 0, dims.Size.Y)
 
 	// Draw cursor if on cursor line
 	if index == cursorLine {
@@ -956,8 +1070,13 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 				zoomInfo = " | ZOOMED"
 			}
 
-			status = fmt.Sprintf("MODE %s | FILE %s%s%s | CURSOR %d:%d%s%s%s | %s",
-				s.mode, fileName, modFlag, readOnlyFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status,
+			hint := ""
+			if s.lspHint != "" && s.lspHintFile == buf.FilePath() {
+				hint = " | HINT: " + s.lspHint
+			}
+
+			status = fmt.Sprintf("MODE %s | FILE %s%s%s | CURSOR %d:%d%s%s%s | %s%s",
+				s.mode, fileName, modFlag, readOnlyFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status, hint,
 			)
 		}
 	}
@@ -1589,6 +1708,20 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	return dims.Size.X
 }
 
+func (s *appState) measureLineHeight(gtx layout.Context) int {
+	label := material.Body1(s.theme, "M")
+	label.Font.Typeface = "JetBrainsMono"
+	measureGtx := gtx
+	measureGtx.Constraints = layout.Constraints{
+		Min: image.Point{},
+		Max: image.Point{X: math.MaxInt32, Y: math.MaxInt32},
+	}
+	macro := op.Record(measureGtx.Ops)
+	dims := label.Layout(measureGtx)
+	macro.Stop()
+	return dims.Size.Y
+}
+
 func (s *appState) updateCaretBlink(gtx layout.Context) {
 	if s.caretReset {
 		s.caretVisible = true
@@ -1850,7 +1983,7 @@ func (s *appState) executeDeleteCommand() {
 
 func (s *appState) startGotoSequence() {
 	s.pendingGoto = true
-	s.status = "goto line: awaiting g/G"
+	s.status = "goto: awaiting g/G/d"
 }
 
 func (s *appState) handleGotoSequence(r rune) bool {
@@ -1869,6 +2002,10 @@ func (s *appState) handleGotoSequence(r rune) bool {
 			target = s.activeBuffer().LineCount()
 		}
 		s.gotoLine(target)
+		return true
+	case 'd':
+		// gd - go to definition (LSP)
+		s.handleLSPGotoDefinition()
 		return true
 	default:
 		return false
@@ -2048,11 +2185,12 @@ func (s *appState) openSelectedNode() {
 	}
 
 	// Open file
-	_, err := s.bufferMgr.OpenFile(node.Path)
+	buf, err := s.bufferMgr.OpenFile(node.Path)
 	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", node.Name, err)
 		return
 	}
+	s.setupLSPForBuffer(buf)
 
 	// Update the active pane to display the newly opened buffer
 	if s.paneManager != nil {
@@ -2416,7 +2554,15 @@ func (s *appState) executeCommandLine() {
 		s.handleOpenTerminal()
 	case "help", "h":
 		s.handleHelpCommand(strings.TrimSpace(args))
+	case "install":
+		s.handleInstallCommand(strings.TrimSpace(args))
+	case "lspauto":
+		s.handleLSPAutoCommand(strings.TrimSpace(args))
 	default:
+		// Try LSP commands
+		if s.processLSPCommand(name, args) {
+			return
+		}
 		s.status = fmt.Sprintf("Unknown command: %s", name)
 	}
 }
@@ -2464,12 +2610,14 @@ func (s *appState) handleQuitCommand(force bool) {
 			s.status = fmt.Sprintf("Error closing pane: %v", err)
 			return
 		}
+		s.cleanupLSPForBuffer(buf)
 		s.bufferMgr.CloseBuffer(bufferIndex, force)
 		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		return
 	}
 
 	// Last pane - close buffer but keep editor open
+	s.cleanupLSPForBuffer(buf)
 	s.bufferMgr.CloseBuffer(bufferIndex, force)
 
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
@@ -2536,17 +2684,134 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 	s.status = fmt.Sprintf("Wrote %d line(s) → %s", buf.LineCount(), filename)
 }
 
+func (s *appState) handleInstallCommand(arg string) {
+	if arg == "" {
+		s.status = "Usage: :install <language|server>"
+		return
+	}
+
+	aliases := map[string]string{
+		"rustlsp":   "rust",
+		"golsp":     "go",
+		"pythonlsp": "python",
+		"tslsp":     "typescript",
+		"jslsp":     "javascript",
+	}
+
+	id := strings.ToLower(arg)
+	if mapped, ok := aliases[id]; ok {
+		id = mapped
+	}
+
+	cfg := lsp.GetConfigByIdentifier(id)
+	if cfg == nil {
+		s.status = fmt.Sprintf("Unknown LSP: %s", arg)
+		return
+	}
+	filePath := ""
+	if buf := s.activeBuffer(); buf != nil {
+		filePath = buf.FilePath()
+	}
+
+	s.installLSPServer(cfg, filePath, false)
+}
+
+func (s *appState) handleLSPAutoCommand(arg string) {
+	switch strings.ToLower(arg) {
+	case "", "toggle":
+		s.lspAutoEnabled = !s.lspAutoEnabled
+	case "on", "enable", "1", "true":
+		s.lspAutoEnabled = true
+	case "off", "disable", "0", "false":
+		s.lspAutoEnabled = false
+	case "status":
+	default:
+		s.status = "Usage: :lspauto [on|off|toggle|status]"
+		return
+	}
+
+	state := "disabled"
+	if s.lspAutoEnabled {
+		state = "enabled"
+	}
+	s.status = fmt.Sprintf("LSP auto-install %s", state)
+}
+
+func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto bool) {
+	if cfg == nil {
+		return
+	}
+
+	if lsp.IsServerAvailable(cfg) {
+		s.status = fmt.Sprintf("LSP: %s already installed", cfg.Name)
+		return
+	}
+
+	if len(cfg.InstallCommand) == 0 {
+		s.status = fmt.Sprintf("No install command for %s", cfg.Name)
+		return
+	}
+
+	if s.lspAutoInFlight == nil {
+		s.lspAutoInFlight = make(map[string]bool)
+	}
+
+	if s.lspAutoInFlight[cfg.Name] {
+		return
+	}
+	s.lspAutoInFlight[cfg.Name] = true
+
+	verb := "Installing"
+	if auto {
+		verb = "Auto-installing"
+	}
+	s.status = fmt.Sprintf("%s %s...", verb, cfg.Name)
+
+	cmdName := cfg.InstallCommand[0]
+	cmdArgs := []string{}
+	if len(cfg.InstallCommand) > 1 {
+		cmdArgs = cfg.InstallCommand[1:]
+	}
+
+	go func() {
+		cmd := exec.Command(cmdName, cmdArgs...)
+		cmd.Env = os.Environ()
+		output, err := cmd.CombinedOutput()
+		s.lspAutoInFlight[cfg.Name] = false
+		if err != nil {
+			lastLine := strings.TrimSpace(string(output))
+			if idx := strings.LastIndex(lastLine, "\n"); idx != -1 {
+				lastLine = strings.TrimSpace(lastLine[idx+1:])
+			}
+			if lastLine == "" {
+				s.status = fmt.Sprintf("Install failed: %v", err)
+			} else {
+				s.status = fmt.Sprintf("Install failed: %s", lastLine)
+			}
+			return
+		}
+
+		s.status = fmt.Sprintf("Installed %s (use :lsprestart)", cfg.Name)
+		if auto && filePath != "" {
+			if buf := s.bufferMgr.GetBufferByPath(filePath); buf != nil {
+				s.startLSPForFile(filePath, buf.GetContent())
+			}
+		}
+	}()
+}
+
 func (s *appState) handleEditCommand(path string) {
 	if path == "" {
 		s.status = "E471: Argument required"
 		return
 	}
 
-	_, err := s.bufferMgr.OpenFile(path)
+	buf, err := s.bufferMgr.OpenFile(path)
 	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", path, err)
 		return
 	}
+	s.setupLSPForBuffer(buf)
 
 	// Update the active pane to display the newly opened buffer
 	if s.paneManager != nil {
@@ -2560,9 +2825,11 @@ func (s *appState) handleEditCommand(path string) {
 }
 
 func (s *appState) handleBufferDeleteCommand(force bool) {
+	buf := s.activeBuffer()
 	if err := s.bufferMgr.CloseActiveBuffer(force); err != nil {
 		s.status = fmt.Sprintf("Error: %v", err)
 	} else {
+		s.cleanupLSPForBuffer(buf)
 		s.status = "Buffer deleted"
 	}
 }
@@ -2855,6 +3122,10 @@ func (s *appState) insertText(text string) {
 
 	// Debug: Log buffer content and cursor position after insertion
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
+
+	if s.mode == modeInsert {
+		s.maybeTriggerLSPCompletion(text)
+	}
 }
 
 func (s *appState) saveBufferToFile(path string) error {
@@ -3212,12 +3483,13 @@ func (s *appState) fuzzyFinderConfirm() {
 	match := s.fuzzyFinderMatches[s.fuzzyFinderSelectedIdx]
 	fullPath := filepath.Join(s.fileTree.CurrentPath(), match.FilePath)
 
-	_, err := s.bufferMgr.OpenFile(fullPath)
+	buf, err := s.bufferMgr.OpenFile(fullPath)
 	if err != nil {
 		s.status = fmt.Sprintf("Error opening %s: %v", match.FilePath, err)
 		s.exitFuzzyFinder()
 		return
 	}
+	s.setupLSPForBuffer(buf)
 
 	// Update the active pane to display the newly opened buffer
 	if s.paneManager != nil {

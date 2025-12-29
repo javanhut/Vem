@@ -215,12 +215,14 @@ func (s *appState) handlePaneClose() {
 			s.status = fmt.Sprintf("Error closing pane: %v", err)
 			return
 		}
+		s.cleanupLSPForBuffer(buf)
 		s.bufferMgr.CloseBuffer(bufferIndex, false)
 		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		return
 	}
 
 	// Last pane - close buffer but keep editor open
+	s.cleanupLSPForBuffer(buf)
 	s.bufferMgr.CloseBuffer(bufferIndex, false)
 
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)

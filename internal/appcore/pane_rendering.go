@@ -20,7 +20,7 @@ import (
 func (s *appState) drawPanes(gtx layout.Context) layout.Dimensions {
 	if s.paneManager == nil {
 		// Fallback to single buffer view
-		return s.drawBuffer(gtx)
+		return s.drawBuffer(gtx, true)
 	}
 
 	// If zoomed, just draw the zoomed pane
@@ -34,7 +34,7 @@ func (s *appState) drawPanes(gtx layout.Context) layout.Dimensions {
 	// Render the pane tree
 	root := s.paneManager.Root()
 	if root == nil {
-		return s.drawBuffer(gtx)
+		return s.drawBuffer(gtx, true)
 	}
 
 	return s.renderPaneNode(gtx, root)
@@ -128,7 +128,7 @@ func (s *appState) drawSinglePane(gtx layout.Context, pane *panes.Pane) layout.D
 		s.paneManager.SetActivePaneQuiet(pane)
 
 		// Draw buffer content
-		dims := s.drawBuffer(gtx)
+		dims := s.drawBuffer(gtx, false)
 
 		// Restore original active pane (quietly, without triggering side effects)
 		s.paneManager.SetActivePaneQuiet(oldActivePane)
@@ -144,7 +144,7 @@ func (s *appState) drawSinglePane(gtx layout.Context, pane *panes.Pane) layout.D
 	oldViewportTop := s.viewportTopLine
 	s.viewportTopLine = pane.ViewportTop // Sync FROM pane TO global for rendering
 
-	dims := s.drawBuffer(gtx)
+	dims := s.drawBuffer(gtx, true)
 
 	// Save any viewport changes back to the pane
 	pane.SetViewportTop(s.viewportTopLine) // Sync back FROM global TO pane
