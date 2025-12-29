@@ -138,6 +138,7 @@ vem newfile.txt
 | `Ctrl+L` | Focus Editor | Switch to editor |
 | `Ctrl+F` | Fuzzy Finder | Quick file search |
 | `Ctrl+U` | Undo | Undo last operation |
+| `Ctrl+Shift+R` | Resize Panes | Enter resize mode (use arrows or h/l/j(up)/k(down), Esc to exit) |
 | `Ctrl+X` | Close Pane | Close active pane |
 | `Ctrl+` ` | Toggle Terminal | Open/close integrated terminal |
 | `Shift+Enter` | Fullscreen | Toggle fullscreen mode |

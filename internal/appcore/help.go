@@ -75,6 +75,7 @@ func appendGlobalKeybindings(sb *strings.Builder) {
 		{"Ctrl+U", "Undo last edit"},
 		{"Ctrl+C", "Copy current line (NORMAL mode)"},
 		{"Ctrl+P", "Paste from clipboard"},
+		{"Ctrl+Shift+R", "Resize panes (arrows or h/l/j(up)/k(down), Esc to exit)"},
 		{"Ctrl+X", "Close pane/buffer"},
 		{"Ctrl+`", "Open/toggle terminal"},
 		{"Alt+h", "Focus pane left"},

@@ -43,6 +43,7 @@ Vem supports **mutually exclusive panes** where each pane displays exactly one b
 | `Ctrl+X` | Close active pane (prompts if unsaved changes) |
 | `Ctrl+S =` | Equalize all panes (make them 50/50) |
 | `Ctrl+S o` | Toggle zoom (maximize/restore active pane) |
+| `Ctrl+Shift+R` | Resize panes (arrows or h/l/j(up)/k(down), Esc to exit) |
 
 ## Workflow Examples
 
@@ -220,7 +221,7 @@ MODE NORMAL | FILE main.go | CURSOR 42:15 | PANE 1/3 | ZOOMED | Ready
 ## Limitations
 
 - Each pane must show a different buffer (no duplicate files)
-- All splits are 50/50 (no custom ratios yet)
+- Splits default to 50/50 (resize mode allows custom ratios)
 - Maximum practical panes: ~4-6 (more becomes hard to navigate)
 - Pane layout is not persistent (resets on restart)
 

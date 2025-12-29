@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -105,6 +105,7 @@ type appState struct {
 	pendingGoto          bool
 	pendingScroll        bool
 	pendingPaneCmd       bool
+	paneResizeMode       bool
 	visualMode           visualModeType
 	visualStartLine      int
 	visualStartCol       int
@@ -175,28 +176,28 @@ type appState struct {
 	terminalAutoScroll map[int]bool               // Map from buffer index to auto-scroll enabled
 
 	// LSP state
-	lspManager     *lsp.Manager                // LSP server manager
-	lspEnabled     bool                        // Whether LSP is enabled
-	lspDiagnostics map[string][]lsp.Diagnostic // File path -> diagnostics
-	lspChangeMu    sync.Mutex
-	lspChangeTimers   map[string]*time.Timer
-	lspChangeContents map[string]string
-	lspChangeSeq      map[string]int
-	lspHint           string
-	lspHintFile       string
-	lspAutoEnabled    bool
-	lspAutoAttempted  map[string]bool
-	lspAutoInFlight   map[string]bool
-	lspCompletionMu      sync.Mutex
-	lspCompletionTimers  map[string]*time.Timer
-	lspCompletionSeq     map[string]int
-	lspCompletionReq     map[string]lspCompletionRequest
+	lspManager          *lsp.Manager                // LSP server manager
+	lspEnabled          bool                        // Whether LSP is enabled
+	lspDiagnostics      map[string][]lsp.Diagnostic // File path -> diagnostics
+	lspChangeMu         sync.Mutex
+	lspChangeTimers     map[string]*time.Timer
+	lspChangeContents   map[string]string
+	lspChangeSeq        map[string]int
+	lspHint             string
+	lspHintFile         string
+	lspAutoEnabled      bool
+	lspAutoAttempted    map[string]bool
+	lspAutoInFlight     map[string]bool
+	lspCompletionMu     sync.Mutex
+	lspCompletionTimers map[string]*time.Timer
+	lspCompletionSeq    map[string]int
+	lspCompletionReq    map[string]lspCompletionRequest
 
 	// LSP Completion state
-	completionActive  bool
-	completionItems   []lsp.CompletionItem
-	completionIndex   int
-	completionTrigger editor.Cursor // Where completion was triggered
+	completionActive   bool
+	completionItems    []lsp.CompletionItem
+	completionIndex    int
+	completionTrigger  editor.Cursor // Where completion was triggered
 	completionResolved map[int]bool
 	completionVersion  int
 
@@ -1346,6 +1347,17 @@ func (s *appState) handleKey(ev key.Event) {
 	// This ensures we only skip EditEvents that correspond to THIS KeyEvent
 	if s.mode == modeInsert {
 		s.skipNextEdit = false
+	}
+
+	if s.ctrlPressed && s.shiftPressed && strings.ToLower(string(ev.Name)) == "r" {
+		s.togglePaneResizeMode()
+		return
+	}
+
+	if s.paneResizeMode {
+		if s.handlePaneResizeKey(ev) {
+			return
+		}
 	}
 
 	// Handle terminal input if in terminal mode
