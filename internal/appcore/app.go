@@ -143,7 +143,7 @@ type appState struct {
 	// Fuzzy finder state
 	fuzzyFinderActive      bool
 	fuzzyFinderInput       string
-	fuzzyFinderFiles       []string
+	fuzzyFinderFiles       []fuzzyItem
 	fuzzyFinderMatches     []FuzzyMatch
 	fuzzyFinderSelectedIdx int
 
@@ -3427,8 +3427,8 @@ func (s *appState) enterFuzzyFinder() {
 	s.mode = modeFuzzyFinder
 	s.fuzzyFinderActive = true
 	s.fuzzyFinderInput = ""
-	s.fuzzyFinderFiles = files
-	s.fuzzyFinderMatches = PerformFuzzyMatch("", files, 50)
+	s.fuzzyFinderFiles = buildFuzzyItems(files)
+	s.fuzzyFinderMatches = PerformFuzzyMatch("", s.fuzzyFinderFiles, 50)
 	s.fuzzyFinderSelectedIdx = 0
 	s.skipNextFuzzyEdit = true
 	s.status = fmt.Sprintf("Fuzzy Finder: %d files", len(files))
