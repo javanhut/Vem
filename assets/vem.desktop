@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Vem
+Comment=Vem text editor
+Exec=vem %F
+Icon=vem
+Terminal=false
+Categories=Development;TextEditor;
+MimeType=text/plain;
+StartupNotify=true
