@@ -23,6 +23,8 @@ func (s *appState) drawPanes(gtx layout.Context) layout.Dimensions {
 		return s.drawBuffer(gtx, true)
 	}
 
+	s.paneManager.SetLayoutSize(gtx.Constraints.Max.X, gtx.Constraints.Max.Y)
+
 	// If zoomed, just draw the zoomed pane
 	if s.paneManager.IsZoomed() {
 		zoomedPane := s.paneManager.ZoomedPane()

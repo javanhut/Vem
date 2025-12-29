@@ -794,7 +794,7 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 
 	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
-			return s.drawBufferLine(gtx, index, cursorLine, cursorCol, selStart, selEnd, hasSel)
+			return s.drawBufferLine(gtx, index, cursorLine, cursorCol, selStart, selEnd, hasSel, showOverlays)
 		})
 	})
 
@@ -823,7 +823,7 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 }
 
 // drawBufferLine renders a single line with syntax highlighting.
-func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int, cursorCol int, selStart int, selEnd int, hasSel bool) layout.Dimensions {
+func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int, cursorCol int, selStart int, selEnd int, hasSel bool, showOverlays bool) layout.Dimensions {
 	// Get the line text
 	lineText := s.activeBuffer().Line(index)
 	gutter := fmt.Sprintf("%4d  ", index+1)
@@ -866,22 +866,24 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	call := macro.Stop()
 
 	// Draw backgrounds
-	if s.visualMode == visualModeChar {
-		s.drawCharSelection(gtx, index, dims.Size.Y)
-	} else if hasSel && index >= selStart && index <= selEnd {
-		rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
-		paint.Fill(gtx.Ops, selectionColor)
-		rect.Pop()
-	}
+	if showOverlays {
+		if s.visualMode == visualModeChar {
+			s.drawCharSelection(gtx, index, dims.Size.Y)
+		} else if hasSel && index >= selStart && index <= selEnd {
+			rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+			paint.Fill(gtx.Ops, selectionColor)
+			rect.Pop()
+		}
 
-	if index == cursorLine && s.visualMode != visualModeChar {
-		rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
-		paint.Fill(gtx.Ops, highlightColor)
-		rect.Pop()
-	}
+		if index == cursorLine && s.visualMode != visualModeChar {
+			rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+			paint.Fill(gtx.Ops, highlightColor)
+			rect.Pop()
+		}
 
-	if s.searchActive && len(s.searchMatches) > 0 {
-		s.drawSearchHighlights(gtx, index, dims.Size.Y)
+		if s.searchActive && len(s.searchMatches) > 0 {
+			s.drawSearchHighlights(gtx, index, dims.Size.Y)
+		}
 	}
 
 	// Draw the text on top
@@ -891,7 +893,7 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	s.drawDiagnosticUnderlines(gtx, s.activeBuffer(), index, gutterWidth, 0, dims.Size.Y)
 
 	// Draw cursor if on cursor line
-	if index == cursorLine {
+	if showOverlays && index == cursorLine {
 		prefix := s.activeBuffer().LinePrefix(index, cursorCol)
 		charUnder := s.getCharAtCursor(index, cursorCol)
 		s.drawCursor(gtx, gutter, prefix, charUnder, dims.Size.Y)

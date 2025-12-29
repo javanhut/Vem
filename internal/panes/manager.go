@@ -2,6 +2,8 @@ package panes
 
 import (
 	"fmt"
+	"math"
+	"sort"
 )
 
 // PaneManager manages the pane tree and active pane state.
@@ -10,6 +12,8 @@ type PaneManager struct {
 	activePane *Pane
 	nextPaneID int
 	zoomed     *Pane // If set, this pane is temporarily maximized
+	lastWidth  int
+	lastHeight int
 }
 
 // NewPaneManager creates a new pane manager with a single initial pane.
@@ -28,6 +32,12 @@ func NewPaneManager(initialBufferIndex int) *PaneManager {
 // Root returns the root of the pane tree.
 func (pm *PaneManager) Root() *PaneNode {
 	return pm.root
+}
+
+// SetLayoutSize records the last known pane layout size for ordered navigation.
+func (pm *PaneManager) SetLayoutSize(width, height int) {
+	pm.lastWidth = width
+	pm.lastHeight = height
 }
 
 // ActivePane returns the currently active pane.
@@ -193,7 +203,7 @@ func (pm *PaneManager) removeNodeContainingPane(node *PaneNode, targetPane *Pane
 
 // CycleNextPane cycles to the next pane in the list.
 func (pm *PaneManager) CycleNextPane() {
-	allPanes := pm.AllPanes()
+	allPanes := pm.clockwiseOrder()
 	if len(allPanes) <= 1 {
 		return
 	}
@@ -207,9 +217,61 @@ func (pm *PaneManager) CycleNextPane() {
 		}
 	}
 
-	// Cycle to next pane
+	// Cycle to next pane in clockwise screen order.
 	nextIdx := (currentIdx + 1) % len(allPanes)
 	pm.SetActivePane(allPanes[nextIdx])
+}
+
+func (pm *PaneManager) clockwiseOrder() []*Pane {
+	allPanes := pm.AllPanes()
+	if len(allPanes) <= 1 || pm.lastWidth <= 0 || pm.lastHeight <= 0 {
+		return allPanes
+	}
+
+	geometries := pm.CalculateGeometry(pm.lastWidth, pm.lastHeight)
+	if len(geometries) != len(allPanes) {
+		return allPanes
+	}
+
+	centerX := float64(pm.lastWidth) / 2.0
+	centerY := float64(pm.lastHeight) / 2.0
+
+	type paneAngle struct {
+		pane     *Pane
+		angle    float64
+		distance float64
+	}
+
+	angles := make([]paneAngle, 0, len(geometries))
+	for _, geom := range geometries {
+		paneX := float64(geom.X + geom.Width/2)
+		paneY := float64(geom.Y + geom.Height/2)
+		dx := paneX - centerX
+		dy := paneY - centerY
+		angle := math.Atan2(dx, -dy) // 0 at up, clockwise
+		if angle < 0 {
+			angle += 2 * math.Pi
+		}
+		distance := dx*dx + dy*dy
+		angles = append(angles, paneAngle{
+			pane:     geom.Pane,
+			angle:    angle,
+			distance: distance,
+		})
+	}
+
+	sort.Slice(angles, func(i, j int) bool {
+		if angles[i].angle == angles[j].angle {
+			return angles[i].distance < angles[j].distance
+		}
+		return angles[i].angle < angles[j].angle
+	})
+
+	ordered := make([]*Pane, 0, len(angles))
+	for _, entry := range angles {
+		ordered = append(ordered, entry.pane)
+	}
+	return ordered
 }
 
 // ToggleZoom toggles zoom (maximize/restore) for the active pane.
