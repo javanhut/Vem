@@ -73,7 +73,10 @@ const (
 	modeTerminal    mode = "TERMINAL"
 )
 
-const caretBlinkInterval = 600 * time.Millisecond
+const (
+	caretBlinkInterval = 600 * time.Millisecond
+	tabWidth           = 4
+)
 
 var (
 	highlightColor    = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x55}
@@ -832,8 +835,8 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	highlighter := s.getOrCreateHighlighter()
 	tokens := highlighter.HighlightLine(index, lineText)
 
-	// Expand tabs in gutter
-	gutterExpanded := expandTabs(gutter, 4)
+	// Expand tabs in gutter (tabs should not affect content column tracking).
+	gutterExpanded := expandTabs(gutter, tabWidth)
 
 	// Create flex children for gutter + tokens
 	var flexChildren []layout.FlexChild
@@ -846,11 +849,13 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 		return label.Layout(gtx)
 	}))
 
-	// Add each token as a flex child with its color
+	// Add each token as a flex child with its color.
+	contentCol := 0
 	for _, token := range tokens {
 		// Capture token in closure
 		t := token
-		tokenText := expandTabs(t.Text, 4)
+		tokenText, nextCol := expandTabsWithColumn(t.Text, tabWidth, contentCol)
+		contentCol = nextCol
 
 		flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			label := material.Body1(s.theme, tokenText)
@@ -1678,16 +1683,24 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		paint.Fill(gtx.Ops, cursorColor)
 		stack.Pop()
 	} else {
-		// Block cursor for NORMAL/VISUAL/DELETE modes
-		// Expand tab character for display (tabs should render as spaces)
+		// Block cursor for NORMAL/VISUAL/DELETE modes.
 		displayChar := charUnder
-		if charUnder == "\t" {
-			displayChar = expandTabs("\t", 4)
+		cellWidth := s.measureTextWidth(gtx, " ")
+		if cellWidth < 1 {
+			cellWidth = 8
 		}
 
 		charWidth := s.measureTextWidth(gtx, charUnder)
-		if charWidth < 8 {
-			charWidth = 8
+		if charUnder == "\t" {
+			visualCol := visualColumn(prefix, tabWidth)
+			spaces := tabWidth - (visualCol % tabWidth)
+			if spaces == 0 {
+				spaces = tabWidth
+			}
+			displayChar = strings.Repeat(" ", spaces)
+			charWidth = s.measureTextWidth(gtx, displayChar)
+		} else if charWidth < cellWidth {
+			charWidth = cellWidth
 		}
 		rect := image.Rect(x, 0, x+charWidth, height)
 		stack := clip.Rect(rect).Push(gtx.Ops)
@@ -1706,7 +1719,7 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 
 func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	// Expand tabs to spaces before measuring so measurements match visual rendering
-	expandedTxt := expandTabs(txt, 4)
+	expandedTxt := expandTabs(txt, tabWidth)
 
 	label := material.Body1(s.theme, expandedTxt)
 	label.Font.Typeface = "JetBrainsMono"
@@ -3226,11 +3239,21 @@ func isPrintableKey(keyName key.Name) bool {
 // expandTabs converts tab characters to spaces.
 // tabWidth specifies how many spaces each tab should expand to.
 func expandTabs(s string, tabWidth int) string {
+	expanded, _ := expandTabsWithColumn(s, tabWidth, 0)
+	return expanded
+}
+
+// expandTabsWithColumn expands tabs using a starting column and returns the new column.
+func expandTabsWithColumn(s string, tabWidth, startCol int) (string, int) {
+	col := startCol
 	if !strings.Contains(s, "\t") {
-		return s
+		for _, r := range s {
+			col += runeDisplayWidth(r)
+		}
+		return s, col
 	}
+
 	var result strings.Builder
-	col := 0
 	for _, r := range s {
 		if r == '\t' {
 			spaces := tabWidth - (col % tabWidth)
@@ -3238,10 +3261,69 @@ func expandTabs(s string, tabWidth int) string {
 			col += spaces
 		} else {
 			result.WriteRune(r)
-			col++
+			col += runeDisplayWidth(r)
 		}
 	}
-	return result.String()
+	return result.String(), col
+}
+
+func visualColumn(s string, tabWidth int) int {
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			col += tabWidth - (col % tabWidth)
+			continue
+		}
+		col += runeDisplayWidth(r)
+	}
+	return col
+}
+
+func runeDisplayWidth(r rune) int {
+	switch {
+	case r == '\n' || r == '\r':
+		return 0
+	case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r):
+		return 0
+	case isWideRune(r):
+		return 2
+	default:
+		return 1
+	}
+}
+
+func isWideRune(r rune) bool {
+	if r >= 0x1100 && r <= 0x115F {
+		return true
+	}
+	if r >= 0x2329 && r <= 0x232A {
+		return true
+	}
+	if r >= 0x2E80 && r <= 0xA4CF {
+		return true
+	}
+	if r >= 0xAC00 && r <= 0xD7A3 {
+		return true
+	}
+	if r >= 0xF900 && r <= 0xFAFF {
+		return true
+	}
+	if r >= 0xFE10 && r <= 0xFE19 {
+		return true
+	}
+	if r >= 0xFE30 && r <= 0xFE6F {
+		return true
+	}
+	if r >= 0xFF01 && r <= 0xFF60 {
+		return true
+	}
+	if r >= 0xFFE0 && r <= 0xFFE6 {
+		return true
+	}
+	if r >= 0x1F300 && r <= 0x1FAFF {
+		return true
+	}
+	return unicode.In(r, unicode.Han, unicode.Hangul, unicode.Hiragana, unicode.Katakana)
 }
 
 // Search mode methods
