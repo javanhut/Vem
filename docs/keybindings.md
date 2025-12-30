@@ -15,6 +15,7 @@ These keybindings work in all modes.
 | `Ctrl+U` | Undo | Undo last edit operation |
 | `Ctrl+C` | Copy Line | Copy current line to clipboard (NORMAL mode only) |
 | `Ctrl+P` | Paste | Paste clipboard content at cursor |
+| `Ctrl+Shift+R` | Resize Panes | Enter resize mode (use arrows or h/l/j(up)/k(down), Esc to exit) |
 | `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode (NORMAL mode only) |
 | `Shift+Tab` | Cycle Panes | Cycle to next pane (when multiple panes open) |
 | `Ctrl+X` | Close Pane | Close active pane/buffer (like `:q`, keeps editor open) |

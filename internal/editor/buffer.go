@@ -32,6 +32,9 @@ type Buffer struct {
 	bufferType BufferType
 	terminal   interface{} // *terminal.Terminal (avoid import cycle)
 	readOnly   bool        // Prevent edits if true (for help, etc.)
+
+	// LSP integration
+	lspOnChange func(content string) // Callback for LSP change notification
 }
 
 // Cursor stores the current line/column position (1 rune == 1 column).
@@ -615,6 +618,21 @@ func (b *Buffer) SetModified(modified bool) {
 // MarkModified marks the buffer as modified (used internally after edits).
 func (b *Buffer) markModified() {
 	b.modified = true
+	// Notify LSP of change
+	if b.lspOnChange != nil {
+		b.lspOnChange(b.GetContent())
+	}
+}
+
+// SetLSPChangeCallback sets the callback for LSP change notifications.
+// The callback receives the full buffer content after each change.
+func (b *Buffer) SetLSPChangeCallback(callback func(content string)) {
+	b.lspOnChange = callback
+}
+
+// ClearLSPChangeCallback removes the LSP change callback.
+func (b *Buffer) ClearLSPChangeCallback() {
+	b.lspOnChange = nil
 }
 
 // SetReadOnly marks buffer as read-only (prevents edits).

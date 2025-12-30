@@ -5,7 +5,11 @@ import (
 	"strings"
 
 	"gioui.org/io/key"
+
+	"github.com/javanhut/vem/internal/panes"
 )
+
+const paneResizeStep = 0.05
 
 // handleSplitVertical creates a vertical split (vertical divider - left|right).
 func (s *appState) handleSplitVertical() {
@@ -215,12 +219,14 @@ func (s *appState) handlePaneClose() {
 			s.status = fmt.Sprintf("Error closing pane: %v", err)
 			return
 		}
+		s.cleanupLSPForBuffer(buf)
 		s.bufferMgr.CloseBuffer(bufferIndex, false)
 		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		return
 	}
 
 	// Last pane - close buffer but keep editor open
+	s.cleanupLSPForBuffer(buf)
 	s.bufferMgr.CloseBuffer(bufferIndex, false)
 
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
@@ -281,5 +287,88 @@ func (s *appState) handlePaneCommand(ev key.Event) {
 		return
 	default:
 		s.status = "Unknown pane command (v=vsplit h=hsplit ==equalize o=zoom)"
+	}
+}
+
+func (s *appState) togglePaneResizeMode() {
+	if s.paneResizeMode {
+		s.paneResizeMode = false
+		s.status = "Pane resize off"
+		return
+	}
+
+	if s.paneManager == nil || s.paneManager.PaneCount() <= 1 {
+		s.status = "Only one pane open"
+		return
+	}
+
+	if s.paneManager.IsZoomed() {
+		s.status = "Exit zoom before resizing panes"
+		return
+	}
+
+	s.paneResizeMode = true
+	s.status = "Resize panes: arrows or h/l/j(up)/k(down), Esc to exit"
+}
+
+func (s *appState) handlePaneResizeKey(ev key.Event) bool {
+	if !s.paneResizeMode {
+		return false
+	}
+
+	switch ev.Name {
+	case key.NameEscape:
+		s.paneResizeMode = false
+		s.status = "Pane resize off"
+		return true
+	case key.NameLeftArrow:
+		s.resizeActivePane(panes.DirLeft)
+		return true
+	case key.NameRightArrow:
+		s.resizeActivePane(panes.DirRight)
+		return true
+	case key.NameUpArrow:
+		s.resizeActivePane(panes.DirUp)
+		return true
+	case key.NameDownArrow:
+		s.resizeActivePane(panes.DirDown)
+		return true
+	}
+
+	if r, ok := s.printableKey(ev); ok {
+		switch r {
+		case 'h':
+			s.resizeActivePane(panes.DirLeft)
+			return true
+		case 'l':
+			s.resizeActivePane(panes.DirRight)
+			return true
+		case 'j':
+			s.resizeActivePane(panes.DirUp)
+			return true
+		case 'k':
+			s.resizeActivePane(panes.DirDown)
+			return true
+		}
+	}
+
+	s.status = "Resize panes: arrows or h/l/j(up)/k(down), Esc to exit"
+	return true
+}
+
+func (s *appState) resizeActivePane(dir panes.Direction) {
+	if s.paneManager == nil {
+		return
+	}
+
+	if s.paneManager.IsZoomed() {
+		s.status = "Pane resize disabled while zoomed"
+		return
+	}
+
+	if s.paneManager.ResizeActivePane(dir, paneResizeStep) {
+		s.status = "Pane resized"
+	} else {
+		s.status = "No pane edge to resize"
 	}
 }

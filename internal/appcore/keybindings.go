@@ -104,6 +104,27 @@ const (
 	// Terminal
 	ActionOpenTerminal
 	ActionTerminalExit
+
+	// LSP actions
+	ActionLSPGotoDefinition
+	ActionLSPHover
+	ActionLSPReferences
+	ActionLSPRename
+	ActionLSPFormat
+	ActionLSPCodeAction
+	ActionLSPCompletion
+	ActionLSPCompletionAccept
+	ActionLSPCompletionCancel
+	ActionLSPCompletionNext
+	ActionLSPCompletionPrev
+	ActionLSPNextDiagnostic
+	ActionLSPPrevDiagnostic
+	ActionLSPDismissHover
+	ActionLSPDismissReferences
+	ActionLSPDismissCodeActions
+	ActionLSPReferencesNext
+	ActionLSPReferencesPrev
+	ActionLSPReferencesOpen
 )
 
 type KeyBinding struct {
@@ -166,6 +187,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: key.ModCtrl, Key: "e", Modes: nil, Action: ActionScrollLineDown},
 		{Modifiers: key.ModCtrl, Key: "y", Modes: nil, Action: ActionScrollLineUp},
 		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
+		// LSP keybindings
+		{Modifiers: key.ModShift, Key: "k", Modes: nil, Action: ActionLSPHover},
 	},
 	modeInsert: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -179,6 +202,10 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameRightArrow, Modes: nil, Action: ActionMoveRight},
 		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
+		// LSP completion
+		{Modifiers: key.ModCtrl, Key: key.NameSpace, Modes: nil, Action: ActionLSPCompletion},
+		{Modifiers: key.ModCtrl, Key: "n", Modes: nil, Action: ActionLSPCompletionNext},
+		{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionLSPCompletionPrev},
 	},
 	modeVisual: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -503,6 +530,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionInsertNewline:
 		if s.mode == modeInsert {
+			if s.completionActive {
+				s.handleLSPCompletionAccept()
+				s.skipNextEdit = true
+				break
+			}
 			s.insertText("\n")
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
 		} else if s.mode == modeCommand {
@@ -517,6 +549,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionInsertTab:
 		if s.mode == modeInsert {
+			if s.completionActive {
+				s.handleLSPCompletionNext()
+				s.skipNextEdit = true
+				break
+			}
 			s.insertText("\t")
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
 		}
@@ -695,5 +732,60 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionTerminalExit:
 		s.handleTerminalExit()
+
+	// LSP actions
+	case ActionLSPGotoDefinition:
+		s.handleLSPGotoDefinition()
+
+	case ActionLSPHover:
+		s.handleLSPHover()
+
+	case ActionLSPReferences:
+		s.handleLSPReferences()
+
+	case ActionLSPFormat:
+		s.handleLSPFormat()
+
+	case ActionLSPCodeAction:
+		s.handleLSPCodeAction()
+
+	case ActionLSPCompletion:
+		s.handleLSPCompletion()
+
+	case ActionLSPCompletionAccept:
+		s.handleLSPCompletionAccept()
+
+	case ActionLSPCompletionCancel:
+		s.handleLSPCompletionCancel()
+
+	case ActionLSPCompletionNext:
+		s.handleLSPCompletionNext()
+
+	case ActionLSPCompletionPrev:
+		s.handleLSPCompletionPrev()
+
+	case ActionLSPNextDiagnostic:
+		s.handleLSPNextDiagnostic()
+
+	case ActionLSPPrevDiagnostic:
+		s.handleLSPPrevDiagnostic()
+
+	case ActionLSPDismissHover:
+		s.handleLSPDismissHover()
+
+	case ActionLSPDismissReferences:
+		s.handleLSPDismissReferences()
+
+	case ActionLSPDismissCodeActions:
+		s.handleLSPDismissCodeActions()
+
+	case ActionLSPReferencesNext:
+		s.handleLSPReferencesNext()
+
+	case ActionLSPReferencesPrev:
+		s.handleLSPReferencesPrev()
+
+	case ActionLSPReferencesOpen:
+		s.handleLSPReferencesOpen()
 	}
 }

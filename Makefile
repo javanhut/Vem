@@ -20,6 +20,16 @@ endif
 INSTALL_DIR := /usr/local/bin
 INSTALL_PATH := $(INSTALL_DIR)/vem
 
+# Desktop integration (Linux only)
+DESKTOP_DIR := /usr/local/share/applications
+DESKTOP_FILE := vem.desktop
+DESKTOP_PATH := $(DESKTOP_DIR)/$(DESKTOP_FILE)
+DESKTOP_SOURCE := assets/$(DESKTOP_FILE)
+ICON_DIR := /usr/local/share/pixmaps
+ICON_FILE := vem.png
+ICON_PATH := $(ICON_DIR)/$(ICON_FILE)
+ICON_SOURCE := assets/Vem.png
+
 # Default target
 .DEFAULT_GOAL := help
 
@@ -420,6 +430,20 @@ else
 		sudo mkdir -p $(INSTALL_DIR); \
 	fi
 	@sudo install -m 755 $(BINARY_NAME) $(INSTALL_PATH)
+ifeq ($(GOOS),linux)
+	@echo "Installing desktop entry and icon..."
+	@if [ ! -d $(DESKTOP_DIR) ]; then \
+		echo "Creating $(DESKTOP_DIR)..."; \
+		sudo mkdir -p $(DESKTOP_DIR); \
+	fi
+	@if [ ! -d $(ICON_DIR) ]; then \
+		echo "Creating $(ICON_DIR)..."; \
+		sudo mkdir -p $(ICON_DIR); \
+	fi
+	@sudo install -m 644 $(DESKTOP_SOURCE) $(DESKTOP_PATH)
+	@sudo install -m 644 $(ICON_SOURCE) $(ICON_PATH)
+	@echo "Desktop entry installed to $(DESKTOP_PATH)"
+endif
 	@echo "Installation complete. Run 'vem' to start the editor."
 endif
 
@@ -428,9 +452,25 @@ ifeq ($(GOOS),windows)
 	@echo "Windows detected: No system installation to remove."
 	@echo "If you manually installed $(BINARY_NAME), please remove it manually."
 else
-	@if [ -f $(INSTALL_PATH) ]; then \
+	@removed=0; \
+	if [ -f $(INSTALL_PATH) ]; then \
 		echo "Removing $(INSTALL_PATH)..."; \
 		sudo rm -f $(INSTALL_PATH); \
+		removed=1; \
+	fi; \
+	if [ "$(GOOS)" = "linux" ]; then \
+		if [ -f $(DESKTOP_PATH) ]; then \
+			echo "Removing $(DESKTOP_PATH)..."; \
+			sudo rm -f $(DESKTOP_PATH); \
+			removed=1; \
+		fi; \
+		if [ -f $(ICON_PATH) ]; then \
+			echo "Removing $(ICON_PATH)..."; \
+			sudo rm -f $(ICON_PATH); \
+			removed=1; \
+		fi; \
+	fi; \
+	if [ $$removed -eq 1 ]; then \
 		echo "Uninstall complete."; \
 	else \
 		echo "Vem is not installed at $(INSTALL_PATH)"; \

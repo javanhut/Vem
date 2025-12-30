@@ -1,9 +1,32 @@
 package appcore
 
 import (
-	"strings"
+	"sort"
 	"unicode"
 )
+
+type fuzzyItem struct {
+	Path     string
+	Lower    []rune
+	Original []rune
+}
+
+func buildFuzzyItems(paths []string) []fuzzyItem {
+	items := make([]fuzzyItem, 0, len(paths))
+	for _, path := range paths {
+		original := []rune(path)
+		lower := make([]rune, len(original))
+		for i, r := range original {
+			lower[i] = unicode.ToLower(r)
+		}
+		items = append(items, fuzzyItem{
+			Path:     path,
+			Lower:    lower,
+			Original: original,
+		})
+	}
+	return items
+}
 
 // FuzzyScore calculates a fuzzy match score for a pattern against a target string.
 // Returns a score (higher is better) and the indices of matched characters.
@@ -20,32 +43,44 @@ func FuzzyScore(pattern, target string) (int, []int) {
 		return 0, nil
 	}
 
-	patternLower := strings.ToLower(pattern)
-	targetLower := strings.ToLower(target)
+	patternRunesOriginal := []rune(pattern)
+	patternRunes := make([]rune, len(patternRunesOriginal))
+	for i, r := range patternRunesOriginal {
+		patternRunes[i] = unicode.ToLower(r)
+	}
 
-	patternRunes := []rune(patternLower)
-	targetRunes := []rune(targetLower)
 	targetRunesOriginal := []rune(target)
+	targetRunes := make([]rune, len(targetRunesOriginal))
+	for i, r := range targetRunesOriginal {
+		targetRunes[i] = unicode.ToLower(r)
+	}
+
+	return fuzzyScoreRunes(patternRunes, patternRunesOriginal, targetRunes, targetRunesOriginal)
+}
+
+func fuzzyScoreRunes(patternLower, patternOriginal, targetLower, targetOriginal []rune) (int, []int) {
+	if len(patternLower) == 0 {
+		return 0, nil
+	}
 
 	// Find all matching positions
 	var indices []int
 	patternIdx := 0
 
-	for targetIdx := 0; targetIdx < len(targetRunes) && patternIdx < len(patternRunes); targetIdx++ {
-		if targetRunes[targetIdx] == patternRunes[patternIdx] {
+	for targetIdx := 0; targetIdx < len(targetLower) && patternIdx < len(patternLower); targetIdx++ {
+		if targetLower[targetIdx] == patternLower[patternIdx] {
 			indices = append(indices, targetIdx)
 			patternIdx++
 		}
 	}
 
 	// No match if we didn't match all pattern characters
-	if patternIdx < len(patternRunes) {
+	if patternIdx < len(patternLower) {
 		return 0, nil
 	}
 
 	// Calculate score
 	score := 0
-	consecutiveCount := 0
 
 	for i, idx := range indices {
 		// Base points for match
@@ -53,10 +88,7 @@ func FuzzyScore(pattern, target string) (int, []int) {
 
 		// Bonus for consecutive matches
 		if i > 0 && indices[i-1] == idx-1 {
-			consecutiveCount++
 			score += 15
-		} else {
-			consecutiveCount = 0
 		}
 
 		// Bonus for match at start of string
@@ -66,14 +98,14 @@ func FuzzyScore(pattern, target string) (int, []int) {
 
 		// Bonus for match at word boundary
 		if idx > 0 {
-			prevChar := targetRunes[idx-1]
+			prevChar := targetLower[idx-1]
 			if prevChar == '/' || prevChar == '_' || prevChar == '-' || prevChar == ' ' || prevChar == '.' {
 				score += 5
 			}
 		}
 
 		// Bonus for case match
-		if targetRunesOriginal[idx] == []rune(pattern)[i] {
+		if targetOriginal[idx] == patternOriginal[i] {
 			score += 2
 		}
 	}
@@ -85,14 +117,14 @@ func FuzzyScore(pattern, target string) (int, []int) {
 	}
 
 	// Bonus for shorter target strings (prefer shorter paths)
-	score += (1000 - len(targetRunes))
+	score += (1000 - len(targetLower))
 
 	return score, indices
 }
 
 // PerformFuzzyMatch performs fuzzy matching on a list of items and returns sorted matches.
 // Items are sorted by score (highest first).
-func PerformFuzzyMatch(pattern string, items []string, maxResults int) []FuzzyMatch {
+func PerformFuzzyMatch(pattern string, items []fuzzyItem, maxResults int) []FuzzyMatch {
 	if pattern == "" {
 		// Return all items when no pattern
 		var matches []FuzzyMatch
@@ -101,7 +133,7 @@ func PerformFuzzyMatch(pattern string, items []string, maxResults int) []FuzzyMa
 				break
 			}
 			matches = append(matches, FuzzyMatch{
-				FilePath: item,
+				FilePath: item.Path,
 				Score:    0,
 				Indices:  nil,
 			})
@@ -110,12 +142,17 @@ func PerformFuzzyMatch(pattern string, items []string, maxResults int) []FuzzyMa
 	}
 
 	var matches []FuzzyMatch
+	patternRunesOriginal := []rune(pattern)
+	patternRunes := make([]rune, len(patternRunesOriginal))
+	for i, r := range patternRunesOriginal {
+		patternRunes[i] = unicode.ToLower(r)
+	}
 
 	for _, item := range items {
-		score, indices := FuzzyScore(pattern, item)
+		score, indices := fuzzyScoreRunes(patternRunes, patternRunesOriginal, item.Lower, item.Original)
 		if score > 0 {
 			matches = append(matches, FuzzyMatch{
-				FilePath: item,
+				FilePath: item.Path,
 				Score:    score,
 				Indices:  indices,
 			})
@@ -123,13 +160,9 @@ func PerformFuzzyMatch(pattern string, items []string, maxResults int) []FuzzyMa
 	}
 
 	// Sort by score (descending)
-	for i := 0; i < len(matches); i++ {
-		for j := i + 1; j < len(matches); j++ {
-			if matches[j].Score > matches[i].Score {
-				matches[i], matches[j] = matches[j], matches[i]
-			}
-		}
-	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Score > matches[j].Score
+	})
 
 	// Limit results
 	if len(matches) > maxResults {

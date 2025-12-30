@@ -313,7 +313,7 @@ Pane layout calculation:
 
 **Responsibilities:**
 - Convert pane tree to screen coordinates
-- Calculate split positions (50/50)
+- Calculate split positions from ratios (default 50/50)
 - Handle recursive layout for nested splits
 - Account for separator widths
 
@@ -788,7 +788,7 @@ func calculateLayout(node *PaneNode, bounds image.Rectangle) {
 }
 ```
 
-All splits are 50/50.
+Splits default to 50/50, but can be resized via pane resize mode.
 
 ### Pane Navigation
 
