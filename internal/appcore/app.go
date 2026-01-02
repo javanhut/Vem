@@ -3706,8 +3706,10 @@ func (s *appState) insertText(text string) {
 	buf := s.activeBuffer()
 	buf.InsertText(text)
 
-	// Debug: Log buffer content and cursor position after insertion
-	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
+	// Avoid per-keystroke status churn during typing; keep updates for larger inserts.
+	if !(s.mode == modeInsert && len([]rune(text)) == 1 && text != "\n" && text != "\t") {
+		s.setCursorStatus(fmt.Sprintf("Insert %q", text))
+	}
 
 	if s.mode == modeInsert {
 		s.maybeTriggerLSPCompletion(text)

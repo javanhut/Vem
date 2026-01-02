@@ -3,6 +3,7 @@ package appcore
 import (
 	"image"
 	"image/color"
+	"strings"
 
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -261,59 +262,102 @@ func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.Scre
 	}
 
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		// Draw only visible lines in viewport
 		for y := viewportTop; y < viewportEnd; y++ {
 			line := screen.GetLine(y)
-			for x := 0; x < len(line.Cells) && x < cols; x++ {
-				cell := line.Cells[x]
+			cellY := (y - viewportTop) * charHeight
 
-				// Calculate cell position (adjusted for viewport)
-				cellX := x * charWidth
-				cellY := (y - viewportTop) * charHeight // Subtract viewportTop to adjust Y position
-
-				// Draw cell background
+			// Batch contiguous cells with same colors into runs.
+			runStart := 0
+			var runFG, runBG color.NRGBA
+			runInitialized := false
+			flushRun := func(runEnd int) {
+				if !runInitialized || runEnd <= runStart {
+					return
+				}
+				cellX := runStart * charWidth
+				width := (runEnd - runStart) * charWidth
+				// Background
 				bgRect := clip.Rect{
 					Min: image.Pt(cellX, cellY),
-					Max: image.Pt(cellX+charWidth, cellY+charHeight),
+					Max: image.Pt(cellX+width, cellY+charHeight),
 				}.Push(gtx.Ops)
-				paint.Fill(gtx.Ops, cell.BG)
+				paint.Fill(gtx.Ops, runBG)
 				bgRect.Pop()
 
-				// Draw cursor if at this position
+				// Text
+				var b strings.Builder
+				for x := runStart; x < runEnd && x < len(line.Cells) && x < cols; x++ {
+					ch := line.Cells[x].Rune
+					if ch == 0 {
+						ch = ' '
+					}
+					b.WriteRune(ch)
+				}
+				label := material.Body1(s.theme, b.String())
+				label.Font.Typeface = "JetBrainsMono"
+				label.Color = runFG
+				offset := op.Offset(image.Pt(cellX, cellY)).Push(gtx.Ops)
+				label.Layout(gtx)
+				offset.Pop()
+			}
+
+			maxCells := cols
+			if len(line.Cells) < maxCells {
+				maxCells = len(line.Cells)
+			}
+
+			for x := 0; x < maxCells; x++ {
+				cell := line.Cells[x]
+				cellFG := cell.FG
+				cellBG := cell.BG
+
+				// Cursor cell gets handled separately for correct colors.
 				if x == cursorX && y == cursorY && cursorStyle == terminal.CursorBlock {
+					flushRun(x)
+					runInitialized = false
+
+					cellX := x * charWidth
 					cursorRect := clip.Rect{
 						Min: image.Pt(cellX, cellY),
 						Max: image.Pt(cellX+charWidth, cellY+charHeight),
 					}.Push(gtx.Ops)
 					paint.Fill(gtx.Ops, cursorColor)
 					cursorRect.Pop()
-				}
 
-				// Draw character
-				char := cell.Rune
-				if char == 0 {
-					char = ' '
-				}
-
-				label := material.Body1(s.theme, string(char))
-				label.Font.Typeface = "JetBrainsMono"
-
-				// Use cell foreground color (or cursor color if cursor is here)
-				if x == cursorX && y == cursorY && cursorStyle == terminal.CursorBlock {
-					// Invert color for cursor
+					ch := cell.Rune
+					if ch == 0 {
+						ch = ' '
+					}
+					label := material.Body1(s.theme, string(ch))
+					label.Font.Typeface = "JetBrainsMono"
 					label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
-				} else {
-					label.Color = cell.FG
+					offset := op.Offset(image.Pt(cellX, cellY)).Push(gtx.Ops)
+					label.Layout(gtx)
+					offset.Pop()
+					runStart = x + 1
+					continue
 				}
 
-				// Position and draw the character
-				offset := op.Offset(image.Pt(cellX, cellY)).Push(gtx.Ops)
-				label.Layout(gtx)
-				offset.Pop()
+				if !runInitialized {
+					runStart = x
+					runFG = cellFG
+					runBG = cellBG
+					runInitialized = true
+					continue
+				}
+
+				if cellFG != runFG || cellBG != runBG {
+					flushRun(x)
+					runStart = x
+					runFG = cellFG
+					runBG = cellBG
+					runInitialized = true
+				}
 			}
+
+			flushRun(maxCells)
 		}
 
-		// Return dimensions based on visible area
 		return layout.Dimensions{
 			Size: image.Pt(cols*charWidth, linesPerPage*charHeight),
 		}

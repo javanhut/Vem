@@ -110,8 +110,8 @@ func NewTerminal(cfg Config) (*Terminal, error) {
 		env:        cfg.Env,
 		ctx:        ctx,
 		cancel:     cancel,
-		inputChan:  make(chan []byte, 256), // Buffered for responsiveness
-		updateChan: make(chan struct{}, 1), // Buffered, drop duplicates
+		inputChan:  make(chan []byte, 1024), // Buffered for responsiveness
+		updateChan: make(chan struct{}, 1),  // Buffered, drop duplicates
 		window:     cfg.Window,
 		onExit:     cfg.OnExit,
 	}
