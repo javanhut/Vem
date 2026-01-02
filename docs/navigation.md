@@ -17,6 +17,7 @@ Vem provides Vim-compatible cursor movement commands for efficient navigation.
 
 - **`0`** - Jump to start of line (column 0)
 - **`$`** - Jump to end of line
+- **`%`** - Jump to matching `{}`, `[]`, or `()`
 - **`gg`** - Jump to first line of buffer
 - **`G`** - Jump to last line of buffer
 - **`[count]G`** - Jump to line number [count] (e.g., `42G` jumps to line 42)
@@ -61,7 +62,7 @@ b → moves to '1' (start of previous word)
 
 ## Visual Mode
 
-Vem implements Vim-style visual selection with two distinct modes for selecting text: character-wise and line-wise.
+Vem implements Vim-style visual selection with character-wise, line-wise, and block-wise modes.
 
 ### Visual Mode Types
 
@@ -105,9 +106,27 @@ p           # Paste (insert lines at selection)
 Escape      # Exit visual mode
 ```
 
+#### Block-Wise Visual Mode (`Ctrl+V`)
+
+- **`Ctrl+V`** - Enter block-wise visual mode
+  - Selects a rectangular column block
+  - Selection spans the same columns across multiple lines
+  - Visual indication: selected columns are highlighted
+  - Status bar shows: `-- VISUAL BLOCK --`
+
+**Usage:**
+```
+Ctrl+V      # Start block selection at cursor column
+h/j/k/l     # Extend/contract selection by column/line
+c           # Copy selected block
+d           # Delete selected block
+p           # Paste (replace block with clipboard)
+Escape      # Exit visual mode
+```
+
 ### Visual Mode Operations
 
-Once text is selected in either visual mode, you can perform these operations:
+Once text is selected in any visual mode, you can perform these operations:
 
 - **`c`** - Copy selection to clipboard
   - Character mode: copies exact character range
@@ -122,6 +141,7 @@ Once text is selected in either visual mode, you can perform these operations:
 - **`p`** - Paste clipboard, replacing selection
   - Character mode: replaces selected characters with clipboard text
   - Line mode: replaces selected lines with clipboard lines
+  - Block mode: replaces selected block with clipboard block
   - Status shows: "Pasted N character(s)" or "Inserted N line(s)"
 
 - **`Escape`** - Exit visual mode without making changes

@@ -151,6 +151,9 @@ func (s *appState) drawSinglePane(gtx layout.Context, pane *panes.Pane) layout.D
 	// Save any viewport changes back to the pane
 	pane.SetViewportTop(s.viewportTopLine) // Sync back FROM global TO pane
 
+	s.updateViewStateForPane(pane)
+	s.maybeSaveViewState()
+
 	// Restore previous global viewport state
 	s.viewportTopLine = oldViewportTop
 

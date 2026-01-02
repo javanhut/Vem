@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,15 +45,37 @@ type mode string
 type visualModeType int
 
 const (
-	visualModeNone visualModeType = iota
-	visualModeChar                // Character-wise selection (v)
-	visualModeLine                // Line-wise selection (Shift+V)
+	visualModeNone  visualModeType = iota
+	visualModeChar                 // Character-wise selection (v)
+	visualModeLine                 // Line-wise selection (Shift+V)
+	visualModeBlock                // Block-wise selection (Ctrl+V)
 )
+
+type fuzzyRootMode int
+
+const (
+	fuzzyRootWorkspace fuzzyRootMode = iota
+	fuzzyRootHome
+	fuzzyRootFilesystem
+)
+
+type fuzzyCacheEntry struct {
+	files      []string
+	index      map[string]struct{}
+	dirty      bool
+	lastUpdate time.Time
+}
 
 type SearchMatch struct {
 	Line int
 	Col  int
 	Len  int
+}
+
+type bufferViewState struct {
+	Line        int `json:"line"`
+	Col         int `json:"col"`
+	ViewportTop int `json:"viewport_top"`
 }
 
 type FuzzyMatch struct {
@@ -61,16 +84,34 @@ type FuzzyMatch struct {
 	Indices  []int
 }
 
+type bufferMatch struct {
+	Index      int
+	Name       string
+	Score      int
+	Indices    []int
+	LastAccess time.Time
+}
+
+type commandPaletteItem struct {
+	Action     Action
+	Label      string
+	SearchText string
+	Score      int
+	Indices    []int
+}
+
 const (
-	modeNormal      mode = "NORMAL"
-	modeInsert      mode = "INSERT"
-	modeVisual      mode = "VISUAL"
-	modeDelete      mode = "DELETE"
-	modeCommand     mode = "COMMAND"
-	modeExplorer    mode = "EXPLORER"
-	modeSearch      mode = "SEARCH"
-	modeFuzzyFinder mode = "FUZZY_FINDER"
-	modeTerminal    mode = "TERMINAL"
+	modeNormal         mode = "NORMAL"
+	modeInsert         mode = "INSERT"
+	modeVisual         mode = "VISUAL"
+	modeDelete         mode = "DELETE"
+	modeCommand        mode = "COMMAND"
+	modeExplorer       mode = "EXPLORER"
+	modeSearch         mode = "SEARCH"
+	modeFuzzyFinder    mode = "FUZZY_FINDER"
+	modeBufferSwitch   mode = "BUFFER_SWITCH"
+	modeCommandPalette mode = "COMMAND_PALETTE"
+	modeTerminal       mode = "TERMINAL"
 )
 
 const (
@@ -122,6 +163,7 @@ type appState struct {
 	caretReset           bool
 	clipLines            []string
 	clipboardIsLine      bool
+	clipboardIsBlock     bool
 	cmdText              string
 	window               *app.Window
 
@@ -149,6 +191,34 @@ type appState struct {
 	fuzzyFinderFiles       []fuzzyItem
 	fuzzyFinderMatches     []FuzzyMatch
 	fuzzyFinderSelectedIdx int
+	fuzzyFinderRoot        string
+	fuzzyRootMode          fuzzyRootMode
+	fuzzyWorkspaceRoot     string
+	fuzzyHomeRoot          string
+	fuzzyCache             map[string]*fuzzyCacheEntry
+
+	// Buffer switcher state
+	bufferSwitcherActive      bool
+	bufferSwitcherInput       string
+	bufferSwitcherMatches     []bufferMatch
+	bufferSwitcherSelectedIdx int
+	skipNextBufferEdit        bool
+
+	// Command palette state
+	commandPaletteActive       bool
+	commandPaletteInput        string
+	commandPaletteMatches      []commandPaletteItem
+	commandPaletteSelectedIdx  int
+	skipNextCommandPaletteEdit bool
+
+	// Recent buffers
+	bufferAccessTimes map[int]time.Time
+
+	// View state persistence
+	viewState          map[string]bufferViewState
+	viewStatePath      string
+	viewStateDirty     bool
+	viewStateLastSaved time.Time
 
 	// Modifier tracking (some platforms don't report modifiers correctly)
 	ctrlPressed  bool
@@ -340,6 +410,11 @@ func newAppState(filePaths []string) *appState {
 	// Initialize LSP manager
 	lspManager := lsp.NewManager()
 
+	homeDir, err := os.UserHomeDir()
+	if err != nil || homeDir == "" {
+		homeDir = workDir
+	}
+
 	state := &appState{
 		theme:                theme,
 		bufferMgr:            bufferMgr,
@@ -367,6 +442,12 @@ func newAppState(filePaths []string) *appState {
 		terminalViewports:    make(map[int]int),
 		terminalAutoScroll:   make(map[int]bool),
 		lastWindowSize:       image.Point{},
+		fuzzyRootMode:        fuzzyRootWorkspace,
+		fuzzyWorkspaceRoot:   workDir,
+		fuzzyHomeRoot:        homeDir,
+		fuzzyCache:           make(map[string]*fuzzyCacheEntry),
+		bufferAccessTimes:    make(map[int]time.Time),
+		viewState:            make(map[string]bufferViewState),
 		lspManager:           lspManager,
 		lspEnabled:           true,
 		lspDiagnostics:       make(map[string][]lsp.Diagnostic),
@@ -402,6 +483,8 @@ func newAppState(filePaths []string) *appState {
 		}
 	})
 
+	state.initViewState()
+	state.recordBufferAccess(0)
 	state.setupLSPForBuffer(state.activeBuffer())
 
 	return state
@@ -581,12 +664,22 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 		s.drawFuzzyFinder(gtx)
 	}
 
+	// Draw buffer switcher overlay on top if active
+	if s.bufferSwitcherActive {
+		s.drawBufferSwitcher(gtx)
+	}
+
+	// Draw command palette overlay on top if active
+	if s.commandPaletteActive {
+		s.drawCommandPalette(gtx)
+	}
+
 	return dims
 }
 
 func (s *appState) handleEvents(gtx layout.Context) {
 	event.Op(gtx.Ops, s.focusTag)
-	if s.mode == modeInsert || s.mode == modeCommand || s.mode == modeSearch || s.mode == modeFuzzyFinder {
+	if s.mode == modeInsert || s.mode == modeCommand || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeBufferSwitch || s.mode == modeCommandPalette {
 		key.InputHintOp{Tag: s.focusTag, Hint: key.HintText}.Add(gtx.Ops)
 		gtx.Execute(key.SoftKeyboardCmd{Show: true})
 	} else {
@@ -632,7 +725,7 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			//            (the EditEvent needs the modifier state to determine capitalization)
 			shouldResetModifiers := false
 
-			if s.mode == modeNormal || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder {
+			if s.mode == modeNormal || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeBufferSwitch || s.mode == modeCommandPalette {
 				// In non-insert modes, reset modifiers after command keys unless waiting for pane command
 				shouldResetModifiers = !s.pendingPaneCmd
 			} else if s.mode == modeInsert {
@@ -734,6 +827,30 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				if s.ctrlPressed {
 					s.ctrlPressed = false
 				}
+			case modeBufferSwitch:
+				if s.skipNextBufferEdit {
+					s.skipNextBufferEdit = false
+					continue
+				}
+				s.appendBufferSwitcherInput(e.Text)
+				if s.shiftPressed {
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					s.ctrlPressed = false
+				}
+			case modeCommandPalette:
+				if s.skipNextCommandPaletteEdit {
+					s.skipNextCommandPaletteEdit = false
+					continue
+				}
+				s.appendCommandPaletteInput(e.Text)
+				if s.shiftPressed {
+					s.shiftPressed = false
+				}
+				if s.ctrlPressed {
+					s.ctrlPressed = false
+				}
 			}
 		}
 	}
@@ -756,7 +873,10 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	buf := s.activeBuffer()
 	lines := buf.LineCount()
 	cursorLine := buf.Cursor().Line
-	selStart, selEnd, hasSel := s.visualSelectionRange()
+	selStart, selEnd, hasSel := 0, 0, false
+	if s.visualMode == visualModeLine {
+		selStart, selEnd, hasSel = s.visualSelectionRange()
+	}
 	cursorCol := buf.Cursor().Col
 
 	// Calculate approximate lines per page for viewport scrolling
@@ -874,6 +994,8 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	if showOverlays {
 		if s.visualMode == visualModeChar {
 			s.drawCharSelection(gtx, index, dims.Size.Y)
+		} else if s.visualMode == visualModeBlock {
+			s.drawBlockSelection(gtx, index, dims.Size.Y)
 		} else if hasSel && index >= selStart && index <= selEnd {
 			rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
 			paint.Fill(gtx.Ops, selectionColor)
@@ -988,6 +1110,46 @@ func (s *appState) drawCharSelection(gtx layout.Context, lineIdx int, lineHeight
 	selectedWidth := s.measureTextWidth(gtx, selected)
 
 	// Draw highlight rectangle
+	x := gutterWidth + prefixWidth
+	rect := clip.Rect{
+		Min: image.Pt(x, 0),
+		Max: image.Pt(x+selectedWidth, lineHeight),
+	}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, selectionColor)
+	rect.Pop()
+}
+
+func (s *appState) drawBlockSelection(gtx layout.Context, lineIdx int, lineHeight int) {
+	startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeBlock()
+	if !ok {
+		return
+	}
+	if lineIdx < startLine || lineIdx > endLine {
+		return
+	}
+
+	lineContent := s.activeBuffer().Line(lineIdx)
+	runes := []rune(lineContent)
+
+	if startCol >= len(runes) {
+		return
+	}
+	if endCol > len(runes) {
+		endCol = len(runes)
+	}
+	if startCol >= endCol {
+		return
+	}
+
+	gutter := fmt.Sprintf("%4d  ", lineIdx+1)
+	gutterWidth := s.measureTextWidth(gtx, gutter)
+
+	prefix := string(runes[:startCol])
+	prefixWidth := s.measureTextWidth(gtx, prefix)
+
+	selected := string(runes[startCol:endCol])
+	selectedWidth := s.measureTextWidth(gtx, selected)
+
 	x := gutterWidth + prefixWidth
 	rect := clip.Rect{
 		Min: image.Pt(x, 0),
@@ -1163,7 +1325,8 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			// Input field
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				prompt := "Fuzzy Finder: " + s.fuzzyFinderInput
+				rootLabel := s.fuzzyRootLabel()
+				prompt := fmt.Sprintf("Fuzzy Finder (%s): %s", rootLabel, s.fuzzyFinderInput)
 				label := material.Body1(s.theme, prompt)
 				label.Font.Typeface = "JetBrainsMono"
 				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
@@ -1209,6 +1372,139 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
+}
+
+func (s *appState) drawBufferSwitcher(gtx layout.Context) layout.Dimensions {
+	overlayBg := color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xcc}
+	overlayRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, overlayBg)
+	overlayRect.Pop()
+
+	switcherWidth := gtx.Constraints.Max.X * 2 / 3
+	if switcherWidth > 700 {
+		switcherWidth = 700
+	}
+	switcherHeight := gtx.Constraints.Max.Y / 2
+	if switcherHeight > 450 {
+		switcherHeight = 450
+	}
+
+	x := (gtx.Constraints.Max.X - switcherWidth) / 2
+	y := (gtx.Constraints.Max.Y - switcherHeight) / 3
+
+	stack := op.Offset(image.Pt(x, y)).Push(gtx.Ops)
+	gtx.Constraints.Max = image.Pt(switcherWidth, switcherHeight)
+
+	backgroundRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, statusBg)
+	backgroundRect.Pop()
+
+	inset := layout.UniformInset(unit.Dp(16))
+	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				prompt := "Buffer Switcher: " + s.bufferSwitcherInput
+				label := material.Body1(s.theme, prompt)
+				label.Font.Typeface = "JetBrainsMono"
+				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+				return label.Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				info := fmt.Sprintf("%d matches", len(s.bufferSwitcherMatches))
+				label := material.Body2(s.theme, info)
+				label.Font.Typeface = "JetBrainsMono"
+				label.Color = color.NRGBA{R: 0xaa, G: 0xaa, B: 0xaa, A: 0xff}
+				return label.Layout(gtx)
+			}),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				list := layout.List{Axis: layout.Vertical}
+				return list.Layout(gtx, len(s.bufferSwitcherMatches), func(gtx layout.Context, index int) layout.Dimensions {
+					match := s.bufferSwitcherMatches[index]
+					labelText := fmt.Sprintf("%s  (%s)", match.Name, formatRelativeTime(match.LastAccess))
+					label := material.Body1(s.theme, labelText)
+					label.Font.Typeface = "JetBrainsMono"
+					if index == s.bufferSwitcherSelectedIdx {
+						label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, gtx.Dp(unit.Dp(24)))}.Push(gtx.Ops)
+						paint.Fill(gtx.Ops, focusBorder)
+						rect.Pop()
+					} else {
+						label.Color = color.NRGBA{R: 0xcc, G: 0xcc, B: 0xcc, A: 0xff}
+					}
+					return label.Layout(gtx)
+				})
+			}),
+		)
+	})
+
+	stack.Pop()
+	return dims
+}
+
+func (s *appState) drawCommandPalette(gtx layout.Context) layout.Dimensions {
+	overlayBg := color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xcc}
+	overlayRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, overlayBg)
+	overlayRect.Pop()
+
+	paletteWidth := gtx.Constraints.Max.X * 2 / 3
+	if paletteWidth > 700 {
+		paletteWidth = 700
+	}
+	paletteHeight := gtx.Constraints.Max.Y / 2
+	if paletteHeight > 450 {
+		paletteHeight = 450
+	}
+
+	x := (gtx.Constraints.Max.X - paletteWidth) / 2
+	y := (gtx.Constraints.Max.Y - paletteHeight) / 3
+
+	stack := op.Offset(image.Pt(x, y)).Push(gtx.Ops)
+	gtx.Constraints.Max = image.Pt(paletteWidth, paletteHeight)
+
+	backgroundRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, statusBg)
+	backgroundRect.Pop()
+
+	inset := layout.UniformInset(unit.Dp(16))
+	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				prompt := "Command Palette: " + s.commandPaletteInput
+				label := material.Body1(s.theme, prompt)
+				label.Font.Typeface = "JetBrainsMono"
+				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+				return label.Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				info := fmt.Sprintf("%d matches", len(s.commandPaletteMatches))
+				label := material.Body2(s.theme, info)
+				label.Font.Typeface = "JetBrainsMono"
+				label.Color = color.NRGBA{R: 0xaa, G: 0xaa, B: 0xaa, A: 0xff}
+				return label.Layout(gtx)
+			}),
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				list := layout.List{Axis: layout.Vertical}
+				return list.Layout(gtx, len(s.commandPaletteMatches), func(gtx layout.Context, index int) layout.Dimensions {
+					match := s.commandPaletteMatches[index]
+					label := material.Body1(s.theme, match.Label)
+					label.Font.Typeface = "JetBrainsMono"
+					if index == s.commandPaletteSelectedIdx {
+						label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, gtx.Dp(unit.Dp(24)))}.Push(gtx.Ops)
+						paint.Fill(gtx.Ops, focusBorder)
+						rect.Pop()
+					} else {
+						label.Color = color.NRGBA{R: 0xcc, G: 0xcc, B: 0xcc, A: 0xff}
+					}
+					return label.Layout(gtx)
+				})
+			}),
+		)
+	})
+
+	stack.Pop()
+	return dims
 }
 
 func (s *appState) drawCommandBar(gtx layout.Context) layout.Dimensions {
@@ -1735,6 +2031,104 @@ func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
 	return dims.Size.X
 }
 
+func (s *appState) jumpMatchingBrace() {
+	buf := s.activeBuffer()
+	if buf == nil {
+		s.status = "No active buffer"
+		return
+	}
+
+	cursor := buf.Cursor()
+	lineText := buf.Line(cursor.Line)
+	runes := []rune(lineText)
+	if cursor.Col < 0 || cursor.Col >= len(runes) {
+		s.status = "No brace under cursor"
+		return
+	}
+
+	ch := runes[cursor.Col]
+	opening := map[rune]rune{'{': '}', '[': ']', '(': ')'}
+	closing := map[rune]rune{'}': '{', ']': '[', ')': '('}
+
+	if match, ok := opening[ch]; ok {
+		if line, col, found := s.findForwardMatch(cursor.Line, cursor.Col, ch, match); found {
+			buf.SetCursor(line, col)
+			s.setCursorStatus("Matched brace")
+			return
+		}
+		s.status = "No matching brace found"
+		return
+	}
+
+	if match, ok := closing[ch]; ok {
+		if line, col, found := s.findBackwardMatch(cursor.Line, cursor.Col, ch, match); found {
+			buf.SetCursor(line, col)
+			s.setCursorStatus("Matched brace")
+			return
+		}
+		s.status = "No matching brace found"
+		return
+	}
+
+	s.status = "No brace under cursor"
+}
+
+func (s *appState) findForwardMatch(startLine, startCol int, open, close rune) (int, int, bool) {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return 0, 0, false
+	}
+	depth := 0
+	for line := startLine; line < buf.LineCount(); line++ {
+		lineText := buf.Line(line)
+		runes := []rune(lineText)
+		colStart := 0
+		if line == startLine {
+			colStart = startCol + 1
+		}
+		for col := colStart; col < len(runes); col++ {
+			switch runes[col] {
+			case open:
+				depth++
+			case close:
+				if depth == 0 {
+					return line, col, true
+				}
+				depth--
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+func (s *appState) findBackwardMatch(startLine, startCol int, close, open rune) (int, int, bool) {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return 0, 0, false
+	}
+	depth := 0
+	for line := startLine; line >= 0; line-- {
+		lineText := buf.Line(line)
+		runes := []rune(lineText)
+		colStart := len(runes) - 1
+		if line == startLine {
+			colStart = startCol - 1
+		}
+		for col := colStart; col >= 0; col-- {
+			switch runes[col] {
+			case close:
+				depth++
+			case open:
+				if depth == 0 {
+					return line, col, true
+				}
+				depth--
+			}
+		}
+	}
+	return 0, 0, false
+}
+
 func (s *appState) measureLineHeight(gtx layout.Context) int {
 	label := material.Body1(s.theme, "M")
 	label.Font.Typeface = "JetBrainsMono"
@@ -2087,6 +2481,15 @@ func (s *appState) enterVisualLine() {
 	s.status = "VISUAL (line)"
 }
 
+func (s *appState) enterVisualBlock() {
+	s.mode = modeVisual
+	s.visualMode = visualModeBlock
+	s.visualStartLine = s.activeBuffer().Cursor().Line
+	s.visualStartCol = s.activeBuffer().Cursor().Col
+	s.resetCount()
+	s.status = "VISUAL (block)"
+}
+
 func (s *appState) enterCommandMode() {
 	if s.mode == modeCommand {
 		return
@@ -2223,7 +2626,7 @@ func (s *appState) openSelectedNode() {
 	if s.paneManager != nil {
 		activePane := s.paneManager.ActivePane()
 		if activePane != nil {
-			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+			s.switchPaneBuffer(activePane, s.bufferMgr.ActiveIndex())
 		}
 	}
 
@@ -2260,6 +2663,31 @@ func (s *appState) visualSelectionRangeChar() (startLine, startCol, endLine, end
 	return s.visualStartLine, s.visualStartCol, curLine, curCol, true
 }
 
+func (s *appState) visualSelectionRangeBlock() (startLine, startCol, endLine, endCol int, ok bool) {
+	if s.visualMode != visualModeBlock {
+		return 0, 0, 0, 0, false
+	}
+
+	curLine := s.activeBuffer().Cursor().Line
+	curCol := s.activeBuffer().Cursor().Col
+
+	startLine = s.visualStartLine
+	endLine = curLine
+	if curLine < s.visualStartLine {
+		startLine = curLine
+		endLine = s.visualStartLine
+	}
+
+	startCol = s.visualStartCol
+	endCol = curCol
+	if curCol < s.visualStartCol {
+		startCol = curCol
+		endCol = s.visualStartCol
+	}
+
+	return startLine, startCol, endLine, endCol, true
+}
+
 func (s *appState) deleteVisualSelection() {
 	if s.visualMode == visualModeChar {
 		// Character-wise deletion
@@ -2279,6 +2707,15 @@ func (s *appState) deleteVisualSelection() {
 			return
 		}
 		s.activeBuffer().DeleteLines(start, end)
+		s.exitVisualMode()
+		s.setCursorStatus("Deleted selection")
+	} else if s.visualMode == visualModeBlock {
+		startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeBlock()
+		if !ok {
+			s.status = "No selection"
+			return
+		}
+		s.activeBuffer().DeleteBlockRange(startLine, startCol, endLine, endCol)
 		s.exitVisualMode()
 		s.setCursorStatus("Deleted selection")
 	} else {
@@ -2304,6 +2741,7 @@ func (s *appState) copyVisualSelection() {
 		// Store as a single line in internal clipboard
 		s.clipLines = []string{text}
 		s.clipboardIsLine = false // Character-wise copy is not line mode
+		s.clipboardIsBlock = false
 		s.status = fmt.Sprintf("Copied %d character(s)", len(text))
 	} else if s.visualMode == visualModeLine {
 		// Line-wise copy
@@ -2323,7 +2761,25 @@ func (s *appState) copyVisualSelection() {
 		// Store in internal clipboard
 		s.clipLines = append([]string(nil), lines...)
 		s.clipboardIsLine = true // Line-wise copy is line mode
+		s.clipboardIsBlock = false
 		s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
+	} else if s.visualMode == visualModeBlock {
+		startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeBlock()
+		if !ok {
+			s.status = "No selection to copy"
+			return
+		}
+		lines := s.activeBuffer().GetBlockRange(startLine, startCol, endLine, endCol)
+		if len(lines) == 0 {
+			s.status = "No selection to copy"
+			return
+		}
+		text := strings.Join(lines, "\n")
+		s.writeToSystemClipboard(text)
+		s.clipLines = append([]string(nil), lines...)
+		s.clipboardIsLine = false
+		s.clipboardIsBlock = true
+		s.status = fmt.Sprintf("Copied %d block line(s)", len(lines))
 	} else {
 		s.status = "No selection to copy"
 	}
@@ -2371,6 +2827,28 @@ func (s *appState) pasteClipboard() {
 		s.activeBuffer().InsertLines(start, lines)
 		s.exitVisualMode()
 		s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
+	} else if s.visualMode == visualModeBlock {
+		startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeBlock()
+		if !ok {
+			s.status = "Select destination in VISUAL mode"
+			return
+		}
+		var blockLines []string
+		if s.clipboardIsBlock && len(s.clipLines) > 0 {
+			blockLines = append([]string(nil), s.clipLines...)
+		} else {
+			blockText := strings.TrimSuffix(text, "\n")
+			blockLines = strings.Split(blockText, "\n")
+		}
+		maxLines := endLine - startLine + 1
+		if len(blockLines) > maxLines {
+			blockLines = blockLines[:maxLines]
+		}
+		buf := s.activeBuffer()
+		buf.DeleteBlockRange(startLine, startCol, endLine, endCol)
+		buf.InsertBlockText(startLine, startCol, blockLines)
+		s.exitVisualMode()
+		s.setCursorStatus(fmt.Sprintf("Pasted %d block line(s)", len(blockLines)))
 	} else {
 		s.status = "Select destination in VISUAL mode"
 	}
@@ -2418,11 +2896,13 @@ func (s *appState) copyCurrentLine() {
 		// Also store in internal clipboard as backup
 		s.clipLines = []string{line}
 		s.clipboardIsLine = true
+		s.clipboardIsBlock = false
 		s.status = fmt.Sprintf("Copied line %d (%d chars)", cursor.Line+1, len(line))
 	} else {
 		// Fallback to internal clipboard only
 		s.clipLines = []string{line}
 		s.clipboardIsLine = true
+		s.clipboardIsBlock = false
 		s.status = fmt.Sprintf("Copied line %d (internal only)", cursor.Line+1)
 	}
 }
@@ -2449,6 +2929,12 @@ func (s *appState) pasteAtCursor() {
 
 	if text == "" {
 		s.status = "Clipboard empty"
+		return
+	}
+
+	if s.clipboardIsBlock && !usingSystemClipboard && len(s.clipLines) > 0 {
+		buf.InsertBlockText(cursor.Line, cursor.Col, s.clipLines)
+		s.status = fmt.Sprintf("Pasted %d block line(s)", len(s.clipLines))
 		return
 	}
 
@@ -2614,7 +3100,7 @@ func (s *appState) handleQuitCommand(force bool) {
 			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		} else {
 			// Last pane with no buffer - switch to buffer 0 (sample buffer)
-			activePane.SetBufferIndex(0)
+			s.switchPaneBuffer(activePane, 0)
 			s.status = "No buffer to close"
 		}
 		return
@@ -2650,11 +3136,11 @@ func (s *appState) handleQuitCommand(force bool) {
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
 	if s.bufferMgr.BufferCount() == 0 || s.bufferMgr.GetBuffer(0) == nil {
 		// This shouldn't happen, but handle gracefully
-		activePane.SetBufferIndex(0)
+		s.switchPaneBuffer(activePane, 0)
 		s.status = "Buffer closed"
 	} else {
 		// Switch to buffer 0 (sample buffer)
-		activePane.SetBufferIndex(0)
+		s.switchPaneBuffer(activePane, 0)
 		s.status = "Buffer closed"
 	}
 }
@@ -2676,6 +3162,8 @@ func (s *appState) handleQuitAll(force bool) {
 		s.closeTerminal(bufIdx)
 	}
 
+	s.saveViewStateNow()
+
 	// Actually close the application
 	s.requestClose()
 }
@@ -2689,6 +3177,7 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 	}
 
 	var err error
+	oldPath := buf.FilePath()
 	if arg == "" {
 		// Save to current file
 		err = s.bufferMgr.SaveActiveBuffer()
@@ -2703,6 +3192,13 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 	}
 
 	filename := buf.FilePath()
+	if oldPath != "" && oldPath != filename {
+		if state, ok := s.viewState[oldPath]; ok {
+			delete(s.viewState, oldPath)
+			s.viewState[filename] = state
+			s.viewStateDirty = true
+		}
+	}
 	if andQuit {
 		s.handleQuitCommand(false)
 		s.status = fmt.Sprintf("Wrote + closed %s", filename)
@@ -2844,7 +3340,7 @@ func (s *appState) handleEditCommand(path string) {
 	if s.paneManager != nil {
 		activePane := s.paneManager.ActivePane()
 		if activePane != nil {
-			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+			s.switchPaneBuffer(activePane, s.bufferMgr.ActiveIndex())
 		}
 	}
 
@@ -2908,6 +3404,8 @@ func (s *appState) handleChangeDirectoryCommand(path string) {
 		return
 	}
 
+	s.fuzzyWorkspaceRoot = s.fileTree.CurrentPath()
+
 	s.status = fmt.Sprintf("Changed directory to %s", s.fileTree.CurrentPath())
 
 	// Show explorer if not already visible
@@ -2941,7 +3439,7 @@ func (s *appState) handleHelpCommand(topic string) {
 	// Update active pane to show help buffer
 	if s.paneManager != nil {
 		if activePane := s.paneManager.ActivePane(); activePane != nil {
-			activePane.SetBufferIndex(bufIdx)
+			s.switchPaneBuffer(activePane, bufIdx)
 		}
 	}
 
@@ -2998,9 +3496,13 @@ func (s *appState) completeFileOp() {
 		return
 	}
 
+	targetPath := s.fileOpTarget.Path
+	targetIsDir := s.fileOpTarget.IsDir
+
 	var err error
 	switch s.fileOpMode {
 	case "rename":
+		oldPath := targetPath
 		if s.fileOpInput == "" {
 			s.status = "Error: filename cannot be empty"
 			s.cancelFileOp()
@@ -3012,6 +3514,12 @@ func (s *appState) completeFileOp() {
 		} else {
 			s.status = fmt.Sprintf("Renamed to '%s'", s.fileOpInput)
 			s.fileTree.Refresh()
+			if targetIsDir {
+				s.markFuzzyCacheDirtyForPath(oldPath)
+			} else {
+				newPath := filepath.Join(filepath.Dir(oldPath), s.fileOpInput)
+				s.renameFuzzyCacheFile(oldPath, newPath)
+			}
 		}
 
 	case "create":
@@ -3031,6 +3539,12 @@ func (s *appState) completeFileOp() {
 				s.status = fmt.Sprintf("Created '%s'", s.fileOpInput)
 			}
 			s.fileTree.Refresh()
+			baseDir := targetPath
+			if !targetIsDir {
+				baseDir = filepath.Dir(targetPath)
+			}
+			newPath := filepath.Join(baseDir, filepath.FromSlash(s.fileOpInput))
+			s.addFuzzyCacheFile(newPath)
 		}
 
 	case "delete":
@@ -3040,6 +3554,11 @@ func (s *appState) completeFileOp() {
 		} else {
 			s.status = fmt.Sprintf("Deleted '%s'", s.fileOpTarget.Name)
 			s.fileTree.Refresh()
+			if targetIsDir {
+				s.markFuzzyCacheDirtyForPath(targetPath)
+			} else {
+				s.removeFuzzyCacheFile(targetPath)
+			}
 		}
 	}
 
@@ -3144,6 +3663,15 @@ func (s *appState) insertText(text string) {
 	if text == "" {
 		return
 	}
+	if s.mode == modeInsert && text == "\n" {
+		s.insertNewlineWithIndent()
+		return
+	}
+	if s.mode == modeInsert && len([]rune(text)) == 1 {
+		if s.handleAutoCloseOrDedent([]rune(text)[0]) {
+			return
+		}
+	}
 	buf := s.activeBuffer()
 	buf.InsertText(text)
 
@@ -3153,6 +3681,228 @@ func (s *appState) insertText(text string) {
 	if s.mode == modeInsert {
 		s.maybeTriggerLSPCompletion(text)
 	}
+}
+
+func (s *appState) handleAutoCloseOrDedent(r rune) bool {
+	switch r {
+	case '(', '[', '{':
+		if s.shouldAutoCloseAtCursor() {
+			return s.insertPairedDelimiter(r)
+		}
+		return false
+	case ')', ']', '}':
+		if s.maybeDedentForClosing(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appState) insertPairedDelimiter(open rune) bool {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return false
+	}
+	close := matchingDelimiter(open)
+	if close == 0 {
+		return false
+	}
+	buf.InsertText(string([]rune{open, close}))
+	buf.MoveLeft()
+	s.setCursorStatus("Insert pair")
+	return true
+}
+
+func (s *appState) shouldAutoCloseAtCursor() bool {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return false
+	}
+	cursor := buf.Cursor()
+	lineText := buf.Line(cursor.Line)
+	runes := []rune(lineText)
+	if cursor.Col < 0 || cursor.Col > len(runes) {
+		return false
+	}
+	prefix := string(runes[:cursor.Col])
+	return !s.isInStringOrComment(prefix)
+}
+
+func (s *appState) isInStringOrComment(prefix string) bool {
+	ext := ""
+	if buf := s.activeBuffer(); buf != nil {
+		ext = strings.ToLower(filepath.Ext(buf.FilePath()))
+	}
+
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	for i := 0; i < len(prefix); i++ {
+		ch := prefix[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			if inSingle || inDouble {
+				escaped = true
+			}
+			continue
+		}
+		if !inDouble && ch == '\'' {
+			inSingle = !inSingle
+			continue
+		}
+		if !inSingle && ch == '"' {
+			inDouble = !inDouble
+			continue
+		}
+		if inSingle || inDouble {
+			continue
+		}
+		if s.hasLineCommentStart(prefix[i:], ext) {
+			return true
+		}
+		if s.hasBlockCommentStart(prefix[i:]) && !strings.Contains(prefix[i+2:], "*/") {
+			return true
+		}
+	}
+
+	return inSingle || inDouble
+}
+
+func (s *appState) hasLineCommentStart(rest string, ext string) bool {
+	if strings.HasPrefix(rest, "//") {
+		return true
+	}
+	if ext == ".py" || ext == ".crl" {
+		return strings.HasPrefix(rest, "#")
+	}
+	return false
+}
+
+func (s *appState) hasBlockCommentStart(rest string) bool {
+	return strings.HasPrefix(rest, "/*")
+}
+
+func matchingDelimiter(open rune) rune {
+	switch open {
+	case '(':
+		return ')'
+	case '[':
+		return ']'
+	case '{':
+		return '}'
+	default:
+		return 0
+	}
+}
+
+func (s *appState) maybeDedentForClosing(close rune) bool {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return false
+	}
+	cursor := buf.Cursor()
+	lineText := buf.Line(cursor.Line)
+	runes := []rune(lineText)
+	if cursor.Col < 0 || cursor.Col > len(runes) {
+		return false
+	}
+	prefix := string(runes[:cursor.Col])
+	if strings.TrimSpace(prefix) != "" {
+		return false
+	}
+	indent := leadingWhitespace(prefix)
+	if indent == "" {
+		return false
+	}
+	trimmed := trimIndentUnit(indent)
+	if trimmed == indent {
+		return false
+	}
+	newCol := len([]rune(trimmed))
+	buf.DeleteCharRange(cursor.Line, newCol, cursor.Line, cursor.Col)
+	buf.InsertText(string(close))
+	s.setCursorStatus("Dedent")
+	return true
+}
+
+func trimIndentUnit(indent string) string {
+	if indent == "" {
+		return indent
+	}
+	if strings.Contains(indent, "\t") && !strings.Contains(indent, " ") {
+		return strings.TrimSuffix(indent, "\t")
+	}
+	if len(indent) >= tabWidth {
+		return indent[:len(indent)-tabWidth]
+	}
+	return ""
+}
+
+func (s *appState) insertNewlineWithIndent() {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+	cursor := buf.Cursor()
+	lineText := buf.Line(cursor.Line)
+	runes := []rune(lineText)
+	if cursor.Col < 0 {
+		cursor.Col = 0
+	}
+	if cursor.Col > len(runes) {
+		cursor.Col = len(runes)
+	}
+	prefix := string(runes[:cursor.Col])
+	indent := leadingWhitespace(prefix)
+	trimmed := strings.TrimRightFunc(prefix, unicode.IsSpace)
+	shouldIndent := strings.HasSuffix(trimmed, "{") || s.shouldIndentAfterColon(trimmed)
+	extra := ""
+	if shouldIndent {
+		extra = indentUnit(indent)
+	}
+	buf.InsertText("\n" + indent + extra)
+	s.setCursorStatus("Insert newline")
+}
+
+func leadingWhitespace(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if r == ' ' || r == '\t' {
+			b.WriteRune(r)
+			continue
+		}
+		break
+	}
+	return b.String()
+}
+
+func indentUnit(existing string) string {
+	if strings.Contains(existing, "\t") && !strings.Contains(existing, " ") {
+		return "\t"
+	}
+	return strings.Repeat(" ", tabWidth)
+}
+
+func (s *appState) shouldIndentAfterColon(prefix string) bool {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(buf.FilePath()))
+	if ext != ".py" && ext != ".crl" {
+		return false
+	}
+	line := strings.TrimRightFunc(prefix, unicode.IsSpace)
+	if ext == ".py" {
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			line = strings.TrimRightFunc(line[:idx], unicode.IsSpace)
+		}
+	}
+	return strings.HasSuffix(line, ":")
 }
 
 func (s *appState) saveBufferToFile(path string) error {
@@ -3501,8 +4251,8 @@ func (s *appState) enterFuzzyFinder() {
 	}
 
 	// Discover all files in the workspace
-	workDir := s.fileTree.CurrentPath()
-	files, err := filesystem.FindAllFiles(workDir, true)
+	workDir := s.fuzzyRootPath()
+	files, err := s.getFuzzyFiles(workDir)
 	if err != nil {
 		s.status = fmt.Sprintf("Error discovering files: %v", err)
 		return
@@ -3514,8 +4264,9 @@ func (s *appState) enterFuzzyFinder() {
 	s.fuzzyFinderFiles = buildFuzzyItems(files)
 	s.fuzzyFinderMatches = PerformFuzzyMatch("", s.fuzzyFinderFiles, 50)
 	s.fuzzyFinderSelectedIdx = 0
+	s.fuzzyFinderRoot = workDir
 	s.skipNextFuzzyEdit = true
-	s.status = fmt.Sprintf("Fuzzy Finder: %d files", len(files))
+	s.status = fmt.Sprintf("Fuzzy Finder (%s): %d files", s.fuzzyRootLabel(), len(files))
 }
 
 func (s *appState) exitFuzzyFinder() {
@@ -3531,6 +4282,495 @@ func (s *appState) exitFuzzyFinder() {
 func (s *appState) updateFuzzyMatches() {
 	s.fuzzyFinderMatches = PerformFuzzyMatch(s.fuzzyFinderInput, s.fuzzyFinderFiles, 50)
 	s.fuzzyFinderSelectedIdx = 0
+}
+
+func (s *appState) getFuzzyFiles(root string) ([]string, error) {
+	root = filepath.Clean(root)
+	entry := s.fuzzyCache[root]
+	if entry != nil && !entry.dirty {
+		return entry.files, nil
+	}
+	files, err := filesystem.FindAllFiles(root, true)
+	if err != nil {
+		return nil, err
+	}
+	index := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		index[file] = struct{}{}
+	}
+	s.fuzzyCache[root] = &fuzzyCacheEntry{
+		files:      files,
+		index:      index,
+		dirty:      false,
+		lastUpdate: time.Now(),
+	}
+	return files, nil
+}
+
+func (s *appState) markFuzzyCacheDirtyForPath(path string) {
+	for root, entry := range s.fuzzyCache {
+		if entry == nil {
+			continue
+		}
+		if pathWithinRoot(path, root) {
+			entry.dirty = true
+		}
+	}
+}
+
+func (s *appState) addFuzzyCacheFile(path string) {
+	for root, entry := range s.fuzzyCache {
+		if entry == nil || entry.dirty {
+			continue
+		}
+		if !pathWithinRoot(path, root) {
+			continue
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			continue
+		}
+		if _, exists := entry.index[rel]; exists {
+			continue
+		}
+		entry.files = append(entry.files, rel)
+		entry.index[rel] = struct{}{}
+		entry.lastUpdate = time.Now()
+	}
+}
+
+func (s *appState) removeFuzzyCacheFile(path string) {
+	for root, entry := range s.fuzzyCache {
+		if entry == nil || entry.dirty {
+			continue
+		}
+		if !pathWithinRoot(path, root) {
+			continue
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			continue
+		}
+		if _, exists := entry.index[rel]; !exists {
+			continue
+		}
+		for i, file := range entry.files {
+			if file == rel {
+				entry.files = append(entry.files[:i], entry.files[i+1:]...)
+				break
+			}
+		}
+		delete(entry.index, rel)
+		entry.lastUpdate = time.Now()
+	}
+}
+
+func (s *appState) renameFuzzyCacheFile(oldPath, newPath string) {
+	for root, entry := range s.fuzzyCache {
+		if entry == nil || entry.dirty {
+			continue
+		}
+		oldInRoot := pathWithinRoot(oldPath, root)
+		newInRoot := pathWithinRoot(newPath, root)
+		switch {
+		case oldInRoot && newInRoot:
+			oldRel, err := filepath.Rel(root, oldPath)
+			if err != nil {
+				continue
+			}
+			newRel, err := filepath.Rel(root, newPath)
+			if err != nil {
+				continue
+			}
+			if _, exists := entry.index[oldRel]; !exists {
+				continue
+			}
+			delete(entry.index, oldRel)
+			entry.index[newRel] = struct{}{}
+			for i, file := range entry.files {
+				if file == oldRel {
+					entry.files[i] = newRel
+					break
+				}
+			}
+			entry.lastUpdate = time.Now()
+		case oldInRoot && !newInRoot:
+			s.removeFuzzyCacheFile(oldPath)
+		case !oldInRoot && newInRoot:
+			s.addFuzzyCacheFile(newPath)
+		}
+	}
+}
+
+func pathWithinRoot(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (s *appState) cycleFuzzyRoot() {
+	switch s.fuzzyRootMode {
+	case fuzzyRootWorkspace:
+		s.fuzzyRootMode = fuzzyRootHome
+	case fuzzyRootHome:
+		s.fuzzyRootMode = fuzzyRootFilesystem
+	default:
+		s.fuzzyRootMode = fuzzyRootWorkspace
+	}
+
+	if s.fuzzyFinderActive {
+		root := s.fuzzyRootPath()
+		files, err := s.getFuzzyFiles(root)
+		if err != nil {
+			s.status = fmt.Sprintf("Error discovering files: %v", err)
+			return
+		}
+		s.fuzzyFinderRoot = root
+		s.fuzzyFinderFiles = buildFuzzyItems(files)
+		s.fuzzyFinderMatches = PerformFuzzyMatch(s.fuzzyFinderInput, s.fuzzyFinderFiles, 50)
+		s.fuzzyFinderSelectedIdx = 0
+		s.status = fmt.Sprintf("Fuzzy Finder (%s): %d files", s.fuzzyRootLabel(), len(files))
+		return
+	}
+
+	s.status = fmt.Sprintf("Fuzzy root: %s", s.fuzzyRootLabel())
+}
+
+func (s *appState) fuzzyRootPath() string {
+	switch s.fuzzyRootMode {
+	case fuzzyRootHome:
+		return s.fuzzyHomeRoot
+	case fuzzyRootFilesystem:
+		return systemRootPath(s.fuzzyWorkspaceRoot)
+	default:
+		if s.fileTree != nil {
+			if current := s.fileTree.CurrentPath(); current != "" {
+				return current
+			}
+		}
+		return s.fuzzyWorkspaceRoot
+	}
+}
+
+func (s *appState) fuzzyRootLabel() string {
+	switch s.fuzzyRootMode {
+	case fuzzyRootHome:
+		return "home"
+	case fuzzyRootFilesystem:
+		return "root"
+	default:
+		return "workspace"
+	}
+}
+
+func systemRootPath(base string) string {
+	vol := filepath.VolumeName(base)
+	if vol == "" {
+		return string(os.PathSeparator)
+	}
+	return vol + string(os.PathSeparator)
+}
+
+// Buffer switcher methods
+
+func (s *appState) enterBufferSwitcher() {
+	if s.bufferMgr == nil {
+		return
+	}
+	s.mode = modeBufferSwitch
+	s.bufferSwitcherActive = true
+	s.bufferSwitcherInput = ""
+	s.updateBufferSwitcherMatches()
+	s.bufferSwitcherSelectedIdx = 0
+	s.skipNextBufferEdit = true
+	s.status = fmt.Sprintf("Buffer switcher: %d buffers", len(s.bufferSwitcherMatches))
+}
+
+func (s *appState) exitBufferSwitcher() {
+	s.mode = modeNormal
+	s.bufferSwitcherActive = false
+	s.bufferSwitcherInput = ""
+	s.bufferSwitcherMatches = nil
+	s.bufferSwitcherSelectedIdx = 0
+	s.skipNextBufferEdit = false
+	s.status = "Buffer switcher cancelled"
+}
+
+func (s *appState) updateBufferSwitcherMatches() {
+	if s.bufferMgr == nil {
+		s.bufferSwitcherMatches = nil
+		return
+	}
+	query := s.bufferSwitcherInput
+	var matches []bufferMatch
+	for i := 0; i < s.bufferMgr.BufferCount(); i++ {
+		buf := s.bufferMgr.GetBuffer(i)
+		if buf == nil {
+			continue
+		}
+		name := buf.FilePath()
+		if name == "" {
+			if buf.IsTerminal() {
+				name = "[Terminal]"
+			} else {
+				name = "[No Name]"
+			}
+		}
+		score := 0
+		var indices []int
+		if query != "" {
+			score, indices = FuzzyScore(query, name)
+			if score <= 0 {
+				continue
+			}
+		}
+		matches = append(matches, bufferMatch{
+			Index:      i,
+			Name:       name,
+			Score:      score,
+			Indices:    indices,
+			LastAccess: s.bufferAccessTimes[i],
+		})
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Score != matches[j].Score {
+			return matches[i].Score > matches[j].Score
+		}
+		if !matches[i].LastAccess.Equal(matches[j].LastAccess) {
+			return matches[i].LastAccess.After(matches[j].LastAccess)
+		}
+		return matches[i].Name < matches[j].Name
+	})
+
+	s.bufferSwitcherMatches = matches
+	if s.bufferSwitcherSelectedIdx >= len(matches) {
+		s.bufferSwitcherSelectedIdx = 0
+	}
+}
+
+func (s *appState) appendBufferSwitcherInput(text string) {
+	if text == "" {
+		return
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			continue
+		}
+		s.bufferSwitcherInput += string(r)
+	}
+	s.updateBufferSwitcherMatches()
+}
+
+func (s *appState) deleteBufferSwitcherChar() {
+	if s.bufferSwitcherInput == "" {
+		return
+	}
+	runes := []rune(s.bufferSwitcherInput)
+	s.bufferSwitcherInput = string(runes[:len(runes)-1])
+	s.updateBufferSwitcherMatches()
+}
+
+func (s *appState) bufferSwitcherMoveUp() {
+	if s.bufferSwitcherSelectedIdx > 0 {
+		s.bufferSwitcherSelectedIdx--
+	}
+}
+
+func (s *appState) bufferSwitcherMoveDown() {
+	if s.bufferSwitcherSelectedIdx < len(s.bufferSwitcherMatches)-1 {
+		s.bufferSwitcherSelectedIdx++
+	}
+}
+
+func (s *appState) bufferSwitcherConfirm() {
+	if s.bufferSwitcherSelectedIdx < 0 || s.bufferSwitcherSelectedIdx >= len(s.bufferSwitcherMatches) {
+		s.exitBufferSwitcher()
+		return
+	}
+	match := s.bufferSwitcherMatches[s.bufferSwitcherSelectedIdx]
+	if s.paneManager != nil {
+		if activePane := s.paneManager.ActivePane(); activePane != nil {
+			s.switchPaneBuffer(activePane, match.Index)
+		}
+	}
+	s.exitBufferSwitcher()
+	s.status = fmt.Sprintf("Switched to %s", match.Name)
+}
+
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	d := time.Since(t)
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		mins := int(d.Minutes())
+		return fmt.Sprintf("%dm ago", mins)
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		return fmt.Sprintf("%dh ago", hours)
+	}
+	days := int(d.Hours() / 24)
+	return fmt.Sprintf("%dd ago", days)
+}
+
+// Command palette methods
+
+func (s *appState) enterCommandPalette() {
+	s.mode = modeCommandPalette
+	s.commandPaletteActive = true
+	s.commandPaletteInput = ""
+	s.updateCommandPaletteMatches()
+	s.commandPaletteSelectedIdx = 0
+	s.skipNextCommandPaletteEdit = true
+	s.status = fmt.Sprintf("Command palette: %d actions", len(s.commandPaletteMatches))
+}
+
+func (s *appState) exitCommandPalette() {
+	s.mode = modeNormal
+	s.commandPaletteActive = false
+	s.commandPaletteInput = ""
+	s.commandPaletteMatches = nil
+	s.commandPaletteSelectedIdx = 0
+	s.skipNextCommandPaletteEdit = false
+	s.status = "Command palette cancelled"
+}
+
+func (s *appState) appendCommandPaletteInput(text string) {
+	if text == "" {
+		return
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\r' {
+			continue
+		}
+		s.commandPaletteInput += string(r)
+	}
+	s.updateCommandPaletteMatches()
+}
+
+func (s *appState) deleteCommandPaletteChar() {
+	if s.commandPaletteInput == "" {
+		return
+	}
+	runes := []rune(s.commandPaletteInput)
+	s.commandPaletteInput = string(runes[:len(runes)-1])
+	s.updateCommandPaletteMatches()
+}
+
+func (s *appState) commandPaletteMoveUp() {
+	if s.commandPaletteSelectedIdx > 0 {
+		s.commandPaletteSelectedIdx--
+	}
+}
+
+func (s *appState) commandPaletteMoveDown() {
+	if s.commandPaletteSelectedIdx < len(s.commandPaletteMatches)-1 {
+		s.commandPaletteSelectedIdx++
+	}
+}
+
+func (s *appState) commandPaletteConfirm() {
+	if s.commandPaletteSelectedIdx < 0 || s.commandPaletteSelectedIdx >= len(s.commandPaletteMatches) {
+		s.exitCommandPalette()
+		return
+	}
+	item := s.commandPaletteMatches[s.commandPaletteSelectedIdx]
+	s.exitCommandPalette()
+	s.executeAction(item.Action, key.Event{})
+}
+
+func (s *appState) updateCommandPaletteMatches() {
+	items := s.commandPaletteItems()
+	query := s.commandPaletteInput
+	matches := make([]commandPaletteItem, 0, len(items))
+	for _, item := range items {
+		score := 0
+		var indices []int
+		if query != "" {
+			score, indices = FuzzyScore(query, item.SearchText)
+			if score <= 0 {
+				continue
+			}
+		}
+		item.Score = score
+		item.Indices = indices
+		matches = append(matches, item)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].Score != matches[j].Score {
+			return matches[i].Score > matches[j].Score
+		}
+		return matches[i].Label < matches[j].Label
+	})
+	s.commandPaletteMatches = matches
+	if s.commandPaletteSelectedIdx >= len(matches) {
+		s.commandPaletteSelectedIdx = 0
+	}
+}
+
+func (s *appState) commandPaletteItems() []commandPaletteItem {
+	seen := make(map[Action]struct{})
+	var items []commandPaletteItem
+
+	for _, binding := range globalKeybindings {
+		seen[binding.Action] = struct{}{}
+	}
+	for _, bindings := range modeKeybindings {
+		for _, binding := range bindings {
+			seen[binding.Action] = struct{}{}
+		}
+	}
+
+	for action := range seen {
+		if action == ActionNone {
+			continue
+		}
+		label := actionDescription(action)
+		keybinding := actionKeybinding(action)
+		if keybinding != "" {
+			label = fmt.Sprintf("%s (%s)", label, keybinding)
+		}
+		items = append(items, commandPaletteItem{
+			Action:     action,
+			Label:      label,
+			SearchText: label,
+		})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Label < items[j].Label
+	})
+
+	return items
+}
+
+func actionKeybinding(action Action) string {
+	for _, binding := range globalKeybindings {
+		if binding.Action == action {
+			return formatKeybinding(binding)
+		}
+	}
+	for _, bindings := range modeKeybindings {
+		for _, binding := range bindings {
+			if binding.Action == action {
+				return formatKeybinding(binding)
+			}
+		}
+	}
+	return ""
 }
 
 func (s *appState) appendFuzzyInput(text string) {
@@ -3577,7 +4817,7 @@ func (s *appState) fuzzyFinderConfirm() {
 	}
 
 	match := s.fuzzyFinderMatches[s.fuzzyFinderSelectedIdx]
-	fullPath := filepath.Join(s.fileTree.CurrentPath(), match.FilePath)
+	fullPath := filepath.Join(s.fuzzyFinderRoot, match.FilePath)
 
 	buf, err := s.bufferMgr.OpenFile(fullPath)
 	if err != nil {
@@ -3591,7 +4831,7 @@ func (s *appState) fuzzyFinderConfirm() {
 	if s.paneManager != nil {
 		activePane := s.paneManager.ActivePane()
 		if activePane != nil {
-			activePane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+			s.switchPaneBuffer(activePane, s.bufferMgr.ActiveIndex())
 		}
 	}
 
@@ -3673,7 +4913,7 @@ func (s *appState) handleOpenTerminal() {
 	if s.paneManager != nil {
 		activePane := s.paneManager.ActivePane()
 		if activePane != nil {
-			activePane.SetBufferIndex(bufIdx)
+			s.switchPaneBuffer(activePane, bufIdx)
 		}
 	}
 
@@ -3734,7 +4974,7 @@ func (s *appState) handleTerminalAutoClose(bufIdx int) {
 			} else {
 				// Last pane: close buffer, switch to buffer 0
 				s.bufferMgr.CloseBuffer(bufIdx, true)
-				activePane.SetBufferIndex(0)
+				s.switchPaneBuffer(activePane, 0)
 				s.status = "Terminal exited"
 			}
 		} else {

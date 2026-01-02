@@ -12,9 +12,12 @@ These keybindings work in all modes.
 | `Ctrl+H` | Focus Explorer | Switch focus to the file tree (if visible) |
 | `Ctrl+L` | Focus Editor | Switch focus to the text editor |
 | `Ctrl+F` | Fuzzy Finder | Open fuzzy file finder |
+| `Alt+F` | Fuzzy Root | Cycle fuzzy root (workspace/home/root) |
 | `Ctrl+U` | Undo | Undo last edit operation |
 | `Ctrl+C` | Copy Line | Copy current line to clipboard (NORMAL mode only) |
 | `Ctrl+P` | Paste | Paste clipboard content at cursor |
+| `Ctrl+Tab` | Buffer Switcher | Open recent buffer switcher |
+| `Ctrl+Shift+P` | Command Palette | Open command palette |
 | `Ctrl+Shift+R` | Resize Panes | Enter resize mode (use arrows or h/l/j(up)/k(down), Esc to exit) |
 | `Shift+Enter` | Toggle Fullscreen | Enter or exit fullscreen mode (NORMAL mode only) |
 | `Shift+Tab` | Cycle Panes | Cycle to next pane (when multiple panes open) |
@@ -34,7 +37,9 @@ NORMAL mode is the default mode for navigation and executing commands.
 | Key | Action | Description |
 |-----|--------|-------------|
 | `i` | Enter INSERT | Switch to INSERT mode at cursor |
-| `v` | Enter VISUAL | Switch to VISUAL line mode |
+| `v` | Enter VISUAL (char) | Switch to VISUAL character mode |
+| `Shift+V` | Enter VISUAL (line) | Switch to VISUAL line mode |
+| `Ctrl+V` | Enter VISUAL (block) | Switch to VISUAL block mode |
 | `d` | Enter DELETE | Switch to DELETE mode |
 | `:` | Enter COMMAND | Open command-line interface |
 | `Esc` | Exit Mode | Return to NORMAL (if in other mode) |
@@ -60,6 +65,7 @@ NORMAL mode is the default mode for navigation and executing commands.
 |-----|--------|-------------|
 | `0` | Line Start | Jump to first character of line |
 | `$` or `Shift+4` | Line End | Jump to last character of line |
+| `%` | Match Brace | Jump to matching `{}`, `[]`, or `()` |
 
 #### Search
 
@@ -119,7 +125,7 @@ INSERT mode is for typing and editing text.
 
 ## VISUAL Mode
 
-VISUAL line mode is for selecting and manipulating multiple lines.
+VISUAL mode supports character, line, and block selections.
 
 ### Mode Control
 
@@ -149,9 +155,9 @@ VISUAL line mode is for selecting and manipulating multiple lines.
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `c` | Copy | Copy selected lines to clipboard |
-| `d` | Delete | Delete selected lines |
-| `p` | Paste | Paste clipboard at selection |
+| `c` | Copy | Copy selected text/lines/block to clipboard |
+| `d` | Delete | Delete selected text/lines/block |
+| `p` | Paste | Replace selection with clipboard |
 
 ## DELETE Mode
 

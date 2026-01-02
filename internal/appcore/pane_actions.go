@@ -196,7 +196,7 @@ func (s *appState) handlePaneClose() {
 			s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		} else {
 			// Last pane with no buffer - switch to buffer 0 (sample buffer)
-			activePane.SetBufferIndex(0)
+			s.switchPaneBuffer(activePane, 0)
 			s.status = "No buffer to close"
 		}
 		return
@@ -232,11 +232,11 @@ func (s *appState) handlePaneClose() {
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
 	if s.bufferMgr.BufferCount() == 0 || s.bufferMgr.GetBuffer(0) == nil {
 		// This shouldn't happen, but handle gracefully
-		activePane.SetBufferIndex(0)
+		s.switchPaneBuffer(activePane, 0)
 		s.status = "Buffer closed"
 	} else {
 		// Switch to buffer 0 (sample buffer)
-		activePane.SetBufferIndex(0)
+		s.switchPaneBuffer(activePane, 0)
 		s.status = "Buffer closed"
 	}
 }

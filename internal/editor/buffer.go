@@ -124,6 +124,24 @@ func (b *Buffer) MoveToLine(line int) {
 	b.clampColumn()
 }
 
+// SetCursor moves the cursor to the provided zero-based line and column.
+func (b *Buffer) SetCursor(line, col int) {
+	if len(b.lines) == 0 {
+		b.lines = []string{""}
+	}
+	if line < 0 {
+		line = 0
+	} else if line >= len(b.lines) {
+		line = len(b.lines) - 1
+	}
+	if col < 0 {
+		col = 0
+	}
+	b.cursor.Line = line
+	b.cursor.Col = col
+	b.clampColumn()
+}
+
 // DeleteLines removes the inclusive line range and repositions the cursor.
 func (b *Buffer) DeleteLines(start, end int) {
 	if len(b.lines) == 0 {
@@ -764,6 +782,116 @@ func (b *Buffer) GetCharRange(startLine, startCol, endLine, endCol int) string {
 	}
 
 	return result.String()
+}
+
+// GetBlockRange returns a rectangular block of text between the provided lines/cols.
+func (b *Buffer) GetBlockRange(startLine, startCol, endLine, endCol int) []string {
+	if startLine < 0 || startLine >= len(b.lines) {
+		return nil
+	}
+	if endLine < 0 || endLine >= len(b.lines) {
+		return nil
+	}
+	if startLine > endLine {
+		startLine, endLine = endLine, startLine
+	}
+	if startCol > endCol {
+		startCol, endCol = endCol, startCol
+	}
+
+	blocks := make([]string, 0, endLine-startLine+1)
+	for i := startLine; i <= endLine; i++ {
+		runes := []rune(b.lines[i])
+		if startCol >= len(runes) {
+			blocks = append(blocks, "")
+			continue
+		}
+		end := endCol
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if end < startCol {
+			end = startCol
+		}
+		blocks = append(blocks, string(runes[startCol:end]))
+	}
+	return blocks
+}
+
+// DeleteBlockRange deletes a rectangular block of text between the provided lines/cols.
+func (b *Buffer) DeleteBlockRange(startLine, startCol, endLine, endCol int) {
+	if b.readOnly {
+		return
+	}
+	if startLine < 0 || startLine >= len(b.lines) {
+		return
+	}
+	if endLine < 0 || endLine >= len(b.lines) {
+		return
+	}
+	if startLine > endLine {
+		startLine, endLine = endLine, startLine
+	}
+	if startCol > endCol {
+		startCol, endCol = endCol, startCol
+	}
+
+	b.saveState("delete block range")
+
+	for i := startLine; i <= endLine; i++ {
+		runes := []rune(b.lines[i])
+		if startCol >= len(runes) {
+			continue
+		}
+		end := endCol
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if end < startCol {
+			end = startCol
+		}
+		b.lines[i] = string(runes[:startCol]) + string(runes[end:])
+	}
+	b.cursor.Line = startLine
+	b.cursor.Col = startCol
+	b.markModified()
+}
+
+// InsertBlockText inserts a block of text at the given line/col.
+func (b *Buffer) InsertBlockText(startLine, startCol int, lines []string) {
+	if b.readOnly {
+		return
+	}
+	if startLine < 0 {
+		startLine = 0
+	}
+	if startCol < 0 {
+		startCol = 0
+	}
+	if len(lines) == 0 {
+		return
+	}
+
+	for len(b.lines) <= startLine+len(lines)-1 {
+		b.lines = append(b.lines, "")
+	}
+
+	b.saveState("insert block text")
+
+	for i, text := range lines {
+		lineIdx := startLine + i
+		runes := []rune(b.lines[lineIdx])
+		if startCol > len(runes) {
+			padding := strings.Repeat(" ", startCol-len(runes))
+			runes = []rune(string(runes) + padding)
+		}
+		prefix := string(runes[:startCol])
+		suffix := string(runes[startCol:])
+		b.lines[lineIdx] = prefix + text + suffix
+	}
+	b.cursor.Line = startLine
+	b.cursor.Col = startCol
+	b.markModified()
 }
 
 // DeleteCharRange deletes the text in the specified character range.

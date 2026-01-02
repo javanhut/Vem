@@ -705,7 +705,7 @@ func (s *appState) navigateToLocation(loc lsp.Location) {
 		// Update pane
 		if s.paneManager != nil {
 			if pane := s.paneManager.ActivePane(); pane != nil {
-				pane.SetBufferIndex(s.bufferMgr.ActiveIndex())
+				s.switchPaneBuffer(pane, s.bufferMgr.ActiveIndex())
 			}
 		}
 		// Get the new buffer

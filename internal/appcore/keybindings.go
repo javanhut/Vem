@@ -22,6 +22,7 @@ const (
 	ActionEnterInsert
 	ActionEnterVisualChar
 	ActionEnterVisualLine
+	ActionEnterVisualBlock
 	ActionEnterDelete
 	ActionEnterCommand
 	ActionEnterExplorer
@@ -36,6 +37,7 @@ const (
 	ActionJumpLineEnd
 	ActionGotoLine
 	ActionStartGotoSequence
+	ActionJumpMatchingBrace
 	ActionWordForward
 	ActionWordBackward
 	ActionWordEnd
@@ -77,6 +79,11 @@ const (
 	// Fuzzy Finder
 	ActionOpenFuzzyFinder
 	ActionFuzzyFinderConfirm
+	ActionFuzzyFinderCycleRoot
+	ActionOpenBufferSwitcher
+	ActionBufferSwitcherConfirm
+	ActionOpenCommandPalette
+	ActionCommandPaletteConfirm
 
 	// Buffer management
 	ActionNextBuffer
@@ -139,6 +146,9 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModCtrl, Key: "h", Modes: nil, Action: ActionFocusExplorer},
 	{Modifiers: key.ModCtrl, Key: "l", Modes: nil, Action: ActionFocusEditor},
 	{Modifiers: key.ModCtrl, Key: "f", Modes: nil, Action: ActionOpenFuzzyFinder},
+	{Modifiers: key.ModAlt, Key: "f", Modes: nil, Action: ActionFuzzyFinderCycleRoot},
+	{Modifiers: key.ModCtrl, Key: key.NameTab, Modes: nil, Action: ActionOpenBufferSwitcher},
+	{Modifiers: key.ModCtrl | key.ModShift, Key: "p", Modes: nil, Action: ActionOpenCommandPalette},
 	{Modifiers: key.ModCtrl, Key: "u", Modes: nil, Action: ActionUndo},
 	{Modifiers: key.ModShift, Key: key.NameReturn, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
 	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
@@ -170,6 +180,7 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "i", Modes: nil, Action: ActionEnterInsert},
 		{Modifiers: 0, Key: "v", Modes: nil, Action: ActionEnterVisualChar},
 		{Modifiers: key.ModShift, Key: "v", Modes: nil, Action: ActionEnterVisualLine},
+		{Modifiers: key.ModCtrl, Key: "v", Modes: nil, Action: ActionEnterVisualBlock},
 		{Modifiers: 0, Key: "d", Modes: nil, Action: ActionEnterDelete},
 		{Modifiers: 0, Key: "h", Modes: nil, Action: ActionMoveLeft},
 		{Modifiers: 0, Key: "j", Modes: nil, Action: ActionMoveDown},
@@ -181,6 +192,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "0", Modes: nil, Action: ActionJumpLineStart},
 		{Modifiers: 0, Key: "$", Modes: nil, Action: ActionJumpLineEnd},
 		{Modifiers: key.ModShift, Key: "4", Modes: nil, Action: ActionJumpLineEnd},
+		{Modifiers: 0, Key: "%", Modes: nil, Action: ActionJumpMatchingBrace},
+		{Modifiers: key.ModShift, Key: "5", Modes: nil, Action: ActionJumpMatchingBrace},
 		{Modifiers: 0, Key: "/", Modes: nil, Action: ActionEnterSearch},
 		{Modifiers: 0, Key: "n", Modes: nil, Action: ActionNextMatch},
 		{Modifiers: key.ModShift, Key: "n", Modes: nil, Action: ActionPrevMatch},
@@ -223,10 +236,13 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: "0", Modes: nil, Action: ActionJumpLineStart},
 		{Modifiers: 0, Key: "$", Modes: nil, Action: ActionJumpLineEnd},
 		{Modifiers: key.ModShift, Key: "4", Modes: nil, Action: ActionJumpLineEnd},
+		{Modifiers: 0, Key: "%", Modes: nil, Action: ActionJumpMatchingBrace},
+		{Modifiers: key.ModShift, Key: "5", Modes: nil, Action: ActionJumpMatchingBrace},
 		{Modifiers: 0, Key: "c", Modes: nil, Action: ActionCopySelection},
 		{Modifiers: 0, Key: "d", Modes: nil, Action: ActionDeleteSelection},
 		{Modifiers: 0, Key: "p", Modes: nil, Action: ActionPasteClipboard},
 		{Modifiers: 0, Key: "v", Modes: nil, Action: ActionExitMode},
+		{Modifiers: key.ModCtrl, Key: "v", Modes: nil, Action: ActionEnterVisualBlock},
 		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
 	},
 	modeDelete: {
@@ -268,6 +284,22 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
 		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionFuzzyFinderConfirm},
 		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionFuzzyFinderConfirm},
+		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
+		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
+		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
+	},
+	modeBufferSwitch: {
+		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
+		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionBufferSwitcherConfirm},
+		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionBufferSwitcherConfirm},
+		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
+		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
+		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
+	},
+	modeCommandPalette: {
+		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
+		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionCommandPaletteConfirm},
+		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionCommandPaletteConfirm},
 		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
@@ -428,6 +460,9 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	case ActionEnterVisualLine:
 		s.enterVisualLine()
 
+	case ActionEnterVisualBlock:
+		s.enterVisualBlock()
+
 	case ActionEnterDelete:
 		s.enterDeleteMode()
 
@@ -459,6 +494,10 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.exitSearchMode()
 		case modeFuzzyFinder:
 			s.exitFuzzyFinder()
+		case modeBufferSwitch:
+			s.exitBufferSwitcher()
+		case modeCommandPalette:
+			s.exitCommandPalette()
 		case modeNormal:
 			s.exitVisualMode()
 			s.resetCount()
@@ -479,6 +518,10 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			}
 		} else if s.mode == modeFuzzyFinder {
 			s.fuzzyFinderMoveUp()
+		} else if s.mode == modeBufferSwitch {
+			s.bufferSwitcherMoveUp()
+		} else if s.mode == modeCommandPalette {
+			s.commandPaletteMoveUp()
 		} else {
 			s.moveCursor("up")
 		}
@@ -491,6 +534,10 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			}
 		} else if s.mode == modeFuzzyFinder {
 			s.fuzzyFinderMoveDown()
+		} else if s.mode == modeBufferSwitch {
+			s.bufferSwitcherMoveDown()
+		} else if s.mode == modeCommandPalette {
+			s.commandPaletteMoveDown()
 		} else {
 			s.moveCursor("down")
 		}
@@ -508,6 +555,9 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		} else {
 			s.status = "Already at line end"
 		}
+
+	case ActionJumpMatchingBrace:
+		s.jumpMatchingBrace()
 
 	case ActionWordForward:
 		if s.activeBuffer().MoveWordForward() {
@@ -573,6 +623,10 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 			s.deleteSearchChar()
 		} else if s.mode == modeFuzzyFinder {
 			s.deleteFuzzyChar()
+		} else if s.mode == modeBufferSwitch {
+			s.deleteBufferSwitcherChar()
+		} else if s.mode == modeCommandPalette {
+			s.deleteCommandPaletteChar()
 		}
 
 	case ActionDeleteForward:
@@ -681,6 +735,21 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionFuzzyFinderConfirm:
 		s.fuzzyFinderConfirm()
+
+	case ActionFuzzyFinderCycleRoot:
+		s.cycleFuzzyRoot()
+
+	case ActionOpenBufferSwitcher:
+		s.enterBufferSwitcher()
+
+	case ActionBufferSwitcherConfirm:
+		s.bufferSwitcherConfirm()
+
+	case ActionOpenCommandPalette:
+		s.enterCommandPalette()
+
+	case ActionCommandPaletteConfirm:
+		s.commandPaletteConfirm()
 
 	case ActionScrollToCenter:
 		linesPerPage := 20
