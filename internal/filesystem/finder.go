@@ -8,8 +8,7 @@ import (
 
 // FindAllFiles recursively finds all files starting from the given root directory.
 // It returns a list of file paths relative to the root.
-// Hidden files and directories (starting with .) are excluded.
-func FindAllFiles(root string) ([]string, error) {
+func FindAllFiles(root string, includeHidden bool) ([]string, error) {
 	var files []string
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -18,12 +17,14 @@ func FindAllFiles(root string) ([]string, error) {
 			return nil
 		}
 
-		// Skip hidden files and directories (starting with .)
-		if info.Name() != "." && strings.HasPrefix(info.Name(), ".") {
-			if info.IsDir() {
-				return filepath.SkipDir
+		if !includeHidden {
+			// Skip hidden files and directories (starting with .)
+			if info.Name() != "." && strings.HasPrefix(info.Name(), ".") {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
-			return nil
 		}
 
 		// Skip common build/cache directories

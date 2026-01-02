@@ -246,7 +246,7 @@ The fuzzy finder automatically excludes:
 - `internal/appcore/app.go`: Fuzzy finder UI and state
 
 **Key functions**:
-- `FindAllFiles(root)`: Recursively finds all files in workspace
+- `FindAllFiles(root, includeHidden)`: Recursively finds all files in workspace
 - `FuzzyScore(pattern, target)`: Calculates match score and indices
 - `PerformFuzzyMatch(pattern, items, maxResults)`: Filters and ranks matches
 

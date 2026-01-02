@@ -3502,7 +3502,7 @@ func (s *appState) enterFuzzyFinder() {
 
 	// Discover all files in the workspace
 	workDir := s.fileTree.CurrentPath()
-	files, err := filesystem.FindAllFiles(workDir)
+	files, err := filesystem.FindAllFiles(workDir, true)
 	if err != nil {
 		s.status = fmt.Sprintf("Error discovering files: %v", err)
 		return
