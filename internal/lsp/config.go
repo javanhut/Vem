@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -321,8 +322,95 @@ func IsServerAvailable(cfg *ServerConfig) bool {
 	if cfg == nil {
 		return false
 	}
-	_, err := exec.LookPath(cfg.Command)
+
+	if resolved, ok := resolveServerPath(cfg); ok {
+		cfg.Command = resolved
+		return true
+	}
+
+	return false
+}
+
+func resolveServerPath(cfg *ServerConfig) (string, bool) {
+	if cfg == nil || cfg.Command == "" {
+		return "", false
+	}
+
+	if path, err := exec.LookPath(cfg.Command); err == nil {
+		return path, true
+	}
+
+	switch cfg.Command {
+	case "gopls":
+		if path := findGoBinary("gopls"); path != "" {
+			return path, true
+		}
+	case "rust-analyzer":
+		if path := findCargoBinary("rust-analyzer"); path != "" {
+			return path, true
+		}
+	}
+
+	return "", false
+}
+
+func findGoBinary(name string) string {
+	if !commandExists("go") {
+		return ""
+	}
+	binName := withExecutableSuffix(name)
+	if gobin := strings.TrimSpace(runCommandOutput("go", "env", "GOBIN")); gobin != "" {
+		if path := filepath.Join(gobin, binName); fileExists(path) {
+			return path
+		}
+	}
+	if gopath := strings.TrimSpace(runCommandOutput("go", "env", "GOPATH")); gopath != "" {
+		if path := filepath.Join(gopath, "bin", binName); fileExists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+func findCargoBinary(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	path := filepath.Join(home, ".cargo", "bin", withExecutableSuffix(name))
+	if fileExists(path) {
+		return path
+	}
+	return ""
+}
+
+func withExecutableSuffix(name string) string {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		return name + ".exe"
+	}
+	return name
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+func runCommandOutput(name string, args ...string) string {
+	cmd := exec.Command(name, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(output)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // FindProjectRoot finds the project root directory based on marker files.

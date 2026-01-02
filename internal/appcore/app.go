@@ -291,7 +291,13 @@ type appState struct {
 	codeActionsActive bool
 	codeActionItems   []lsp.CodeAction
 	codeActionIndex   int
+
+	// Modal state
+	modalActive bool
+	modalText   string
 }
+
+var globalAppState *appState
 
 func Run(w *app.Window, filePaths []string) error {
 	state := newAppState(filePaths)
@@ -488,6 +494,7 @@ func newAppState(filePaths []string) *appState {
 
 	state.initViewState()
 	state.recordBufferAccess(0)
+	globalAppState = state
 	state.setupLSPForBuffer(state.activeBuffer())
 
 	return state
@@ -675,6 +682,11 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 	// Draw command palette overlay on top if active
 	if s.commandPaletteActive {
 		s.drawCommandPalette(gtx)
+	}
+
+	// Draw modal overlay on top if active
+	if s.modalActive {
+		s.drawModal(gtx)
 	}
 
 	return dims
@@ -1528,6 +1540,51 @@ func (s *appState) drawCommandPalette(gtx layout.Context) layout.Dimensions {
 					return label.Layout(gtx)
 				})
 			}),
+		)
+	})
+
+	stack.Pop()
+	return dims
+}
+
+func (s *appState) drawModal(gtx layout.Context) layout.Dimensions {
+	overlayBg := color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xcc}
+	overlayRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, overlayBg)
+	overlayRect.Pop()
+
+	width := gtx.Constraints.Max.X / 2
+	if width > 520 {
+		width = 520
+	}
+	height := gtx.Constraints.Max.Y / 4
+	if height > 200 {
+		height = 200
+	}
+
+	x := (gtx.Constraints.Max.X - width) / 2
+	y := (gtx.Constraints.Max.Y - height) / 2
+
+	stack := op.Offset(image.Pt(x, y)).Push(gtx.Ops)
+	gtx.Constraints.Max = image.Pt(width, height)
+
+	backgroundRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, statusBg)
+	backgroundRect.Pop()
+
+	inset := layout.UniformInset(unit.Dp(16))
+	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		title := material.H6(s.theme, "Authentication Required")
+		title.Font.Typeface = "JetBrainsMono"
+		title.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+		body := material.Body2(s.theme, s.modalText)
+		body.Font.Typeface = "JetBrainsMono"
+		body.Color = color.NRGBA{R: 0xcc, G: 0xcc, B: 0xcc, A: 0xff}
+
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(title.Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(body.Layout),
 		)
 	})
 
@@ -3100,6 +3157,8 @@ func (s *appState) executeCommandLine() {
 		s.handleHelpCommand(strings.TrimSpace(args))
 	case "install":
 		s.handleInstallCommand(strings.TrimSpace(args))
+	case "uninstall":
+		s.handleUninstallCommand(strings.TrimSpace(args))
 	case "lspauto":
 		s.handleLSPAutoCommand(strings.TrimSpace(args))
 	default:
@@ -3270,6 +3329,34 @@ func (s *appState) handleInstallCommand(arg string) {
 	s.installLSPServer(cfg, filePath, false)
 }
 
+func (s *appState) handleUninstallCommand(arg string) {
+	if arg == "" {
+		s.status = "Usage: :uninstall <language|server>"
+		return
+	}
+
+	aliases := map[string]string{
+		"rustlsp":   "rust",
+		"golsp":     "go",
+		"pythonlsp": "python",
+		"tslsp":     "typescript",
+		"jslsp":     "javascript",
+	}
+
+	id := strings.ToLower(arg)
+	if mapped, ok := aliases[id]; ok {
+		id = mapped
+	}
+
+	cfg := lsp.GetConfigByIdentifier(id)
+	if cfg == nil {
+		s.status = fmt.Sprintf("Unknown LSP: %s", arg)
+		return
+	}
+
+	s.uninstallLSPServer(cfg)
+}
+
 func (s *appState) handleLSPAutoCommand(arg string) {
 	switch strings.ToLower(arg) {
 	case "", "toggle":
@@ -3301,11 +3388,6 @@ func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto
 		return
 	}
 
-	if len(cfg.InstallCommand) == 0 {
-		s.status = fmt.Sprintf("No install command for %s", cfg.Name)
-		return
-	}
-
 	if s.lspAutoInFlight == nil {
 		s.lspAutoInFlight = make(map[string]bool)
 	}
@@ -3321,16 +3403,16 @@ func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto
 	}
 	s.status = fmt.Sprintf("%s %s...", verb, cfg.Name)
 
-	cmdName := cfg.InstallCommand[0]
-	cmdArgs := []string{}
-	if len(cfg.InstallCommand) > 1 {
-		cmdArgs = cfg.InstallCommand[1:]
+	cmd, err := resolveLSPInstallCommand(cfg)
+	if err != nil {
+		s.status = fmt.Sprintf("No install method for %s", cfg.Name)
+		s.lspAutoInFlight[cfg.Name] = false
+		return
 	}
+	cmd = maybeSudo(cmd)
 
 	go func() {
-		cmd := exec.Command(cmdName, cmdArgs...)
-		cmd.Env = os.Environ()
-		output, err := cmd.CombinedOutput()
+		output, err := runInstallCommand(cmd)
 		s.lspAutoInFlight[cfg.Name] = false
 		if err != nil {
 			lastLine := strings.TrimSpace(string(output))
@@ -3345,6 +3427,13 @@ func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto
 			return
 		}
 
+		if cfg.Command == "gopls" {
+			ensureGoBinInPath()
+		}
+		if cfg.Command == "rust-analyzer" {
+			ensureCargoBinInPath()
+		}
+
 		s.status = fmt.Sprintf("Installed %s (use :lsprestart)", cfg.Name)
 		if auto && filePath != "" {
 			if buf := s.bufferMgr.GetBufferByPath(filePath); buf != nil {
@@ -3352,6 +3441,87 @@ func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto
 			}
 		}
 	}()
+}
+
+func (s *appState) uninstallLSPServer(cfg *lsp.ServerConfig) {
+	if cfg == nil {
+		return
+	}
+
+	if s.lspAutoInFlight == nil {
+		s.lspAutoInFlight = make(map[string]bool)
+	}
+	if s.lspAutoInFlight[cfg.Name] {
+		return
+	}
+	s.lspAutoInFlight[cfg.Name] = true
+
+	s.status = fmt.Sprintf("Uninstalling %s...", cfg.Name)
+	cmd, err := resolveLSPUninstallCommand(cfg)
+	if err != nil {
+		s.status = fmt.Sprintf("No uninstall method for %s", cfg.Name)
+		s.lspAutoInFlight[cfg.Name] = false
+		return
+	}
+	cmd = maybeSudo(cmd)
+
+	go func() {
+		output, err := runInstallCommand(cmd)
+		s.lspAutoInFlight[cfg.Name] = false
+		if err != nil {
+			lastLine := strings.TrimSpace(string(output))
+			if idx := strings.LastIndex(lastLine, "\n"); idx != -1 {
+				lastLine = strings.TrimSpace(lastLine[idx+1:])
+			}
+			if lastLine == "" {
+				s.status = fmt.Sprintf("Uninstall failed: %v", err)
+			} else {
+				s.status = fmt.Sprintf("Uninstall failed: %s", lastLine)
+			}
+			return
+		}
+
+		s.status = fmt.Sprintf("Uninstalled %s", cfg.Name)
+	}()
+}
+
+func runInstallCommand(cmd *installCommand) ([]byte, error) {
+	if cmd == nil {
+		return nil, fmt.Errorf("no install command")
+	}
+	s := globalAppState
+	if s != nil && cmd.Name == "pkexec" {
+		s.modalActive = true
+		s.modalText = "System installer requires admin approval. Complete the prompt to continue."
+		if s.window != nil {
+			s.window.Invalidate()
+		}
+	}
+
+	command := exec.Command(cmd.Name, cmd.Args...)
+	command.Env = os.Environ()
+	output, err := command.CombinedOutput()
+
+	if s != nil && s.modalActive && cmd.Name == "pkexec" {
+		s.modalActive = false
+		s.modalText = ""
+		if s.window != nil {
+			s.window.Invalidate()
+		}
+	}
+
+	if err == nil {
+		return output, nil
+	}
+	for _, fb := range cmd.Fallbacks {
+		command = exec.Command(fb.Name, fb.Args...)
+		command.Env = os.Environ()
+		output, err = command.CombinedOutput()
+		if err == nil {
+			return output, nil
+		}
+	}
+	return output, err
 }
 
 func (s *appState) handleEditCommand(path string) {

@@ -131,6 +131,9 @@ func appendCommands(sb *strings.Builder) {
 		{":cd <path>", "Change working directory"},
 		{":pwd", "Print working directory"},
 		{":term", "Open embedded terminal"},
+		{":install <lang>", "Install language server"},
+		{":uninstall <lang>", "Uninstall language server"},
+		{":lspauto [on|off|toggle|status]", "Toggle LSP auto-install"},
 		{":help", "Show this help"},
 	}
 

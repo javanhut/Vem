@@ -227,8 +227,13 @@ func (m *Manager) startServer(cfg ServerConfig, workspaceRoot string) (*ServerIn
 				},
 				PublishDiagnostics: &PublishDiagnosticsClientCaps{
 					RelatedInformation: true,
-					TagSupport:         true,
-					VersionSupport:     true,
+					TagSupport: &DiagnosticTagSupport{
+						ValueSet: []DiagnosticTag{
+							DiagnosticTagUnnecessary,
+							DiagnosticTagDeprecated,
+						},
+					},
+					VersionSupport: true,
 				},
 			},
 		},

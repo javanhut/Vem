@@ -372,11 +372,11 @@ type ClientCapabilities struct {
 
 // WorkspaceClientCapabilities describe workspace capabilities.
 type WorkspaceClientCapabilities struct {
-	ApplyEdit              bool                        `json:"applyEdit,omitempty"`
-	WorkspaceEdit          *WorkspaceEditCapabilities  `json:"workspaceEdit,omitempty"`
-	DidChangeConfiguration *DidChangeConfigCapability  `json:"didChangeConfiguration,omitempty"`
-	Symbol                 *WorkspaceSymbolCapability  `json:"symbol,omitempty"`
-	WorkspaceFolders       bool                        `json:"workspaceFolders,omitempty"`
+	ApplyEdit              bool                       `json:"applyEdit,omitempty"`
+	WorkspaceEdit          *WorkspaceEditCapabilities `json:"workspaceEdit,omitempty"`
+	DidChangeConfiguration *DidChangeConfigCapability `json:"didChangeConfiguration,omitempty"`
+	Symbol                 *WorkspaceSymbolCapability `json:"symbol,omitempty"`
+	WorkspaceFolders       bool                       `json:"workspaceFolders,omitempty"`
 }
 
 // WorkspaceEditCapabilities describe workspace edit capabilities.
@@ -454,15 +454,15 @@ type HoverClientCapabilities struct {
 
 // SignatureHelpClientCapabilities describe signature help capabilities.
 type SignatureHelpClientCapabilities struct {
-	DynamicRegistration  bool                      `json:"dynamicRegistration,omitempty"`
-	SignatureInformation *SignatureInfoClientCaps  `json:"signatureInformation,omitempty"`
-	ContextSupport       bool                      `json:"contextSupport,omitempty"`
+	DynamicRegistration  bool                     `json:"dynamicRegistration,omitempty"`
+	SignatureInformation *SignatureInfoClientCaps `json:"signatureInformation,omitempty"`
+	ContextSupport       bool                     `json:"contextSupport,omitempty"`
 }
 
 // SignatureInfoClientCaps describe signature info capabilities.
 type SignatureInfoClientCaps struct {
-	DocumentationFormat  []MarkupKind          `json:"documentationFormat,omitempty"`
-	ParameterInformation *ParamInfoClientCaps  `json:"parameterInformation,omitempty"`
+	DocumentationFormat  []MarkupKind         `json:"documentationFormat,omitempty"`
+	ParameterInformation *ParamInfoClientCaps `json:"parameterInformation,omitempty"`
 }
 
 // ParamInfoClientCaps describe parameter info capabilities.
@@ -506,9 +506,9 @@ type DocumentHighlightClientCaps struct {
 
 // DocumentSymbolClientCapabilities describe document symbol capabilities.
 type DocumentSymbolClientCapabilities struct {
-	DynamicRegistration               bool                       `json:"dynamicRegistration,omitempty"`
-	SymbolKind                        *SymbolKindClientCaps      `json:"symbolKind,omitempty"`
-	HierarchicalDocumentSymbolSupport bool                       `json:"hierarchicalDocumentSymbolSupport,omitempty"`
+	DynamicRegistration               bool                  `json:"dynamicRegistration,omitempty"`
+	SymbolKind                        *SymbolKindClientCaps `json:"symbolKind,omitempty"`
+	HierarchicalDocumentSymbolSupport bool                  `json:"hierarchicalDocumentSymbolSupport,omitempty"`
 }
 
 // SymbolKindClientCaps describe symbol kind capabilities.
@@ -593,9 +593,14 @@ type RenameClientCapabilities struct {
 
 // PublishDiagnosticsClientCaps describe publish diagnostics capabilities.
 type PublishDiagnosticsClientCaps struct {
-	RelatedInformation bool `json:"relatedInformation,omitempty"`
-	TagSupport         bool `json:"tagSupport,omitempty"`
-	VersionSupport     bool `json:"versionSupport,omitempty"`
+	RelatedInformation bool                  `json:"relatedInformation,omitempty"`
+	TagSupport         *DiagnosticTagSupport `json:"tagSupport,omitempty"`
+	VersionSupport     bool                  `json:"versionSupport,omitempty"`
+}
+
+// DiagnosticTagSupport describes supported diagnostic tags.
+type DiagnosticTagSupport struct {
+	ValueSet []DiagnosticTag `json:"valueSet,omitempty"`
 }
 
 // GeneralClientCapabilities describe general capabilities.
@@ -630,25 +635,25 @@ type ServerInfo struct {
 
 // ServerCapabilities describe the capabilities of the language server.
 type ServerCapabilities struct {
-	TextDocumentSync           interface{}                 `json:"textDocumentSync,omitempty"`
-	CompletionProvider         *CompletionOptions          `json:"completionProvider,omitempty"`
-	HoverProvider              interface{}                 `json:"hoverProvider,omitempty"`
-	SignatureHelpProvider      *SignatureHelpOptions       `json:"signatureHelpProvider,omitempty"`
-	DeclarationProvider        interface{}                 `json:"declarationProvider,omitempty"`
-	DefinitionProvider         interface{}                 `json:"definitionProvider,omitempty"`
-	TypeDefinitionProvider     interface{}                 `json:"typeDefinitionProvider,omitempty"`
-	ImplementationProvider     interface{}                 `json:"implementationProvider,omitempty"`
-	ReferencesProvider         interface{}                 `json:"referencesProvider,omitempty"`
-	DocumentHighlightProvider  interface{}                 `json:"documentHighlightProvider,omitempty"`
-	DocumentSymbolProvider     interface{}                 `json:"documentSymbolProvider,omitempty"`
-	CodeActionProvider         interface{}                 `json:"codeActionProvider,omitempty"`
-	CodeLensProvider           *CodeLensOptions            `json:"codeLensProvider,omitempty"`
-	DocumentFormattingProvider interface{}                 `json:"documentFormattingProvider,omitempty"`
-	DocumentRangeFormatProvider interface{}                `json:"documentRangeFormattingProvider,omitempty"`
-	DocumentOnTypeFormatProvider *DocumentOnTypeFormatOpts `json:"documentOnTypeFormattingProvider,omitempty"`
-	RenameProvider             interface{}                 `json:"renameProvider,omitempty"`
-	WorkspaceSymbolProvider    interface{}                 `json:"workspaceSymbolProvider,omitempty"`
-	Workspace                  *ServerWorkspaceCapabilities `json:"workspace,omitempty"`
+	TextDocumentSync             interface{}                  `json:"textDocumentSync,omitempty"`
+	CompletionProvider           *CompletionOptions           `json:"completionProvider,omitempty"`
+	HoverProvider                interface{}                  `json:"hoverProvider,omitempty"`
+	SignatureHelpProvider        *SignatureHelpOptions        `json:"signatureHelpProvider,omitempty"`
+	DeclarationProvider          interface{}                  `json:"declarationProvider,omitempty"`
+	DefinitionProvider           interface{}                  `json:"definitionProvider,omitempty"`
+	TypeDefinitionProvider       interface{}                  `json:"typeDefinitionProvider,omitempty"`
+	ImplementationProvider       interface{}                  `json:"implementationProvider,omitempty"`
+	ReferencesProvider           interface{}                  `json:"referencesProvider,omitempty"`
+	DocumentHighlightProvider    interface{}                  `json:"documentHighlightProvider,omitempty"`
+	DocumentSymbolProvider       interface{}                  `json:"documentSymbolProvider,omitempty"`
+	CodeActionProvider           interface{}                  `json:"codeActionProvider,omitempty"`
+	CodeLensProvider             *CodeLensOptions             `json:"codeLensProvider,omitempty"`
+	DocumentFormattingProvider   interface{}                  `json:"documentFormattingProvider,omitempty"`
+	DocumentRangeFormatProvider  interface{}                  `json:"documentRangeFormattingProvider,omitempty"`
+	DocumentOnTypeFormatProvider *DocumentOnTypeFormatOpts    `json:"documentOnTypeFormattingProvider,omitempty"`
+	RenameProvider               interface{}                  `json:"renameProvider,omitempty"`
+	WorkspaceSymbolProvider      interface{}                  `json:"workspaceSymbolProvider,omitempty"`
+	Workspace                    *ServerWorkspaceCapabilities `json:"workspace,omitempty"`
 }
 
 // CompletionOptions describe completion provider options.

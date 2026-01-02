@@ -123,6 +123,9 @@ The status bar shows a count of errors and warnings for the current file.
 | `:codeaction` | Show code actions |
 | `:lspstatus` | Show LSP server status |
 | `:lsprestart` | Restart language server |
+| `:install <lang>` | Install language server |
+| `:uninstall <lang>` | Uninstall language server |
+| `:lspauto [on|off|toggle|status]` | Auto-install missing language servers |
 
 ## Keybindings Summary
 
