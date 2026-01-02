@@ -192,6 +192,7 @@ type appState struct {
 	fuzzyFinderMatches     []FuzzyMatch
 	fuzzyFinderSelectedIdx int
 	fuzzyFinderRoot        string
+	fuzzyRootFlashUntil    time.Time
 	fuzzyRootMode          fuzzyRootMode
 	fuzzyWorkspaceRoot     string
 	fuzzyHomeRoot          string
@@ -223,11 +224,13 @@ type appState struct {
 	// Modifier tracking (some platforms don't report modifiers correctly)
 	ctrlPressed  bool
 	shiftPressed bool
+	altPressed   bool
 
 	// Windows-only: temporal tracking for modifier Release events
 	// (Gio on Windows sends Release before character keys arrive)
 	ctrlReleaseTime  time.Time
 	shiftReleaseTime time.Time
+	altReleaseTime   time.Time
 
 	// Fullscreen state tracking
 	currentWindowMode app.WindowMode
@@ -745,6 +748,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				if hadShift && s.shiftPressed {
 					s.shiftPressed = false
 				}
+				if s.altPressed {
+					s.altPressed = false
+				}
 			}
 		case key.EditEvent:
 			if e.Text == "" {
@@ -792,6 +798,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				if s.ctrlPressed {
 					s.ctrlPressed = false
 				}
+				if s.altPressed {
+					s.altPressed = false
+				}
 			case modeCommand:
 				s.appendCommandText(e.Text)
 				// Reset modifiers after text insertion to prevent sticking
@@ -800,6 +809,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				}
 				if s.ctrlPressed {
 					s.ctrlPressed = false
+				}
+				if s.altPressed {
+					s.altPressed = false
 				}
 			case modeSearch:
 				if s.skipNextSearchEdit {
@@ -814,6 +826,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				if s.ctrlPressed {
 					s.ctrlPressed = false
 				}
+				if s.altPressed {
+					s.altPressed = false
+				}
 			case modeFuzzyFinder:
 				if s.skipNextFuzzyEdit {
 					s.skipNextFuzzyEdit = false
@@ -827,6 +842,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				if s.ctrlPressed {
 					s.ctrlPressed = false
 				}
+				if s.altPressed {
+					s.altPressed = false
+				}
 			case modeBufferSwitch:
 				if s.skipNextBufferEdit {
 					s.skipNextBufferEdit = false
@@ -839,6 +857,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				if s.ctrlPressed {
 					s.ctrlPressed = false
 				}
+				if s.altPressed {
+					s.altPressed = false
+				}
 			case modeCommandPalette:
 				if s.skipNextCommandPaletteEdit {
 					s.skipNextCommandPaletteEdit = false
@@ -850,6 +871,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				}
 				if s.ctrlPressed {
 					s.ctrlPressed = false
+				}
+				if s.altPressed {
+					s.altPressed = false
 				}
 			}
 		}
@@ -1326,7 +1350,11 @@ func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
 			// Input field
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				rootLabel := s.fuzzyRootLabel()
-				prompt := fmt.Sprintf("Fuzzy Finder (%s): %s", rootLabel, s.fuzzyFinderInput)
+				flash := ""
+				if time.Now().Before(s.fuzzyRootFlashUntil) {
+					flash = " (root switched)"
+				}
+				prompt := fmt.Sprintf("Fuzzy Finder (%s)%s: %s", rootLabel, flash, s.fuzzyFinderInput)
 				label := material.Body1(s.theme, prompt)
 				label.Font.Typeface = "JetBrainsMono"
 				label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
@@ -1756,6 +1784,9 @@ func (s *appState) formatModifiers(mods key.Modifiers) string {
 
 	if mods.Contain(key.ModAlt) {
 		parts = append(parts, "Alt")
+	}
+	if s.altPressed && !mods.Contain(key.ModAlt) {
+		tracked = append(tracked, "Alt")
 	}
 
 	result := strings.Join(parts, "+")
@@ -4426,6 +4457,8 @@ func (s *appState) cycleFuzzyRoot() {
 		s.fuzzyRootMode = fuzzyRootWorkspace
 	}
 
+	s.fuzzyRootFlashUntil = time.Now().Add(1200 * time.Millisecond)
+
 	if s.fuzzyFinderActive {
 		root := s.fuzzyRootPath()
 		files, err := s.getFuzzyFiles(root)
@@ -4437,6 +4470,7 @@ func (s *appState) cycleFuzzyRoot() {
 		s.fuzzyFinderFiles = buildFuzzyItems(files)
 		s.fuzzyFinderMatches = PerformFuzzyMatch(s.fuzzyFinderInput, s.fuzzyFinderFiles, 50)
 		s.fuzzyFinderSelectedIdx = 0
+		s.skipNextFuzzyEdit = true
 		s.status = fmt.Sprintf("Fuzzy Finder (%s): %d files", s.fuzzyRootLabel(), len(files))
 		return
 	}

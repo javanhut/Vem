@@ -360,9 +360,9 @@ func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 	// Build the actual modifiers state
 	// PLATFORM QUIRK: ev.Modifiers is ALWAYS empty on some platforms!
 	// We MUST rely on tracked state from explicit Press/Release events
-	ctrlHeld := s.ctrlPressed                   // Trust tracked state, not ev.Modifiers
-	shiftHeld := s.shiftPressed                 // Trust tracked state, not ev.Modifiers
-	altHeld := ev.Modifiers.Contain(key.ModAlt) // Alt not tracked yet
+	ctrlHeld := s.ctrlPressed   // Trust tracked state, not ev.Modifiers
+	shiftHeld := s.shiftPressed // Trust tracked state, not ev.Modifiers
+	altHeld := s.altPressed || ev.Modifiers.Contain(key.ModAlt)
 
 	// If no modifiers are required, ensure no modifiers are pressed (tracked or reported)
 	if required == 0 {

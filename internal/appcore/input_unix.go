@@ -21,6 +21,7 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 	}
 
 	if e.Name == key.NameAlt {
+		s.altPressed = (e.State == key.Press)
 		return true
 	}
 
@@ -38,5 +39,8 @@ func (s *appState) syncModifierState(e key.Event) {
 	}
 	if e.Modifiers.Contain(key.ModShift) && !s.shiftPressed {
 		s.shiftPressed = true
+	}
+	if e.Modifiers.Contain(key.ModAlt) && !s.altPressed {
+		s.altPressed = true
 	}
 }

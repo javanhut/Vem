@@ -44,6 +44,11 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 	}
 
 	if e.Name == key.NameAlt {
+		if e.State == key.Release {
+			s.altReleaseTime = time.Now()
+		} else {
+			s.altPressed = true
+		}
 		return true
 	}
 
@@ -68,11 +73,20 @@ func (s *appState) syncModifierState(e key.Event) {
 		s.shiftPressed = true
 	}
 
+	// Check if Alt was released within last 200ms
+	altWindow := now.Sub(s.altReleaseTime)
+	if altWindow < 200*time.Millisecond && altWindow >= 0 {
+		s.altPressed = true
+	}
+
 	// Also check ev.Modifiers as a fallback (usually empty on Windows, but try anyway)
 	if e.Modifiers.Contain(key.ModCtrl) {
 		s.ctrlPressed = true
 	}
 	if e.Modifiers.Contain(key.ModShift) {
 		s.shiftPressed = true
+	}
+	if e.Modifiers.Contain(key.ModAlt) {
+		s.altPressed = true
 	}
 }
