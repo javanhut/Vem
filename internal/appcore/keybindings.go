@@ -306,11 +306,13 @@ func (s *appState) matchModeKeybinding(m mode, ev key.Event) Action {
 	}
 
 	for _, binding := range bindings {
-		if !s.modifiersMatch(ev, binding.Modifiers) {
-			continue
-		}
-
 		if s.keysMatch(ev.Name, binding.Key) {
+			if binding.Key == key.NameEscape {
+				return binding.Action
+			}
+			if !s.modifiersMatch(ev, binding.Modifiers) {
+				continue
+			}
 			return binding.Action
 		}
 	}
@@ -323,17 +325,17 @@ func (s *appState) keysMatch(actual, expected key.Name) bool {
 }
 
 func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
-	// If no modifiers are required, ensure no modifiers are pressed
-	if required == 0 {
-		return ev.Modifiers == 0
-	}
-
 	// Build the actual modifiers state
 	// PLATFORM QUIRK: ev.Modifiers is ALWAYS empty on some platforms!
 	// We MUST rely on tracked state from explicit Press/Release events
 	ctrlHeld := s.ctrlPressed                   // Trust tracked state, not ev.Modifiers
 	shiftHeld := s.shiftPressed                 // Trust tracked state, not ev.Modifiers
 	altHeld := ev.Modifiers.Contain(key.ModAlt) // Alt not tracked yet
+
+	// If no modifiers are required, ensure no modifiers are pressed (tracked or reported)
+	if required == 0 {
+		return !ctrlHeld && !shiftHeld && !altHeld
+	}
 
 	// Check if required modifiers are present
 	ctrlRequired := required.Contain(key.ModCtrl)
