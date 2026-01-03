@@ -721,6 +721,40 @@ func (b *Buffer) GetContent() string {
 	return strings.Join(b.lines, "\n")
 }
 
+// SetContent replaces the buffer content with the provided text.
+func (b *Buffer) SetContent(text string) {
+	if b.readOnly {
+		return
+	}
+	b.saveState("set content")
+
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	b.lines = lines
+	b.markModified()
+	b.clampCursor()
+}
+
+func (b *Buffer) clampCursor() {
+	if len(b.lines) == 0 {
+		b.lines = []string{""}
+	}
+	if b.cursor.Line < 0 {
+		b.cursor.Line = 0
+	} else if b.cursor.Line >= len(b.lines) {
+		b.cursor.Line = len(b.lines) - 1
+	}
+	if b.cursor.Col < 0 {
+		b.cursor.Col = 0
+	}
+	b.clampColumn()
+}
+
 // NewBufferFromFile creates a new buffer and loads content from a file.
 func NewBufferFromFile(path string) (*Buffer, error) {
 	buf := &Buffer{

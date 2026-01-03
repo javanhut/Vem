@@ -244,6 +244,8 @@ type appState struct {
 	// Syntax highlighting state
 	syntaxHighlighters map[int]*syntax.Highlighter // Map from buffer index to highlighter
 	syntaxEnabled      bool                        // Global toggle for syntax highlighting
+	formatOnSave       bool                        // Format via LSP before save when available
+	lintOnSave         bool                        // Run linter on save when available
 
 	// Terminal state
 	terminals          map[int]*terminal.Terminal // Map from buffer index to terminal
@@ -447,6 +449,8 @@ func newAppState(filePaths []string) *appState {
 		listPosition:         layout.List{Axis: layout.Vertical},
 		syntaxHighlighters:   make(map[int]*syntax.Highlighter),
 		syntaxEnabled:        true,
+		formatOnSave:         true,
+		lintOnSave:           true,
 		terminals:            make(map[int]*terminal.Terminal),
 		terminalViewports:    make(map[int]int),
 		terminalAutoScroll:   make(map[int]bool),
@@ -740,7 +744,7 @@ func (s *appState) handleEvents(gtx layout.Context) {
 			//            (the EditEvent needs the modifier state to determine capitalization)
 			shouldResetModifiers := false
 
-			if s.mode == modeNormal || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeBufferSwitch || s.mode == modeCommandPalette {
+			if s.mode == modeNormal || s.mode == modeVisual || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeBufferSwitch || s.mode == modeCommandPalette {
 				// In non-insert modes, reset modifiers after command keys unless waiting for pane command
 				shouldResetModifiers = !s.pendingPaneCmd
 			} else if s.mode == modeInsert {
@@ -3159,6 +3163,10 @@ func (s *appState) executeCommandLine() {
 		s.handleInstallCommand(strings.TrimSpace(args))
 	case "uninstall":
 		s.handleUninstallCommand(strings.TrimSpace(args))
+	case "formatonsave", "fos":
+		s.handleFormatOnSaveCommand(strings.TrimSpace(args))
+	case "lintonsave", "los":
+		s.handleLintOnSaveCommand(strings.TrimSpace(args))
 	case "lspauto":
 		s.handleLSPAutoCommand(strings.TrimSpace(args))
 	default:
@@ -3267,7 +3275,11 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 	}
 
 	var err error
+	var formatErr error
 	oldPath := buf.FilePath()
+	if s.formatOnSave {
+		formatErr = s.tryFormatOnSave(buf)
+	}
 	if arg == "" {
 		// Save to current file
 		err = s.bufferMgr.SaveActiveBuffer()
@@ -3281,6 +3293,17 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 		return
 	}
 
+	if s.lintOnSave && formatErr == nil {
+		filePath := buf.FilePath()
+		go func() {
+			if lintErr := s.runLintOnSave(filePath); lintErr != nil {
+				s.status = fmt.Sprintf("Lint failed: %s", lintErr.Error())
+			} else {
+				s.status = "Lint OK"
+			}
+		}()
+	}
+
 	filename := buf.FilePath()
 	if oldPath != "" && oldPath != filename {
 		if state, ok := s.viewState[oldPath]; ok {
@@ -3291,7 +3314,15 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 	}
 	if andQuit {
 		s.handleQuitCommand(false)
-		s.status = fmt.Sprintf("Wrote + closed %s", filename)
+		if formatErr != nil {
+			s.status = fmt.Sprintf("Wrote + closed %s (format failed: %s)", filename, formatErr.Error())
+		} else {
+			s.status = fmt.Sprintf("Wrote + closed %s", filename)
+		}
+		return
+	}
+	if formatErr != nil {
+		s.status = fmt.Sprintf("Wrote %d line(s) → %s (format failed: %s)", buf.LineCount(), filename, formatErr.Error())
 		return
 	}
 	s.status = fmt.Sprintf("Wrote %d line(s) → %s", buf.LineCount(), filename)
@@ -3326,7 +3357,49 @@ func (s *appState) handleInstallCommand(arg string) {
 		filePath = buf.FilePath()
 	}
 
-	s.installLSPServer(cfg, filePath, false)
+	s.installLanguageBundle(id, cfg, filePath)
+}
+
+func (s *appState) handleFormatOnSaveCommand(arg string) {
+	switch strings.ToLower(arg) {
+	case "", "toggle":
+		s.formatOnSave = !s.formatOnSave
+	case "on", "enable", "1", "true":
+		s.formatOnSave = true
+	case "off", "disable", "0", "false":
+		s.formatOnSave = false
+	case "status":
+	default:
+		s.status = "Usage: :formatonsave [on|off|toggle|status]"
+		return
+	}
+
+	state := "disabled"
+	if s.formatOnSave {
+		state = "enabled"
+	}
+	s.status = fmt.Sprintf("Format on save %s", state)
+}
+
+func (s *appState) handleLintOnSaveCommand(arg string) {
+	switch strings.ToLower(arg) {
+	case "", "toggle":
+		s.lintOnSave = !s.lintOnSave
+	case "on", "enable", "1", "true":
+		s.lintOnSave = true
+	case "off", "disable", "0", "false":
+		s.lintOnSave = false
+	case "status":
+	default:
+		s.status = "Usage: :lintonsave [on|off|toggle|status]"
+		return
+	}
+
+	state := "disabled"
+	if s.lintOnSave {
+		state = "enabled"
+	}
+	s.status = fmt.Sprintf("Lint on save %s", state)
 }
 
 func (s *appState) handleUninstallCommand(arg string) {
@@ -3354,7 +3427,7 @@ func (s *appState) handleUninstallCommand(arg string) {
 		return
 	}
 
-	s.uninstallLSPServer(cfg)
+	s.uninstallLanguageBundle(id, cfg)
 }
 
 func (s *appState) handleLSPAutoCommand(arg string) {
@@ -3376,6 +3449,54 @@ func (s *appState) handleLSPAutoCommand(arg string) {
 		state = "enabled"
 	}
 	s.status = fmt.Sprintf("LSP auto-install %s", state)
+}
+
+func (s *appState) tryFormatOnSave(buf *editor.Buffer) error {
+	if buf == nil || buf.FilePath() == "" {
+		return nil
+	}
+	filePath := buf.FilePath()
+	formatter, _ := getToolingForFile(filePath)
+	content := buf.GetContent()
+	if formatter.Command != "" {
+		formatted, err := formatBufferWithTool(content, filePath, formatter)
+		if err != nil {
+			return err
+		}
+		if formatted != content && formatted != "" {
+			cur := buf.Cursor()
+			buf.SetContent(formatted)
+			buf.SetCursor(cur.Line, cur.Col)
+		}
+		return nil
+	}
+
+	if !s.lspEnabled || s.lspManager == nil {
+		return nil
+	}
+	if !s.lspManager.HasServerForFile(filePath) {
+		return nil
+	}
+
+	s.syncDocumentWithLSP(buf)
+
+	server, err := s.lspManager.GetServerForFile(filePath)
+	if err != nil {
+		return err
+	}
+	if !server.SupportsFormatting() {
+		return nil
+	}
+
+	edits, err := server.FormatDocument(filePath)
+	if err != nil {
+		return err
+	}
+	if len(edits) == 0 {
+		return nil
+	}
+	s.applyTextEdits(buf, edits)
+	return nil
 }
 
 func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto bool) {
@@ -3441,6 +3562,119 @@ func (s *appState) installLSPServer(cfg *lsp.ServerConfig, filePath string, auto
 			}
 		}
 	}()
+}
+
+func (s *appState) installLanguageBundle(language string, cfg *lsp.ServerConfig, filePath string) {
+	if cfg == nil {
+		return
+	}
+
+	if s.lspAutoInFlight == nil {
+		s.lspAutoInFlight = make(map[string]bool)
+	}
+	if s.lspAutoInFlight[cfg.Name] {
+		return
+	}
+	s.lspAutoInFlight[cfg.Name] = true
+
+	go func() {
+		defer func() {
+			s.lspAutoInFlight[cfg.Name] = false
+		}()
+
+		if !lsp.IsServerAvailable(cfg) {
+			cmd, err := resolveLSPInstallCommand(cfg)
+			if err != nil {
+				s.status = fmt.Sprintf("No install method for %s", cfg.Name)
+				return
+			}
+			cmd = maybeSudo(cmd)
+			s.status = fmt.Sprintf("Installing %s...", cfg.Name)
+			if _, err := runInstallCommand(cmd); err != nil {
+				s.status = fmt.Sprintf("Install failed: %s", err.Error())
+				return
+			}
+		}
+
+		for _, spec := range toolInstallSpecsForLanguage(language) {
+			if resolveToolPath(spec.name) != "" {
+				continue
+			}
+			cmd, err := resolveToolInstallCommand(spec)
+			if err != nil {
+				s.status = fmt.Sprintf("No install method for %s", spec.name)
+				continue
+			}
+			cmd = maybeSudo(cmd)
+			s.status = fmt.Sprintf("Installing %s...", spec.name)
+			if _, err := runInstallCommand(cmd); err != nil {
+				s.status = fmt.Sprintf("Install failed: %s", err.Error())
+				return
+			}
+		}
+
+		if cfg.Command == "gopls" {
+			ensureGoBinInPath()
+		}
+		if cfg.Command == "rust-analyzer" {
+			ensureCargoBinInPath()
+		}
+
+		s.status = fmt.Sprintf("Installed %s toolchain", language)
+		if filePath != "" {
+			if buf := s.bufferMgr.GetBufferByPath(filePath); buf != nil {
+				s.startLSPForFile(filePath, buf.GetContent())
+			}
+		}
+	}()
+}
+
+func (s *appState) uninstallLanguageBundle(language string, cfg *lsp.ServerConfig) {
+	if cfg == nil {
+		return
+	}
+
+	if s.lspAutoInFlight == nil {
+		s.lspAutoInFlight = make(map[string]bool)
+	}
+	if s.lspAutoInFlight[cfg.Name] {
+		return
+	}
+	s.lspAutoInFlight[cfg.Name] = true
+
+	go func() {
+		defer func() {
+			s.lspAutoInFlight[cfg.Name] = false
+		}()
+
+		s.uninstallLSPServer(cfg)
+
+		for _, spec := range toolInstallSpecsForLanguage(language) {
+			cmd, err := resolveToolUninstallCommand(spec)
+			if err != nil {
+				continue
+			}
+			cmd = maybeSudo(cmd)
+			s.status = fmt.Sprintf("Uninstalling %s...", spec.name)
+			if _, err := runInstallCommand(cmd); err != nil {
+				s.status = fmt.Sprintf("Uninstall failed: %s", err.Error())
+				return
+			}
+		}
+
+		s.status = fmt.Sprintf("Uninstalled %s toolchain", language)
+	}()
+}
+
+func (s *appState) runLintOnSave(filePath string) error {
+	if filePath == "" {
+		return nil
+	}
+	_, linter := getToolingForFile(filePath)
+	if linter == nil {
+		return nil
+	}
+	return lintFileWithTool(filePath, *linter)
 }
 
 func (s *appState) uninstallLSPServer(cfg *lsp.ServerConfig) {

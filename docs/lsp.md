@@ -126,6 +126,8 @@ The status bar shows a count of errors and warnings for the current file.
 | `:install <lang>` | Install language server |
 | `:uninstall <lang>` | Uninstall language server |
 | `:lspauto [on|off|toggle|status]` | Auto-install missing language servers |
+| `:formatonsave [on|off|toggle|status]` | Toggle format on save |
+| `:lintonsave [on|off|toggle|status]` | Toggle lint on save |
 
 ## Keybindings Summary
 

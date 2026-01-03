@@ -129,6 +129,76 @@ func resolveLSPUninstallCommand(cfg *lsp.ServerConfig) (*installCommand, error) 
 	return nil, fmt.Errorf("no supported package manager available")
 }
 
+func resolveToolInstallCommand(spec toolInstallSpec) (*installCommand, error) {
+	if spec.rustupComponent != "" && hasCommand("rustup") {
+		return &installCommand{Name: "rustup", Args: []string{"component", "add", spec.rustupComponent}}, nil
+	}
+	if spec.goInstall != "" && hasCommand("go") {
+		return &installCommand{Name: "go", Args: []string{"install", spec.goInstall}}, nil
+	}
+	if spec.cargoCrate != "" && hasCommand("cargo") {
+		return &installCommand{Name: "cargo", Args: []string{"install", spec.cargoCrate}}, nil
+	}
+	if len(spec.npmPackages) > 0 {
+		if cmd, ok := npmInstallCommand(spec.npmPackages); ok {
+			return cmd, nil
+		}
+	}
+	if spec.pipPackage != "" {
+		if cmd, ok := pipInstallCommand(spec.pipPackage); ok {
+			return cmd, nil
+		}
+	}
+	if spec.luarocksPackage != "" && hasCommand("luarocks") {
+		return &installCommand{Name: "luarocks", Args: []string{"install", spec.luarocksPackage}}, nil
+	}
+	if cmd, ok := systemPackageInstallCommand(lspInstallSpec{
+		brewPackages:   spec.brewPackages,
+		aptPackages:    spec.aptPackages,
+		dnfPackages:    spec.dnfPackages,
+		pacmanPackages: spec.pacmanPackages,
+		zypperPackages: spec.zypperPackages,
+	}); ok {
+		return cmd, nil
+	}
+	return nil, fmt.Errorf("no supported package manager available")
+}
+
+func resolveToolUninstallCommand(spec toolInstallSpec) (*installCommand, error) {
+	if spec.rustupComponent != "" && hasCommand("rustup") {
+		return &installCommand{Name: "rustup", Args: []string{"component", "remove", spec.rustupComponent}}, nil
+	}
+	if spec.goInstall != "" && hasCommand("go") {
+		return &installCommand{Name: "go", Args: []string{"clean", "-i", spec.goInstall}}, nil
+	}
+	if spec.cargoCrate != "" && hasCommand("cargo") {
+		return &installCommand{Name: "cargo", Args: []string{"uninstall", spec.cargoCrate}}, nil
+	}
+	if len(spec.npmPackages) > 0 {
+		if cmd, ok := npmUninstallCommand(spec.npmPackages); ok {
+			return cmd, nil
+		}
+	}
+	if spec.pipPackage != "" {
+		if cmd, ok := pipUninstallCommand(spec.pipPackage); ok {
+			return cmd, nil
+		}
+	}
+	if spec.luarocksPackage != "" && hasCommand("luarocks") {
+		return &installCommand{Name: "luarocks", Args: []string{"remove", spec.luarocksPackage}}, nil
+	}
+	if cmd, ok := systemPackageUninstallCommand(lspInstallSpec{
+		brewPackages:   spec.brewPackages,
+		aptPackages:    spec.aptPackages,
+		dnfPackages:    spec.dnfPackages,
+		pacmanPackages: spec.pacmanPackages,
+		zypperPackages: spec.zypperPackages,
+	}); ok {
+		return cmd, nil
+	}
+	return nil, fmt.Errorf("no supported package manager available")
+}
+
 func lspInstallSpecForConfig(cfg *lsp.ServerConfig) lspInstallSpec {
 	name := strings.ToLower(cfg.Name)
 

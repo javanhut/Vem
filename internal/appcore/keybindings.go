@@ -154,7 +154,7 @@ var globalKeybindings = []KeyBinding{
 	{Modifiers: key.ModShift, Key: key.NameEnter, Modes: []mode{modeNormal}, Action: ActionToggleFullscreen},
 
 	// Clipboard operations
-	{Modifiers: key.ModCtrl, Key: "c", Modes: []mode{modeNormal}, Action: ActionCopyLine},
+	{Modifiers: key.ModCtrl | key.ModShift, Key: "c", Modes: []mode{modeNormal}, Action: ActionCopyLine},
 	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionPaste},
 
 	// Pane navigation (Alt+hjkl)

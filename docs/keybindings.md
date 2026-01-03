@@ -14,7 +14,7 @@ These keybindings work in all modes.
 | `Ctrl+F` | Fuzzy Finder | Open fuzzy file finder |
 | `Alt+F` | Fuzzy Root | Cycle fuzzy root (workspace/home/root) |
 | `Ctrl+U` | Undo | Undo last edit operation |
-| `Ctrl+C` | Copy Line | Copy current line to clipboard (NORMAL mode only) |
+| `Ctrl+Shift+C` | Copy Line | Copy current line to clipboard (NORMAL mode only) |
 | `Ctrl+P` | Paste | Paste clipboard content at cursor |
 | `Ctrl+Tab` | Buffer Switcher | Open recent buffer switcher |
 | `Ctrl+Shift+P` | Command Palette | Open command palette |

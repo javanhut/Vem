@@ -58,6 +58,14 @@ func generateHelpText() string {
 	sb.WriteString("SPECIAL SEQUENCES\n")
 	sb.WriteString("───────────────────────────────────────────────────────────\n")
 	appendSpecialSequences(&sb)
+	sb.WriteString("\n")
+
+	sb.WriteString("CLIPBOARD\n")
+	sb.WriteString("───────────────────────────────────────────────────────────\n")
+	sb.WriteString("  Ctrl+Shift+C       Copy current line (NORMAL mode)\n")
+	sb.WriteString("  c                  Copy selection (VISUAL mode)\n")
+	sb.WriteString("  Ctrl+P             Paste from clipboard (NORMAL/INSERT)\n")
+	sb.WriteString("  p                  Paste selection (VISUAL mode)\n")
 
 	return sb.String()
 }
@@ -74,7 +82,7 @@ func appendGlobalKeybindings(sb *strings.Builder) {
 		{"Ctrl+F", "Open fuzzy finder"},
 		{"Alt+F", "Cycle fuzzy root (workspace/home/root)"},
 		{"Ctrl+U", "Undo last edit"},
-		{"Ctrl+C", "Copy current line (NORMAL mode)"},
+		{"Ctrl+Shift+C", "Copy current line (NORMAL mode)"},
 		{"Ctrl+P", "Paste from clipboard"},
 		{"Ctrl+Tab", "Open buffer switcher"},
 		{"Ctrl+Shift+P", "Open command palette"},
@@ -134,6 +142,8 @@ func appendCommands(sb *strings.Builder) {
 		{":install <lang>", "Install language server"},
 		{":uninstall <lang>", "Uninstall language server"},
 		{":lspauto [on|off|toggle|status]", "Toggle LSP auto-install"},
+		{":formatonsave [on|off|toggle|status]", "Toggle format on save"},
+		{":lintonsave [on|off|toggle|status]", "Toggle lint on save"},
 		{":help", "Show this help"},
 	}
 
