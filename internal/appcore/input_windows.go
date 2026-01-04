@@ -3,10 +3,42 @@
 package appcore
 
 import (
+	"syscall"
 	"time"
 
 	"gioui.org/io/key"
 )
+
+const (
+	vkShift    = 0x10
+	vkControl  = 0x11
+	vkMenu     = 0x12
+	vkLShift   = 0xA0
+	vkRShift   = 0xA1
+	vkLControl = 0xA2
+	vkRControl = 0xA3
+	vkLMenu    = 0xA4
+	vkRMenu    = 0xA5
+)
+
+var (
+	user32              = syscall.NewLazyDLL("user32.dll")
+	procGetAsyncKeyState = user32.NewProc("GetAsyncKeyState")
+)
+
+func keyDown(vk int) bool {
+	state, _, _ := procGetAsyncKeyState.Call(uintptr(vk))
+	return state&0x8000 != 0
+}
+
+func keyDownAny(vks ...int) bool {
+	for _, vk := range vks {
+		if keyDown(vk) {
+			return true
+		}
+	}
+	return false
+}
 
 // handleModifierEvent handles modifier key events on Windows.
 // Windows/Gio has a critical bug: Ctrl/Shift Press events NEVER arrive.
@@ -27,9 +59,11 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 		if e.State == key.Release {
 			// Mark when Ctrl was released - a character key is coming soon!
 			s.ctrlReleaseTime = time.Now()
+			debugf("[MOD_EVENT] Ctrl release")
 		} else {
 			// Press events don't arrive on Windows, but handle it just in case
 			s.ctrlPressed = true
+			debugf("[MOD_EVENT] Ctrl press")
 		}
 		return true
 	}
@@ -37,8 +71,10 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 	if e.Name == key.NameShift {
 		if e.State == key.Release {
 			s.shiftReleaseTime = time.Now()
+			debugf("[MOD_EVENT] Shift release")
 		} else {
 			s.shiftPressed = true
+			debugf("[MOD_EVENT] Shift press")
 		}
 		return true
 	}
@@ -46,8 +82,10 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 	if e.Name == key.NameAlt {
 		if e.State == key.Release {
 			s.altReleaseTime = time.Now()
+			debugf("[MOD_EVENT] Alt release")
 		} else {
 			s.altPressed = true
+			debugf("[MOD_EVENT] Alt press")
 		}
 		return true
 	}
@@ -56,37 +94,32 @@ func (s *appState) handleModifierEvent(e key.Event) bool {
 }
 
 // syncModifierState syncs the tracked modifier state before handling character keys.
-// On Windows, we use temporal logic: if a modifier was released within 200ms,
-// it was held during this key press.
+// On Windows, use actual key state when available, then fall back to temporal logic
+// for the Gio modifier ordering bug.
 func (s *appState) syncModifierState(e key.Event) {
 	now := time.Now()
 
-	// Check if Ctrl was released within last 200ms
+	ctrlDown := e.Modifiers.Contain(key.ModCtrl) || keyDownAny(vkControl, vkLControl, vkRControl)
+	shiftDown := e.Modifiers.Contain(key.ModShift) || keyDownAny(vkShift, vkLShift, vkRShift)
+	altDown := e.Modifiers.Contain(key.ModAlt) || keyDownAny(vkMenu, vkLMenu, vkRMenu)
+
+	// Temporal fallback: if a modifier was released recently, treat it as held.
 	ctrlWindow := now.Sub(s.ctrlReleaseTime)
-	if ctrlWindow < 200*time.Millisecond && ctrlWindow >= 0 {
-		s.ctrlPressed = true
+	if !ctrlDown && ctrlWindow < 200*time.Millisecond && ctrlWindow >= 0 {
+		ctrlDown = true
 	}
 
-	// Check if Shift was released within last 200ms
 	shiftWindow := now.Sub(s.shiftReleaseTime)
-	if shiftWindow < 200*time.Millisecond && shiftWindow >= 0 {
-		s.shiftPressed = true
+	if !shiftDown && shiftWindow < 200*time.Millisecond && shiftWindow >= 0 {
+		shiftDown = true
 	}
 
-	// Check if Alt was released within last 200ms
 	altWindow := now.Sub(s.altReleaseTime)
-	if altWindow < 200*time.Millisecond && altWindow >= 0 {
-		s.altPressed = true
+	if !altDown && altWindow < 200*time.Millisecond && altWindow >= 0 {
+		altDown = true
 	}
 
-	// Also check ev.Modifiers as a fallback (usually empty on Windows, but try anyway)
-	if e.Modifiers.Contain(key.ModCtrl) {
-		s.ctrlPressed = true
-	}
-	if e.Modifiers.Contain(key.ModShift) {
-		s.shiftPressed = true
-	}
-	if e.Modifiers.Contain(key.ModAlt) {
-		s.altPressed = true
-	}
+	s.ctrlPressed = ctrlDown
+	s.shiftPressed = shiftDown
+	s.altPressed = altDown
 }

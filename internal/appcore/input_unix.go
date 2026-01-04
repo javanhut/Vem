@@ -12,16 +12,19 @@ import (
 func (s *appState) handleModifierEvent(e key.Event) bool {
 	if e.Name == key.NameCtrl {
 		s.ctrlPressed = (e.State == key.Press)
+		debugf("[MOD_EVENT] Ctrl state=%v", e.State)
 		return true
 	}
 
 	if e.Name == key.NameShift {
 		s.shiftPressed = (e.State == key.Press)
+		debugf("[MOD_EVENT] Shift state=%v", e.State)
 		return true
 	}
 
 	if e.Name == key.NameAlt {
 		s.altPressed = (e.State == key.Press)
+		debugf("[MOD_EVENT] Alt state=%v", e.State)
 		return true
 	}
 

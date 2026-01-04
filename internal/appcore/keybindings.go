@@ -155,7 +155,9 @@ var globalKeybindings = []KeyBinding{
 
 	// Clipboard operations
 	{Modifiers: key.ModCtrl | key.ModShift, Key: "c", Modes: []mode{modeNormal}, Action: ActionCopyLine},
-	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionPaste},
+	{Modifiers: key.ModCtrl, Key: "c", Modes: []mode{modeNormal}, Action: ActionCopyLine},
+	{Modifiers: key.ModCtrl, Key: "c", Modes: []mode{modeVisual}, Action: ActionCopySelection},
+	{Modifiers: key.ModCtrl, Key: "p", Modes: []mode{modeNormal, modeVisual}, Action: ActionPaste},
 
 	// Pane navigation (Alt+hjkl)
 	{Modifiers: key.ModAlt, Key: "h", Modes: nil, Action: ActionPaneFocusLeft},
@@ -200,6 +202,9 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: key.ModCtrl, Key: "e", Modes: nil, Action: ActionScrollLineDown},
 		{Modifiers: key.ModCtrl, Key: "y", Modes: nil, Action: ActionScrollLineUp},
 		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
+		// Copy/paste keybindings
+		{Modifiers: 0, Key: "c", Modes: nil, Action: ActionCopyLine},
+		{Modifiers: 0, Key: "p", Modes: nil, Action: ActionPaste},
 		// LSP keybindings
 		{Modifiers: key.ModShift, Key: "k", Modes: nil, Action: ActionLSPHover},
 	},
@@ -312,16 +317,17 @@ var modeKeybindings = map[mode][]KeyBinding{
 
 func (s *appState) matchGlobalKeybinding(ev key.Event) Action {
 	for _, binding := range globalKeybindings {
-		if !s.modifiersMatch(ev, binding.Modifiers) {
-			continue
-		}
-
 		if s.keysMatch(ev.Name, binding.Key) {
+			if !s.modifiersMatch(ev, binding.Modifiers) {
+				continue
+			}
 			if len(binding.Modes) == 0 {
+				debugf("[MATCH] Global keybinding matched: Action=%v", binding.Action)
 				return binding.Action
 			}
 			for _, m := range binding.Modes {
 				if m == s.mode {
+					debugf("[MATCH] Global keybinding matched: Action=%v", binding.Action)
 					return binding.Action
 				}
 			}
@@ -340,11 +346,13 @@ func (s *appState) matchModeKeybinding(m mode, ev key.Event) Action {
 	for _, binding := range bindings {
 		if s.keysMatch(ev.Name, binding.Key) {
 			if binding.Key == key.NameEscape {
+				debugf("[MATCH] Mode-specific keybinding matched: Mode=%s Action=%v", m, binding.Action)
 				return binding.Action
 			}
 			if !s.modifiersMatch(ev, binding.Modifiers) {
 				continue
 			}
+			debugf("[MATCH] Mode-specific keybinding matched: Mode=%s Action=%v", m, binding.Action)
 			return binding.Action
 		}
 	}
@@ -358,10 +366,10 @@ func (s *appState) keysMatch(actual, expected key.Name) bool {
 
 func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 	// Build the actual modifiers state
-	// PLATFORM QUIRK: ev.Modifiers is ALWAYS empty on some platforms!
-	// We MUST rely on tracked state from explicit Press/Release events
-	ctrlHeld := s.ctrlPressed   // Trust tracked state, not ev.Modifiers
-	shiftHeld := s.shiftPressed // Trust tracked state, not ev.Modifiers
+	// PLATFORM QUIRK: ev.Modifiers can be empty on some platforms, so prefer tracked state
+	// but still honor ev.Modifiers when present to allow true simultaneous chords.
+	ctrlHeld := s.ctrlPressed || ev.Modifiers.Contain(key.ModCtrl)
+	shiftHeld := s.shiftPressed || ev.Modifiers.Contain(key.ModShift)
 	altHeld := s.altPressed || ev.Modifiers.Contain(key.ModAlt)
 
 	// If no modifiers are required, ensure no modifiers are pressed (tracked or reported)
@@ -374,28 +382,38 @@ func (s *appState) modifiersMatch(ev key.Event, required key.Modifiers) bool {
 	shiftRequired := required.Contain(key.ModShift)
 	altRequired := required.Contain(key.ModAlt)
 
+	debugf("[MOD_MATCH] Required: Ctrl=%t Shift=%t Alt=%t | Actual: Ctrl=%t Shift=%t Alt=%t",
+		ctrlRequired, shiftRequired, altRequired, ctrlHeld, shiftHeld, altHeld)
+
 	// All required modifiers must be present
 	if ctrlRequired && !ctrlHeld {
+		debugf("[MOD_MATCH] Exact match -> false")
 		return false
 	}
 	if shiftRequired && !shiftHeld {
+		debugf("[MOD_MATCH] Exact match -> false")
 		return false
 	}
 	if altRequired && !altHeld {
+		debugf("[MOD_MATCH] Exact match -> false")
 		return false
 	}
 
 	// No extra modifiers should be present (exact match)
 	if !ctrlRequired && ctrlHeld {
+		debugf("[MOD_MATCH] Exact match -> false")
 		return false
 	}
 	if !shiftRequired && shiftHeld {
+		debugf("[MOD_MATCH] Exact match -> false")
 		return false
 	}
 	if !altRequired && altHeld {
+		debugf("[MOD_MATCH] Exact match -> false")
 		return false
 	}
 
+	debugf("[MOD_MATCH] Exact match -> true")
 	return true
 }
 
@@ -408,6 +426,7 @@ func (s *appState) matchPrintableKey(ev key.Event, target rune) bool {
 }
 
 func (s *appState) executeAction(action Action, ev key.Event) {
+	debugf("[ACTION] Executing action=%v mode=%s", action, s.mode)
 	switch action {
 	case ActionToggleExplorer:
 		if s.fileTree == nil {

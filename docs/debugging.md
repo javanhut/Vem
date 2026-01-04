@@ -8,10 +8,7 @@ Vem includes comprehensive debug logging to help diagnose keybinding issues, mod
 
 ```bash
 # Run with debug logging to console
-go run .
-
-# Or use the convenience script
-./run_debug.sh
+VEM_DEBUG=1 go run .
 ```
 
 ### Log Categories

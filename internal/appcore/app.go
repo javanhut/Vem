@@ -164,6 +164,7 @@ type appState struct {
 	clipLines            []string
 	clipboardIsLine      bool
 	clipboardIsBlock     bool
+	clipboardInitialized bool
 	cmdText              string
 	window               *app.Window
 
@@ -501,6 +502,11 @@ func newAppState(filePaths []string) *appState {
 	globalAppState = state
 	state.setupLSPForBuffer(state.activeBuffer())
 
+	// Initialize system clipboard once at startup
+	if err := clipboard.Init(); err == nil {
+		state.clipboardInitialized = true
+	}
+
 	return state
 }
 
@@ -706,6 +712,8 @@ func (s *appState) handleEvents(gtx layout.Context) {
 		gtx.Execute(key.SoftKeyboardCmd{Show: false})
 	}
 	gtx.Execute(key.FocusCmd{Tag: s.focusTag})
+	var keyEvents []key.Event
+	var editEvents []key.EditEvent
 	for {
 		ev, ok := gtx.Event(
 			key.FocusFilter{Target: s.focusTag},
@@ -720,177 +728,202 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.status = "Ready"
 			}
 		case key.Event:
-			// Platform-specific modifier event handling
-			// (Windows uses temporal tracking, Unix uses Press/Release events)
-			if s.handleModifierEvent(e) {
-				continue
-			}
-
-			// Platform-specific modifier state synchronization
-			// (Windows uses temporal window detection, Unix uses ev.Modifiers fallback)
-			s.syncModifierState(e)
-
-			// Save modifier state before handling key
-			hadCtrl := s.ctrlPressed
-			hadShift := s.shiftPressed
-
-			s.handleKey(e)
-
-			// Smart reset: If modifiers are still set after handleKey and we're in certain modes,
-			// it likely means the user released the modifier but platform didn't send Release event.
-			// Reset modifiers after successful command execution to prevent them from sticking.
-			// Exception: Don't reset if we just entered a mode or are waiting for a pane command
-			// Exception: In INSERT mode, don't reset modifiers for printable keys that generate EditEvents
-			//            (the EditEvent needs the modifier state to determine capitalization)
-			shouldResetModifiers := false
-
-			if s.mode == modeNormal || s.mode == modeVisual || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeBufferSwitch || s.mode == modeCommandPalette {
-				// In non-insert modes, reset modifiers after command keys unless waiting for pane command
-				shouldResetModifiers = !s.pendingPaneCmd
-			} else if s.mode == modeInsert {
-				// In INSERT mode, only reset for special keys (Escape, arrow keys, function keys)
-				// Don't reset for: printable keys, Tab (needs Shift state), or when pending pane command
-				isSpecialKey := (e.Name == key.NameEscape ||
-					e.Name == key.NameLeftArrow || e.Name == key.NameRightArrow ||
-					e.Name == key.NameUpArrow || e.Name == key.NameDownArrow ||
-					e.Name == key.NameDeleteBackward || e.Name == key.NameDeleteForward)
-				shouldResetModifiers = isSpecialKey && !s.pendingPaneCmd
-			}
-
-			if shouldResetModifiers {
-				if hadCtrl && s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if hadShift && s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
-			}
+			keyEvents = append(keyEvents, e)
 		case key.EditEvent:
-			if e.Text == "" {
+			editEvents = append(editEvents, e)
+		}
+	}
+
+	var modPressEvents []key.Event
+	var modReleaseEvents []key.Event
+	var nonModKeyEvents []key.Event
+	for _, e := range keyEvents {
+		if isModifierKey(e.Name) {
+			if e.State == key.Press {
+				modPressEvents = append(modPressEvents, e)
+			} else if e.State == key.Release {
+				modReleaseEvents = append(modReleaseEvents, e)
+			}
+			continue
+		}
+		nonModKeyEvents = append(nonModKeyEvents, e)
+	}
+
+	for _, e := range modPressEvents {
+		s.handleModifierEvent(e)
+	}
+
+	for _, e := range nonModKeyEvents {
+		// Platform-specific modifier state synchronization
+		// (Windows uses temporal window detection, Unix uses ev.Modifiers fallback)
+		s.syncModifierState(e)
+
+		// Save modifier state before handling key
+		hadCtrl := s.ctrlPressed
+		hadShift := s.shiftPressed
+
+		s.handleKey(e)
+
+		// Smart reset: If modifiers are still set after handleKey and we're in certain modes,
+		// it likely means the user released the modifier but platform didn't send Release event.
+		// Reset modifiers after successful command execution to prevent them from sticking.
+		// Exception: Don't reset if we just entered a mode or are waiting for a pane command
+		// Exception: In INSERT mode, don't reset modifiers for printable keys that generate EditEvents
+		//            (the EditEvent needs the modifier state to determine capitalization)
+		shouldResetModifiers := false
+
+		if s.mode == modeNormal || s.mode == modeVisual || s.mode == modeCommand || s.mode == modeExplorer || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeBufferSwitch || s.mode == modeCommandPalette {
+			// In non-insert modes, reset modifiers after command keys unless waiting for pane command
+			shouldResetModifiers = !s.pendingPaneCmd
+		} else if s.mode == modeInsert {
+			// In INSERT mode, only reset for special keys (Escape, arrow keys, function keys)
+			// Don't reset for: printable keys, Tab (needs Shift state), or when pending pane command
+			isSpecialKey := (e.Name == key.NameEscape ||
+				e.Name == key.NameLeftArrow || e.Name == key.NameRightArrow ||
+				e.Name == key.NameUpArrow || e.Name == key.NameDownArrow ||
+				e.Name == key.NameDeleteBackward || e.Name == key.NameDeleteForward)
+			shouldResetModifiers = isSpecialKey && !s.pendingPaneCmd
+		}
+
+		if shouldResetModifiers && resetModifiersAfterKey {
+			if hadCtrl && s.ctrlPressed && !e.Modifiers.Contain(key.ModCtrl) {
+				s.ctrlPressed = false
+			}
+			if hadShift && s.shiftPressed && !e.Modifiers.Contain(key.ModShift) {
+				s.shiftPressed = false
+			}
+			if s.altPressed && !e.Modifiers.Contain(key.ModAlt) {
+				s.altPressed = false
+			}
+		}
+	}
+
+	for _, e := range modReleaseEvents {
+		s.handleModifierEvent(e)
+	}
+
+	for _, e := range editEvents {
+		if e.Text == "" {
+			continue
+		}
+
+		// Handle terminal input if in terminal mode
+		if s.mode == modeTerminal {
+			if s.skipNextTerminalEdit {
+				s.skipNextTerminalEdit = false
 				continue
 			}
+			s.handleTerminalEdit(e.Text)
+			continue
+		}
 
-			// Handle terminal input if in terminal mode
-			if s.mode == modeTerminal {
-				if s.skipNextTerminalEdit {
-					s.skipNextTerminalEdit = false
-					continue
-				}
-				s.handleTerminalEdit(e.Text)
+		// Handle file operation input if active
+		if s.fileOpMode == "rename" || s.fileOpMode == "create" {
+			if s.skipNextFileOpEdit {
+				s.skipNextFileOpEdit = false
 				continue
 			}
+			s.appendFileOpInput(e.Text)
+			continue
+		}
 
-			// Handle file operation input if active
-			if s.fileOpMode == "rename" || s.fileOpMode == "create" {
-				if s.skipNextFileOpEdit {
-					s.skipNextFileOpEdit = false
-					continue
-				}
-				s.appendFileOpInput(e.Text)
+		// Check for colon to enter command mode (except in INSERT, COMMAND, and TERMINAL modes)
+		if e.Text == ":" && s.mode != modeInsert && s.mode != modeCommand && s.mode != modeTerminal {
+			s.enterCommandMode()
+			continue
+		}
+
+		switch s.mode {
+		case modeInsert:
+			if s.skipNextEdit {
+				s.skipNextEdit = false
 				continue
 			}
-
-			// Check for colon to enter command mode (except in INSERT, COMMAND, and TERMINAL modes)
-			if e.Text == ":" && s.mode != modeInsert && s.mode != modeCommand && s.mode != modeTerminal {
-				s.enterCommandMode()
+			// Platform didn't send KeyEvent, only EditEvent - use it
+			s.insertText(e.Text)
+			// Reset modifiers after EditEvent insertion
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			if s.altPressed {
+				s.altPressed = false
+			}
+		case modeCommand:
+			s.appendCommandText(e.Text)
+			// Reset modifiers after text insertion to prevent sticking
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			if s.altPressed {
+				s.altPressed = false
+			}
+		case modeSearch:
+			if s.skipNextSearchEdit {
+				s.skipNextSearchEdit = false
 				continue
 			}
-
-			switch s.mode {
-			case modeInsert:
-				if s.skipNextEdit {
-					s.skipNextEdit = false
-					continue
-				}
-				// Platform didn't send KeyEvent, only EditEvent - use it
-				s.insertText(e.Text)
-				// Reset modifiers after EditEvent insertion
-				if s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
-			case modeCommand:
-				s.appendCommandText(e.Text)
-				// Reset modifiers after text insertion to prevent sticking
-				if s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
-			case modeSearch:
-				if s.skipNextSearchEdit {
-					s.skipNextSearchEdit = false
-					continue
-				}
-				s.appendSearchText(e.Text)
-				// Reset modifiers after text insertion to prevent sticking
-				if s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
-			case modeFuzzyFinder:
-				if s.skipNextFuzzyEdit {
-					s.skipNextFuzzyEdit = false
-					continue
-				}
-				s.appendFuzzyInput(e.Text)
-				// Reset modifiers after text insertion to prevent sticking
-				if s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
-			case modeBufferSwitch:
-				if s.skipNextBufferEdit {
-					s.skipNextBufferEdit = false
-					continue
-				}
-				s.appendBufferSwitcherInput(e.Text)
-				if s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
-			case modeCommandPalette:
-				if s.skipNextCommandPaletteEdit {
-					s.skipNextCommandPaletteEdit = false
-					continue
-				}
-				s.appendCommandPaletteInput(e.Text)
-				if s.shiftPressed {
-					s.shiftPressed = false
-				}
-				if s.ctrlPressed {
-					s.ctrlPressed = false
-				}
-				if s.altPressed {
-					s.altPressed = false
-				}
+			s.appendSearchText(e.Text)
+			// Reset modifiers after text insertion to prevent sticking
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			if s.altPressed {
+				s.altPressed = false
+			}
+		case modeFuzzyFinder:
+			if s.skipNextFuzzyEdit {
+				s.skipNextFuzzyEdit = false
+				continue
+			}
+			s.appendFuzzyInput(e.Text)
+			// Reset modifiers after text insertion to prevent sticking
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			if s.altPressed {
+				s.altPressed = false
+			}
+		case modeBufferSwitch:
+			if s.skipNextBufferEdit {
+				s.skipNextBufferEdit = false
+				continue
+			}
+			s.appendBufferSwitcherInput(e.Text)
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			if s.altPressed {
+				s.altPressed = false
+			}
+		case modeCommandPalette:
+			if s.skipNextCommandPaletteEdit {
+				s.skipNextCommandPaletteEdit = false
+				continue
+			}
+			s.appendCommandPaletteInput(e.Text)
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			if s.altPressed {
+				s.altPressed = false
 			}
 		}
 	}
@@ -1733,6 +1766,8 @@ func (s *appState) handleKey(ev key.Event) {
 	if ev.State != key.Press && !isTabRelease {
 		return
 	}
+	debugf("[KEY] Key=%q Modifiers=%s Mode=%s ExplorerVisible=%v ExplorerFocused=%v",
+		string(ev.Name), s.formatModifiers(ev.Modifiers), s.mode, s.explorerVisible, s.explorerFocused)
 	s.lastKey = describeKey(ev)
 
 	// Clear skipNextEdit at the start of each KeyEvent to prevent stale state
@@ -1822,6 +1857,8 @@ func (s *appState) handleKey(ev key.Event) {
 	case modeExplorer:
 		return
 	}
+	debugf("[NO_MATCH] No keybinding matched for key=%q modifiers=%s mode=%s",
+		string(ev.Name), s.formatModifiers(ev.Modifiers), s.mode)
 	s.status = "Waiting for motion"
 }
 
@@ -1862,6 +1899,10 @@ func (s *appState) formatModifiers(mods key.Modifiers) string {
 		return "none"
 	}
 	return result
+}
+
+func isModifierKey(name key.Name) bool {
+	return name == key.NameCtrl || name == key.NameShift || name == key.NameAlt
 }
 
 func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
@@ -2948,8 +2989,7 @@ func (s *appState) pasteClipboard() {
 
 // writeToSystemClipboard writes text to the system clipboard
 func (s *appState) writeToSystemClipboard(text string) bool {
-	err := clipboard.Init()
-	if err != nil {
+	if !s.clipboardInitialized {
 		return false
 	}
 	clipboard.Write(clipboard.FmtText, []byte(text))
@@ -2958,8 +2998,7 @@ func (s *appState) writeToSystemClipboard(text string) bool {
 
 // readFromSystemClipboard reads text from the system clipboard
 func (s *appState) readFromSystemClipboard() (string, bool) {
-	err := clipboard.Init()
-	if err != nil {
+	if !s.clipboardInitialized {
 		return "", false
 	}
 	data := clipboard.Read(clipboard.FmtText)
