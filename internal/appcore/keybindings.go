@@ -111,6 +111,13 @@ const (
 	// Terminal
 	ActionOpenTerminal
 	ActionTerminalExit
+	ActionTerminalScrollUp
+	ActionTerminalScrollDown
+	ActionTerminalScrollPageUp
+	ActionTerminalScrollPageDown
+
+	// Command line
+	ActionCommandTabComplete
 
 	// LSP actions
 	ActionLSPGotoDefinition
@@ -205,6 +212,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		// Copy/paste keybindings
 		{Modifiers: 0, Key: "c", Modes: nil, Action: ActionCopyLine},
 		{Modifiers: 0, Key: "p", Modes: nil, Action: ActionPaste},
+		// Undo (Vim style)
+		{Modifiers: 0, Key: "u", Modes: nil, Action: ActionUndo},
 		// LSP keybindings
 		{Modifiers: key.ModShift, Key: "k", Modes: nil, Action: ActionLSPHover},
 	},
@@ -259,6 +268,7 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
+		{Modifiers: 0, Key: key.NameTab, Modes: nil, Action: ActionCommandTabComplete},
 	},
 	modeExplorer: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -312,6 +322,11 @@ var modeKeybindings = map[mode][]KeyBinding{
 	modeTerminal: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionTerminalExit},
 		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionTerminalExit},
+		// Terminal scrolling
+		{Modifiers: key.ModShift, Key: key.NameUpArrow, Modes: nil, Action: ActionTerminalScrollUp},
+		{Modifiers: key.ModShift, Key: key.NameDownArrow, Modes: nil, Action: ActionTerminalScrollDown},
+		{Modifiers: key.ModShift, Key: key.NamePageUp, Modes: nil, Action: ActionTerminalScrollPageUp},
+		{Modifiers: key.ModShift, Key: key.NamePageDown, Modes: nil, Action: ActionTerminalScrollPageDown},
 	},
 }
 
@@ -494,6 +509,12 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	case ActionExitMode:
 		switch s.mode {
 		case modeInsert:
+			// If completion is active, dismiss it first instead of exiting insert mode
+			if s.completionActive {
+				s.handleLSPCompletionCancel()
+				s.status = "Completion dismissed"
+				break
+			}
 			s.mode = modeNormal
 			s.skipNextEdit = false
 			s.resetCount()
@@ -822,6 +843,22 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionTerminalExit:
 		s.handleTerminalExit()
+
+	case ActionTerminalScrollUp:
+		s.handleTerminalScrollUp()
+
+	case ActionTerminalScrollDown:
+		s.handleTerminalScrollDown()
+
+	case ActionTerminalScrollPageUp:
+		s.handleTerminalScrollPageUp()
+
+	case ActionTerminalScrollPageDown:
+		s.handleTerminalScrollPageDown()
+
+	// Command line actions
+	case ActionCommandTabComplete:
+		s.handleCommandTabComplete()
 
 	// LSP actions
 	case ActionLSPGotoDefinition:

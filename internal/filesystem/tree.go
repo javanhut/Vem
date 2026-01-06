@@ -218,11 +218,20 @@ func (node *TreeNode) AddChild(child *TreeNode) {
 	child.Depth = node.Depth + 1
 	node.Children = append(node.Children, child)
 
-	// Sort: directories first, then alphabetically
+	// Sort: ".." always first, then directories, then files, all alphabetically
 	sort.Slice(node.Children, func(i, j int) bool {
+		// ".." parent directory always comes first
+		if node.Children[i].Name == ".." {
+			return true
+		}
+		if node.Children[j].Name == ".." {
+			return false
+		}
+		// Directories before files
 		if node.Children[i].IsDir != node.Children[j].IsDir {
 			return node.Children[i].IsDir
 		}
+		// Alphabetical within same type
 		return strings.ToLower(node.Children[i].Name) < strings.ToLower(node.Children[j].Name)
 	})
 }

@@ -316,10 +316,29 @@ func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.Scre
 					flushRun(x)
 					runInitialized = false
 
-					cellX := x * charWidth
+					// Calculate actual cursor X position by measuring text width
+					// This ensures cursor aligns with rendered text (avoids font kerning issues)
+					var prefixText strings.Builder
+					for px := 0; px < x && px < len(line.Cells); px++ {
+						ch := line.Cells[px].Rune
+						if ch == 0 {
+							ch = ' '
+						}
+						prefixText.WriteRune(ch)
+					}
+					actualCellX := 0
+					if prefixText.Len() > 0 {
+						prefixLabel := material.Body1(s.theme, prefixText.String())
+						prefixLabel.Font.Typeface = "JetBrainsMono"
+						prefixMeasure := gtx
+						prefixMeasure.Constraints = layout.Constraints{Max: image.Point{X: 10000, Y: 10000}}
+						prefixDims := prefixLabel.Layout(prefixMeasure)
+						actualCellX = prefixDims.Size.X
+					}
+
 					cursorRect := clip.Rect{
-						Min: image.Pt(cellX, cellY),
-						Max: image.Pt(cellX+charWidth, cellY+charHeight),
+						Min: image.Pt(actualCellX, cellY),
+						Max: image.Pt(actualCellX+charWidth, cellY+charHeight),
 					}.Push(gtx.Ops)
 					paint.Fill(gtx.Ops, cursorColor)
 					cursorRect.Pop()
@@ -331,7 +350,7 @@ func (s *appState) drawTerminalContent(gtx layout.Context, screen *terminal.Scre
 					label := material.Body1(s.theme, string(ch))
 					label.Font.Typeface = "JetBrainsMono"
 					label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
-					offset := op.Offset(image.Pt(cellX, cellY)).Push(gtx.Ops)
+					offset := op.Offset(image.Pt(actualCellX, cellY)).Push(gtx.Ops)
 					label.Layout(gtx)
 					offset.Pop()
 					runStart = x + 1

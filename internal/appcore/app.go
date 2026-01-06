@@ -18,8 +18,10 @@ import (
 	"gioui.org/app"
 	"gioui.org/font"
 	"gioui.org/font/gofont"
+	"gioui.org/f32"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -166,6 +168,9 @@ type appState struct {
 	clipboardIsBlock     bool
 	clipboardInitialized bool
 	cmdText              string
+	cmdCompletions       []string // Tab completion options for command line
+	cmdCompletionIdx     int      // Current completion index (-1 = no completion active)
+	cmdCompletionPrefix  string   // Original text before completion started
 	window               *app.Window
 
 	// Explorer state
@@ -253,6 +258,14 @@ type appState struct {
 	lastWindowSize     image.Point                // Track window size for terminal resize
 	terminalViewports  map[int]int                // Map from buffer index to viewportTopLine for terminals
 	terminalAutoScroll map[int]bool               // Map from buffer index to auto-scroll enabled
+
+	// Mouse state
+	mouseTag           int                    // Tag for pointer events
+	mouseDragging      bool                   // Whether mouse is currently dragging
+	mouseSelectStart   editor.Cursor          // Start of mouse selection
+	editorAreaBounds   image.Rectangle        // Bounds of editor area for hit testing
+	lastLineHeight     int                    // Cached line height for coordinate conversion
+	lastGutterWidth    int                    // Cached gutter width for coordinate conversion
 
 	// LSP state
 	lspManager          *lsp.Manager                // LSP server manager
@@ -952,12 +965,24 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	}
 	cursorCol := buf.Cursor().Col
 
-	// Calculate approximate lines per page for viewport scrolling
-	// Use a rough estimate: line height ~20dp, inset ~16dp top+bottom
-	lineHeightDp := 20
-	insetDp := 32
-	availableHeight := gtx.Constraints.Max.Y - gtx.Dp(unit.Dp(insetDp))
-	linesPerPage := availableHeight / gtx.Dp(unit.Dp(lineHeightDp))
+	inset := layout.Inset{
+		Top:    unit.Dp(8),
+		Right:  unit.Dp(16),
+		Bottom: unit.Dp(8),
+		Left:   unit.Dp(16),
+	}
+
+	// Calculate and cache line height first (needed for linesPerPage calculation)
+	lineHeight := s.measureLineHeight(gtx)
+	if lineHeight <= 0 {
+		lineHeight = gtx.Dp(unit.Dp(20)) // fallback
+	}
+	s.lastLineHeight = lineHeight
+
+	// Calculate lines per page using actual measured line height
+	insetPx := gtx.Dp(inset.Top) + gtx.Dp(inset.Bottom)
+	availableHeight := gtx.Constraints.Max.Y - insetPx
+	linesPerPage := availableHeight / lineHeight
 	if linesPerPage < 1 {
 		linesPerPage = 1
 	}
@@ -981,12 +1006,17 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 		borderRect.Pop()
 	}
 
-	inset := layout.Inset{
-		Top:    unit.Dp(8),
-		Right:  unit.Dp(16),
-		Bottom: unit.Dp(8),
-		Left:   unit.Dp(16),
-	}
+	// Store editor area bounds for pointer event hit testing
+	s.editorAreaBounds = image.Rectangle{Max: gtx.Constraints.Max}
+	s.lastGutterWidth = s.measureTextWidth(gtx, fmt.Sprintf("%4d  ", 1))
+
+	// Register for pointer events (click, drag, scroll)
+	areaRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	event.Op(gtx.Ops, &s.mouseTag)
+	areaRect.Pop()
+
+	// Handle pointer events
+	s.handlePointerEvents(gtx, inset)
 
 	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
@@ -995,11 +1025,6 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	})
 
 	if showOverlays {
-		lineHeight := s.measureLineHeight(gtx)
-		if lineHeight <= 0 {
-			lineHeight = gtx.Dp(unit.Dp(lineHeightDp))
-		}
-
 		visibleLine := cursorLine - s.viewportTopLine
 		if visibleLine >= 0 && visibleLine < lines {
 			gutter := fmt.Sprintf("%4d  ", cursorLine+1)
@@ -1016,6 +1041,225 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	}
 
 	return dims
+}
+
+// handlePointerEvents processes mouse/pointer events for the editor
+func (s *appState) handlePointerEvents(gtx layout.Context, inset layout.Inset) {
+	for {
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: &s.mouseTag,
+			Kinds:  pointer.Press | pointer.Release | pointer.Drag | pointer.Scroll,
+		})
+		if !ok {
+			break
+		}
+
+		pev, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+
+		switch pev.Kind {
+		case pointer.Press:
+			if pev.Buttons.Contain(pointer.ButtonPrimary) {
+				// Left click - position cursor
+				line, col := s.screenToBufferPos(gtx, pev.Position, inset)
+				s.handleMouseClick(line, col, pev.Modifiers.Contain(key.ModShift))
+			} else if pev.Buttons.Contain(pointer.ButtonSecondary) {
+				// Right click - paste from system clipboard
+				s.handleMousePaste()
+			}
+
+		case pointer.Drag:
+			if pev.Buttons.Contain(pointer.ButtonPrimary) {
+				// Drag - extend selection
+				line, col := s.screenToBufferPos(gtx, pev.Position, inset)
+				s.handleMouseDrag(line, col)
+			}
+
+		case pointer.Release:
+			s.mouseDragging = false
+
+		case pointer.Scroll:
+			// Mouse wheel scroll
+			s.handleMouseScroll(pev.Scroll)
+		}
+	}
+}
+
+// screenToBufferPos converts screen coordinates to buffer line and column
+func (s *appState) screenToBufferPos(gtx layout.Context, pos f32.Point, inset layout.Inset) (line, col int) {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return 0, 0
+	}
+
+	// Adjust for inset
+	insetTop := gtx.Dp(inset.Top)
+	insetLeft := gtx.Dp(inset.Left)
+	posY := int(pos.Y) - insetTop
+	posX := int(pos.X) - insetLeft
+
+	// Calculate line from Y position
+	lineHeight := s.lastLineHeight
+	if lineHeight <= 0 {
+		lineHeight = 20
+	}
+	visualLine := posY / lineHeight
+	line = s.viewportTopLine + visualLine
+
+	// Clamp line to valid range
+	if line < 0 {
+		line = 0
+	}
+	if line >= buf.LineCount() {
+		line = buf.LineCount() - 1
+	}
+
+	// Calculate column from X position
+	// Subtract gutter width first
+	gutterWidth := s.lastGutterWidth
+	textX := posX - gutterWidth
+	if textX < 0 {
+		return line, 0
+	}
+
+	// Get the line text and find which column matches the X position
+	lineText := buf.Line(line)
+	col = s.xPosToColumn(gtx, lineText, textX)
+
+	return line, col
+}
+
+// xPosToColumn converts an X pixel position to a column index in the line
+func (s *appState) xPosToColumn(gtx layout.Context, lineText string, targetX int) int {
+	if targetX <= 0 || lineText == "" {
+		return 0
+	}
+
+	runes := []rune(lineText)
+	// Binary search would be more efficient, but linear is simpler and works for now
+	for col := 0; col <= len(runes); col++ {
+		prefix := string(runes[:col])
+		width := s.measureTextWidth(gtx, prefix)
+		if width >= targetX {
+			// Check if we're closer to this column or the previous one
+			if col > 0 {
+				prevWidth := s.measureTextWidth(gtx, string(runes[:col-1]))
+				if targetX-prevWidth < width-targetX {
+					return col - 1
+				}
+			}
+			return col
+		}
+	}
+	return len(runes)
+}
+
+// handleMouseClick handles a mouse click to position the cursor
+func (s *appState) handleMouseClick(line, col int, shiftHeld bool) {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+
+	if shiftHeld && s.visualMode == visualModeNone {
+		// Shift+click starts selection from current cursor
+		s.visualMode = visualModeChar
+		s.visualStartLine = buf.Cursor().Line
+		s.visualStartCol = buf.Cursor().Col
+	} else if shiftHeld && s.visualMode == visualModeChar {
+		// Shift+click extends existing selection
+		// Just move cursor, selection will extend
+	} else if !shiftHeld {
+		// Regular click - clear selection and position cursor
+		if s.visualMode != visualModeNone {
+			s.visualMode = visualModeNone
+		}
+		s.mouseSelectStart = editor.Cursor{Line: line, Col: col}
+	}
+
+	// Move cursor to clicked position
+	buf.SetCursor(line, col)
+	s.mouseDragging = true
+
+	// Switch to INSERT mode on click for immediate typing (like NvChad)
+	// Comment out if you prefer to stay in NORMAL mode
+	// s.mode = modeInsert
+
+	s.setCursorStatus(fmt.Sprintf("Click: line %d, col %d", line+1, col+1))
+}
+
+// handleMouseDrag handles mouse drag for text selection
+func (s *appState) handleMouseDrag(line, col int) {
+	buf := s.activeBuffer()
+	if buf == nil || !s.mouseDragging {
+		return
+	}
+
+	// Start visual mode if not already in it
+	if s.visualMode == visualModeNone {
+		s.visualMode = visualModeChar
+		s.visualStartLine = s.mouseSelectStart.Line
+		s.visualStartCol = s.mouseSelectStart.Col
+	}
+
+	// Move cursor to extend selection
+	buf.SetCursor(line, col)
+}
+
+// handleMousePaste handles right-click paste
+func (s *appState) handleMousePaste() {
+	if !s.clipboardInitialized {
+		return
+	}
+
+	// Read from system clipboard
+	data := clipboard.Read(clipboard.FmtText)
+	if len(data) == 0 {
+		return
+	}
+
+	text := string(data)
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+
+	// Insert text at cursor
+	buf.InsertText(text)
+	s.invalidateSyntaxCache()
+	s.status = "Pasted from clipboard"
+}
+
+// handleMouseScroll handles mouse wheel scrolling
+func (s *appState) handleMouseScroll(scroll f32.Point) {
+	// scroll.Y is negative for scroll up, positive for scroll down
+	// Typical scroll amounts are in pixels, so we convert to lines
+	linesToScroll := int(scroll.Y) / 20 // Approximate 20 pixels per line
+	if linesToScroll == 0 {
+		if scroll.Y < 0 {
+			linesToScroll = -1
+		} else if scroll.Y > 0 {
+			linesToScroll = 1
+		}
+	}
+
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+
+	// Scroll the viewport
+	newTop := s.viewportTopLine + linesToScroll
+	if newTop < 0 {
+		newTop = 0
+	}
+	maxTop := buf.LineCount() - 1
+	if newTop > maxTop {
+		newTop = maxTop
+	}
+	s.viewportTopLine = newTop
 }
 
 // drawBufferLine renders a single line with syntax highlighting.
@@ -1949,10 +2193,8 @@ func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
 		// Insert character immediately from KeyEvent (bypassing delayed EditEvent)
 		s.insertText(string(r))
 
-		// Reset modifiers immediately after insertion
-		if s.shiftPressed {
-			s.shiftPressed = false
-		}
+		// Note: We no longer reset shift here since printableKey() now checks ev.Modifiers directly
+		// This allows held-shift to work correctly for consecutive uppercase letters
 		if s.ctrlPressed {
 			s.ctrlPressed = false
 		}
@@ -2093,57 +2335,67 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 		return
 	}
 
-	// Calculate visual column position accounting for tab expansion
-	// measureTextWidth already expands tabs internally, so we just measure each part
-	gutterWidth := s.measureTextWidth(gtx, gutter)
-	prefixWidth := s.measureTextWidth(gtx, prefix)
+	// Get single character cell width for consistent positioning
+	cellWidth := s.measureTextWidth(gtx, " ")
+	if cellWidth < 1 {
+		cellWidth = 8
+	}
+
+	// Calculate visual column accounting for tab expansion
+	// This ensures cursor position matches token rendering
+	gutterVisualCols := len([]rune(gutter))
+	prefixVisualCol := visualColumn(prefix, tabWidth)
+
+	// Calculate X position using cell-based math for accuracy
+	gutterWidth := gutterVisualCols * cellWidth
+	prefixWidth := prefixVisualCol * cellWidth
 	x := gutterWidth + prefixWidth
 
-	// Cursor drawing (debug logs removed for clarity)
+	// Verify with measured width - use measured if significantly different
+	// This handles fonts with variable-width characters gracefully
+	measuredGutter := s.measureTextWidth(gtx, gutter)
+	measuredPrefix := s.measureTextWidth(gtx, prefix)
+	measuredX := measuredGutter + measuredPrefix
 
-	if s.mode == modeInsert {
-		// Thin line cursor for INSERT mode
-		width := gtx.Dp(unit.Dp(2))
-		if width < 2 {
-			width = 2
-		}
-		rect := image.Rect(x, 0, x+width, height)
-		stack := clip.Rect(rect).Push(gtx.Ops)
-		paint.Fill(gtx.Ops, cursorColor)
-		stack.Pop()
-	} else {
-		// Block cursor for NORMAL/VISUAL/DELETE modes.
-		displayChar := charUnder
-		cellWidth := s.measureTextWidth(gtx, " ")
-		if cellWidth < 1 {
-			cellWidth = 8
-		}
-
-		charWidth := s.measureTextWidth(gtx, charUnder)
-		if charUnder == "\t" {
-			visualCol := visualColumn(prefix, tabWidth)
-			spaces := tabWidth - (visualCol % tabWidth)
-			if spaces == 0 {
-				spaces = tabWidth
-			}
-			displayChar = strings.Repeat(" ", spaces)
-			charWidth = s.measureTextWidth(gtx, displayChar)
-		} else if charWidth < cellWidth {
-			charWidth = cellWidth
-		}
-		rect := image.Rect(x, 0, x+charWidth, height)
-		stack := clip.Rect(rect).Push(gtx.Ops)
-		paint.Fill(gtx.Ops, cursorColor)
-		stack.Pop()
-
-		// Draw the character on top of the cursor in contrasting color
-		label := material.Body1(s.theme, displayChar)
-		label.Font.Typeface = "JetBrainsMono"
-		label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
-		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-		label.Layout(gtx)
-		offset.Pop()
+	// Use measured value if cell-based calculation differs significantly
+	// (more than 2 characters worth), as measured is more accurate for the font
+	if abs(measuredX-x) > 2*cellWidth {
+		x = measuredX
 	}
+
+	// Clamp x to prevent cursor from going past viewport bounds
+	maxX := gtx.Constraints.Max.X - cellWidth
+	if x > maxX && maxX > gutterWidth {
+		x = maxX
+	}
+
+	// Block cursor for all modes (INSERT, NORMAL, VISUAL, DELETE)
+	displayChar := charUnder
+
+	charWidth := s.measureTextWidth(gtx, charUnder)
+	if charUnder == "\t" {
+		visualCol := visualColumn(prefix, tabWidth)
+		spaces := tabWidth - (visualCol % tabWidth)
+		if spaces == 0 {
+			spaces = tabWidth
+		}
+		displayChar = strings.Repeat(" ", spaces)
+		charWidth = s.measureTextWidth(gtx, displayChar)
+	} else if charWidth < cellWidth {
+		charWidth = cellWidth
+	}
+	rect := image.Rect(x, 0, x+charWidth, height)
+	stack := clip.Rect(rect).Push(gtx.Ops)
+	paint.Fill(gtx.Ops, cursorColor)
+	stack.Pop()
+
+	// Draw the character on top of the cursor in contrasting color
+	label := material.Body1(s.theme, displayChar)
+	label.Font.Typeface = "JetBrainsMono"
+	label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
+	offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+	label.Layout(gtx)
+	offset.Pop()
 }
 
 func (s *appState) measureTextWidth(gtx layout.Context, txt string) int {
@@ -2629,6 +2881,7 @@ func (s *appState) enterCommandMode() {
 	}
 	s.mode = modeCommand
 	s.cmdText = ""
+	s.resetCommandCompletion()
 	s.status = "COMMAND (:...)"
 }
 
@@ -2646,6 +2899,7 @@ func (s *appState) exitCommandMode() {
 		s.mode = modeNormal
 	}
 	s.cmdText = ""
+	s.resetCommandCompletion()
 }
 
 func (s *appState) enterExplorerMode() {
@@ -3122,6 +3376,8 @@ func (s *appState) appendCommandText(text string) {
 		}
 		s.cmdText += string(r)
 	}
+	// Reset tab completion when user types
+	s.resetCommandCompletion()
 }
 
 func (s *appState) deleteCommandChar() {
@@ -3133,6 +3389,8 @@ func (s *appState) deleteCommandChar() {
 		return
 	}
 	s.cmdText = string(runes[:len(runes)-1])
+	// Reset tab completion when user deletes
+	s.resetCommandCompletion()
 }
 
 func (s *appState) executeCommandLine() {
@@ -3215,6 +3473,164 @@ func (s *appState) executeCommandLine() {
 		}
 		s.status = fmt.Sprintf("Unknown command: %s", name)
 	}
+}
+
+// handleCommandTabComplete handles tab completion for the command line.
+// Supports path completion for commands like :cd, :e, :edit
+func (s *appState) handleCommandTabComplete() {
+	if s.mode != modeCommand {
+		return
+	}
+
+	cmd := s.cmdText
+	if strings.HasPrefix(cmd, ":") {
+		cmd = cmd[1:]
+	}
+
+	// Parse the command to see if we need path completion
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		// No command yet, could complete command names
+		return
+	}
+
+	cmdName := strings.ToLower(fields[0])
+
+	// Commands that support path completion
+	pathCommands := map[string]bool{
+		"cd": true, "e": true, "edit": true, "w": true, "write": true,
+	}
+
+	if !pathCommands[cmdName] {
+		return
+	}
+
+	// Get the path argument (everything after the command)
+	var pathArg string
+	if len(fields) > 1 {
+		// Find where the path starts in the original string
+		cmdIdx := strings.Index(cmd, cmdName)
+		afterCmd := cmd[cmdIdx+len(cmdName):]
+		pathArg = strings.TrimLeft(afterCmd, " ")
+	}
+
+	// If this is a new completion (not cycling through existing ones)
+	if s.cmdCompletionIdx < 0 || s.cmdCompletionPrefix != s.cmdText {
+		s.cmdCompletionPrefix = s.cmdText
+		s.cmdCompletions = s.getPathCompletions(pathArg)
+		s.cmdCompletionIdx = 0
+	} else {
+		// Cycle to next completion
+		s.cmdCompletionIdx++
+		if s.cmdCompletionIdx >= len(s.cmdCompletions) {
+			s.cmdCompletionIdx = 0
+		}
+	}
+
+	// Apply completion if we have options
+	if len(s.cmdCompletions) > 0 {
+		completion := s.cmdCompletions[s.cmdCompletionIdx]
+		// Rebuild the command text with the completion
+		if strings.HasPrefix(s.cmdCompletionPrefix, ":") {
+			s.cmdText = ":" + cmdName + " " + completion
+		} else {
+			s.cmdText = cmdName + " " + completion
+		}
+		s.status = fmt.Sprintf("Completion %d/%d", s.cmdCompletionIdx+1, len(s.cmdCompletions))
+	} else {
+		s.status = "No completions found"
+	}
+}
+
+// getPathCompletions returns a list of path completions for the given partial path.
+func (s *appState) getPathCompletions(partial string) []string {
+	var completions []string
+
+	// Handle empty path - start from current directory
+	if partial == "" {
+		partial = "."
+	}
+
+	// Expand ~ to home directory
+	if strings.HasPrefix(partial, "~") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			partial = filepath.Join(home, partial[1:])
+		}
+	}
+
+	// Determine the directory to list and the prefix to match
+	dir := filepath.Dir(partial)
+	prefix := filepath.Base(partial)
+
+	// If partial ends with /, list that directory
+	if strings.HasSuffix(partial, string(filepath.Separator)) || partial == "." {
+		dir = partial
+		prefix = ""
+	}
+
+	// Make sure dir is absolute or relative to cwd
+	if !filepath.IsAbs(dir) {
+		cwd, err := os.Getwd()
+		if err == nil {
+			dir = filepath.Join(cwd, dir)
+		}
+	}
+
+	// Read directory entries
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return completions
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip hidden files unless prefix starts with .
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
+			continue
+		}
+
+		// Match prefix
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			continue
+		}
+
+		// Build the full path for the completion
+		fullPath := filepath.Join(dir, name)
+
+		// Make it relative to cwd if possible for cleaner display
+		cwd, _ := os.Getwd()
+		relPath, err := filepath.Rel(cwd, fullPath)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			relPath = fullPath
+		}
+
+		// Add trailing slash for directories
+		if entry.IsDir() {
+			relPath = relPath + string(filepath.Separator)
+		}
+
+		completions = append(completions, relPath)
+	}
+
+	// Sort completions (directories first, then alphabetically)
+	sort.Slice(completions, func(i, j int) bool {
+		iDir := strings.HasSuffix(completions[i], string(filepath.Separator))
+		jDir := strings.HasSuffix(completions[j], string(filepath.Separator))
+		if iDir != jDir {
+			return iDir // directories first
+		}
+		return strings.ToLower(completions[i]) < strings.ToLower(completions[j])
+	})
+
+	return completions
+}
+
+// resetCommandCompletion resets the command line completion state.
+func (s *appState) resetCommandCompletion() {
+	s.cmdCompletions = nil
+	s.cmdCompletionIdx = -1
+	s.cmdCompletionPrefix = ""
 }
 
 func (s *appState) handleQuitCommand(force bool) {
@@ -4156,6 +4572,10 @@ func (s *appState) insertText(text string) {
 
 	if s.mode == modeInsert {
 		s.maybeTriggerLSPCompletion(text)
+		// Fallback to word-based completion if LSP didn't provide completions
+		if !s.completionActive {
+			s.maybeTriggerWordCompletion(text)
+		}
 	}
 }
 
@@ -4170,6 +4590,8 @@ func (s *appState) handleAutoCloseOrDedent(r rune) bool {
 		if s.maybeDedentForClosing(r) {
 			return true
 		}
+	case '"', '\'', '`':
+		return s.handleQuoteAutoClose(r)
 	}
 	return false
 }
@@ -4187,6 +4609,83 @@ func (s *appState) insertPairedDelimiter(open rune) bool {
 	buf.MoveLeft()
 	s.setCursorStatus("Insert pair")
 	return true
+}
+
+// handleQuoteAutoClose handles auto-closing for quote characters.
+// It will:
+// - Skip over the closing quote if cursor is right before one
+// - Auto-close the quote if not inside a string
+// - Handle triple quotes for Python-style docstrings
+func (s *appState) handleQuoteAutoClose(quote rune) bool {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return false
+	}
+
+	cursor := buf.Cursor()
+	lineText := buf.Line(cursor.Line)
+	runes := []rune(lineText)
+
+	// Check if cursor is right before the same quote - if so, skip over it
+	if cursor.Col < len(runes) && runes[cursor.Col] == quote {
+		buf.MoveRight()
+		s.setCursorStatus("Skip quote")
+		return true
+	}
+
+	// Check if we're inside a string - if so, don't auto-close
+	prefix := ""
+	if cursor.Col > 0 && cursor.Col <= len(runes) {
+		prefix = string(runes[:cursor.Col])
+	}
+
+	// Simple check: count unescaped quotes
+	if s.isInsideQuote(prefix, quote) {
+		return false // Don't auto-close, let normal insertion happen
+	}
+
+	// Check for triple quote: if the previous two chars are the same quote
+	if quote == '"' && cursor.Col >= 2 {
+		prevTwo := string(runes[cursor.Col-2 : cursor.Col])
+		if prevTwo == "\"\"" {
+			// Complete triple quote: insert """ and position cursor in middle
+			buf.InsertText("\"\"\"\"")
+			buf.MoveLeft()
+			buf.MoveLeft()
+			buf.MoveLeft()
+			s.setCursorStatus("Triple quote")
+			return true
+		}
+	}
+
+	// Auto-close the quote
+	buf.InsertText(string([]rune{quote, quote}))
+	buf.MoveLeft()
+	s.setCursorStatus("Insert quote pair")
+	return true
+}
+
+// isInsideQuote checks if the cursor position is inside a quoted string.
+func (s *appState) isInsideQuote(prefix string, quote rune) bool {
+	count := 0
+	escaped := false
+
+	for _, ch := range prefix {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == quote {
+			count++
+		}
+	}
+
+	// If odd number of quotes, we're inside a string
+	return count%2 == 1
 }
 
 func (s *appState) shouldAutoCloseAtCursor() bool {
@@ -4333,15 +4832,60 @@ func (s *appState) insertNewlineWithIndent() {
 		cursor.Col = len(runes)
 	}
 	prefix := string(runes[:cursor.Col])
+	suffix := ""
+	if cursor.Col < len(runes) {
+		suffix = string(runes[cursor.Col:])
+	}
 	indent := leadingWhitespace(prefix)
 	trimmed := strings.TrimRightFunc(prefix, unicode.IsSpace)
-	shouldIndent := strings.HasSuffix(trimmed, "{") || s.shouldIndentAfterColon(trimmed)
+	shouldIndent := strings.HasSuffix(trimmed, "{") || strings.HasSuffix(trimmed, "[") || strings.HasSuffix(trimmed, "(") || s.shouldIndentAfterColon(trimmed)
 	extra := ""
 	if shouldIndent {
 		extra = indentUnit(indent)
 	}
+
+	// Check if cursor is between matching brackets (e.g., {|}, [|], (|))
+	// If so, add an extra newline for the closing bracket
+	if s.isBetweenMatchingBrackets(trimmed, suffix) {
+		// Insert newline with extra indent for content, then newline with original indent for closing bracket
+		buf.InsertText("\n" + indent + extra)
+		// Save cursor position after first newline
+		newCursor := buf.Cursor()
+		// Insert the closing bracket line
+		buf.InsertText("\n" + indent)
+		// Move cursor back to the content line
+		buf.SetCursor(newCursor.Line, newCursor.Col)
+		s.setCursorStatus("Insert newline (bracket)")
+		return
+	}
+
 	buf.InsertText("\n" + indent + extra)
 	s.setCursorStatus("Insert newline")
+}
+
+// isBetweenMatchingBrackets checks if cursor is between matching open/close brackets
+func (s *appState) isBetweenMatchingBrackets(prefix, suffix string) bool {
+	if prefix == "" || suffix == "" {
+		return false
+	}
+	trimmedPrefix := strings.TrimRightFunc(prefix, unicode.IsSpace)
+	trimmedSuffix := strings.TrimLeftFunc(suffix, unicode.IsSpace)
+	if trimmedPrefix == "" || trimmedSuffix == "" {
+		return false
+	}
+	lastChar := trimmedPrefix[len(trimmedPrefix)-1]
+	firstChar := trimmedSuffix[0]
+
+	// Check for matching bracket pairs
+	switch lastChar {
+	case '{':
+		return firstChar == '}'
+	case '[':
+		return firstChar == ']'
+	case '(':
+		return firstChar == ')'
+	}
+	return false
 }
 
 func leadingWhitespace(text string) string {
@@ -4404,6 +4948,20 @@ func (s *appState) requestClose() {
 }
 
 func (s *appState) printableKey(ev key.Event) (rune, bool) {
+	// Reject special keys that Gio represents as single Unicode symbols
+	// These should not be treated as printable characters
+	switch ev.Name {
+	case key.NameDeleteBackward, key.NameDeleteForward,
+		key.NameUpArrow, key.NameDownArrow, key.NameLeftArrow, key.NameRightArrow,
+		key.NameEscape, key.NameTab, key.NameReturn, key.NameEnter,
+		key.NameHome, key.NameEnd, key.NamePageUp, key.NamePageDown,
+		key.NameF1, key.NameF2, key.NameF3, key.NameF4, key.NameF5, key.NameF6,
+		key.NameF7, key.NameF8, key.NameF9, key.NameF10, key.NameF11, key.NameF12,
+		key.NameCtrl, key.NameShift, key.NameAlt, key.NameSuper,
+		key.NameSpace: // Space is handled separately via ActionInsertSpace
+		return 0, false
+	}
+
 	str := string(ev.Name)
 	if utf8.RuneCountInString(str) != 1 {
 		return 0, false
@@ -4418,12 +4976,13 @@ func (s *appState) printableKey(ev key.Event) (rune, bool) {
 
 	// Handle letter case based on shift state
 	// Gio reports all letters as uppercase in ev.Name, so we need to check shift state
+	// Use ev.Modifiers directly for reliable shift detection (avoids timing issues with tracked state)
 	if unicode.IsLetter(r) {
-		// If shift is NOT pressed, convert to lowercase
-		if !s.shiftPressed {
+		// If shift is NOT pressed (check both event modifiers and tracked state), convert to lowercase
+		if !ev.Modifiers.Contain(key.ModShift) && !s.shiftPressed {
 			r = unicode.ToLower(r)
 		}
-		// If shift IS pressed, keep uppercase (already uppercase from Gio)
+		// If shift IS pressed (via either mechanism), keep uppercase
 	}
 
 	// Gio reports punctuation keys like Shift+; as ';' with ModShift; normalize to ':'.
@@ -4503,6 +5062,13 @@ func visualColumn(s string, tabWidth int) int {
 		col += runeDisplayWidth(r)
 	}
 	return col
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func runeDisplayWidth(r rune) int {
@@ -5408,6 +5974,162 @@ func (s *appState) handleTerminalExit() {
 		s.mode = modeNormal
 		s.status = "Back to NORMAL"
 	}
+}
+
+// handleTerminalScrollUp scrolls the terminal viewport up by one line
+func (s *appState) handleTerminalScrollUp() {
+	bufIdx := s.getActiveTerminalBufferIndex()
+	if bufIdx < 0 {
+		return
+	}
+
+	viewportTop, exists := s.terminalViewports[bufIdx]
+	if !exists {
+		viewportTop = 0
+	}
+
+	if viewportTop > 0 {
+		s.terminalViewports[bufIdx] = viewportTop - 1
+		// Disable auto-scroll when user scrolls up
+		s.terminalAutoScroll[bufIdx] = false
+	}
+}
+
+// handleTerminalScrollDown scrolls the terminal viewport down by one line
+func (s *appState) handleTerminalScrollDown() {
+	bufIdx := s.getActiveTerminalBufferIndex()
+	if bufIdx < 0 {
+		return
+	}
+
+	term, exists := s.terminals[bufIdx]
+	if !exists || term == nil {
+		return
+	}
+
+	screen := term.GetScreen()
+	if screen == nil {
+		return
+	}
+
+	_, rows := screen.Dimensions()
+	viewportTop, exists := s.terminalViewports[bufIdx]
+	if !exists {
+		viewportTop = 0
+	}
+
+	if viewportTop < rows-1 {
+		s.terminalViewports[bufIdx] = viewportTop + 1
+	}
+
+	// Re-enable auto-scroll if we're at the bottom
+	_, cursorY, _ := screen.GetCursor()
+	if viewportTop+1 >= cursorY {
+		s.terminalAutoScroll[bufIdx] = true
+	}
+}
+
+// handleTerminalScrollPageUp scrolls the terminal viewport up by a page
+func (s *appState) handleTerminalScrollPageUp() {
+	bufIdx := s.getActiveTerminalBufferIndex()
+	if bufIdx < 0 {
+		return
+	}
+
+	term, exists := s.terminals[bufIdx]
+	if !exists || term == nil {
+		return
+	}
+
+	screen := term.GetScreen()
+	if screen == nil {
+		return
+	}
+
+	_, rows := screen.Dimensions()
+	pageSize := rows / 2
+	if pageSize < 1 {
+		pageSize = 1
+	}
+
+	viewportTop, exists := s.terminalViewports[bufIdx]
+	if !exists {
+		viewportTop = 0
+	}
+
+	newTop := viewportTop - pageSize
+	if newTop < 0 {
+		newTop = 0
+	}
+
+	if newTop != viewportTop {
+		s.terminalViewports[bufIdx] = newTop
+		// Disable auto-scroll when user scrolls up
+		s.terminalAutoScroll[bufIdx] = false
+	}
+}
+
+// handleTerminalScrollPageDown scrolls the terminal viewport down by a page
+func (s *appState) handleTerminalScrollPageDown() {
+	bufIdx := s.getActiveTerminalBufferIndex()
+	if bufIdx < 0 {
+		return
+	}
+
+	term, exists := s.terminals[bufIdx]
+	if !exists || term == nil {
+		return
+	}
+
+	screen := term.GetScreen()
+	if screen == nil {
+		return
+	}
+
+	_, rows := screen.Dimensions()
+	pageSize := rows / 2
+	if pageSize < 1 {
+		pageSize = 1
+	}
+
+	viewportTop, exists := s.terminalViewports[bufIdx]
+	if !exists {
+		viewportTop = 0
+	}
+
+	maxTop := rows - pageSize
+	if maxTop < 0 {
+		maxTop = 0
+	}
+
+	newTop := viewportTop + pageSize
+	if newTop > maxTop {
+		newTop = maxTop
+	}
+
+	s.terminalViewports[bufIdx] = newTop
+
+	// Re-enable auto-scroll if we're at the bottom
+	_, cursorY, _ := screen.GetCursor()
+	if newTop >= cursorY-pageSize {
+		s.terminalAutoScroll[bufIdx] = true
+	}
+}
+
+// getActiveTerminalBufferIndex returns the buffer index of the active terminal, or -1 if not in terminal
+func (s *appState) getActiveTerminalBufferIndex() int {
+	if s.paneManager == nil {
+		return -1
+	}
+	activePane := s.paneManager.ActivePane()
+	if activePane == nil {
+		return -1
+	}
+	buf := s.bufferMgr.GetBuffer(activePane.BufferIndex)
+	if buf == nil || !buf.IsTerminal() {
+		return -1
+	}
+	return activePane.BufferIndex
 }
 
 // closeTerminal closes a terminal instance and cleans up

@@ -3,6 +3,7 @@ package appcore
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -12,10 +13,33 @@ import (
 	"github.com/javanhut/vem/internal/lsp"
 )
 
+// Regex patterns for LSP snippet syntax
+var (
+	// Matches ${N:placeholder} - captures the placeholder text
+	snippetPlaceholderRe = regexp.MustCompile(`\$\{(\d+):([^}]*)\}`)
+	// Matches ${N|choice1,choice2|} - captures the first choice
+	snippetChoiceRe = regexp.MustCompile(`\$\{(\d+)\|([^,|]*)[^}]*\}`)
+	// Matches $N or ${N} - simple tabstops without placeholder
+	snippetTabstopRe = regexp.MustCompile(`\$\{?(\d+)\}?`)
+)
+
 const (
 	lspChangeDebounce     = 50 * time.Millisecond
 	lspCompletionDebounce = 80 * time.Millisecond
 )
+
+// completionItemsEqual compares two completion item slices by their labels
+func completionItemsEqual(a, b []lsp.CompletionItem) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Label != b[i].Label {
+			return false
+		}
+	}
+	return true
+}
 
 type lspCompletionRequest struct {
 	filePath string
@@ -339,6 +363,27 @@ func (s *appState) handleLSPCompletion() {
 	s.resolveCompletionItem(0)
 }
 
+// stripSnippetSyntax removes LSP snippet placeholders from text.
+// Converts ${N:placeholder} to placeholder, ${N|choice1,choice2|} to choice1,
+// and removes bare $N tabstops.
+func stripSnippetSyntax(text string) string {
+	// First, handle ${N:placeholder} - replace with the placeholder text
+	result := snippetPlaceholderRe.ReplaceAllString(text, "$2")
+
+	// Handle ${N|choice1,choice2|} - replace with the first choice
+	result = snippetChoiceRe.ReplaceAllString(result, "$2")
+
+	// Remove remaining $N or ${N} tabstops
+	result = snippetTabstopRe.ReplaceAllString(result, "")
+
+	// Handle escaped characters: \$ -> $, \} -> }, \\ -> \
+	result = strings.ReplaceAll(result, "\\$", "$")
+	result = strings.ReplaceAll(result, "\\}", "}")
+	result = strings.ReplaceAll(result, "\\\\", "\\")
+
+	return result
+}
+
 // handleLSPCompletionAccept accepts the selected completion.
 func (s *appState) handleLSPCompletionAccept() {
 	if !s.completionActive || len(s.completionItems) == 0 {
@@ -358,6 +403,9 @@ func (s *appState) handleLSPCompletionAccept() {
 		insertText = item.Label
 	}
 
+	// Strip snippet syntax (e.g., ${1:param} -> param)
+	insertText = stripSnippetSyntax(insertText)
+
 	// If there's a text edit, use that instead
 	if item.TextEdit != nil {
 		// Delete the range and insert new text
@@ -367,7 +415,8 @@ func (s *appState) handleLSPCompletionAccept() {
 			item.TextEdit.Range.End.Line,
 			item.TextEdit.Range.End.Character,
 		)
-		buf.InsertText(item.TextEdit.NewText)
+		// Strip snippet syntax from TextEdit as well
+		buf.InsertText(stripSnippetSyntax(item.TextEdit.NewText))
 	} else {
 		// Simple insert: delete word prefix and insert completion
 		// First, find the start of the word being completed
@@ -1245,4 +1294,134 @@ func (s *appState) processLSPCommand(cmd string, args string) bool {
 	default:
 		return false
 	}
+}
+
+// maybeTriggerWordCompletion triggers word-based completion when LSP is not active
+func (s *appState) maybeTriggerWordCompletion(inserted string) {
+	if inserted == "" {
+		return
+	}
+
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+
+	runes := []rune(inserted)
+	last := runes[len(runes)-1]
+
+	// Don't trigger on whitespace or newlines
+	if last == '\n' || last == '\r' || unicode.IsSpace(last) {
+		s.completionActive = false
+		s.completionItems = nil
+		return
+	}
+
+	// Only trigger for word characters
+	if !isWordChar(last) {
+		s.completionActive = false
+		s.completionItems = nil
+		return
+	}
+
+	cursor := buf.Cursor()
+	line := buf.Line(cursor.Line)
+	lineRunes := []rune(line)
+
+	if cursor.Col > len(lineRunes) {
+		return
+	}
+
+	// Find the start of the current word
+	wordStart := cursor.Col
+	for wordStart > 0 && isWordChar(lineRunes[wordStart-1]) {
+		wordStart--
+	}
+
+	// Need at least 2 characters to trigger word completion
+	prefix := string(lineRunes[wordStart:cursor.Col])
+	if len(prefix) < 2 {
+		return
+	}
+
+	// Collect words from the buffer
+	words := s.collectWordsFromBuffer(buf, prefix)
+	if len(words) == 0 {
+		return
+	}
+
+	// Convert to completion items
+	var items []lsp.CompletionItem
+	for _, word := range words {
+		items = append(items, lsp.CompletionItem{
+			Label:      word,
+			Kind:       lsp.CompletionItemKindText,
+			InsertText: word,
+			Detail:     "word",
+		})
+	}
+
+	// Limit to 20 suggestions
+	if len(items) > 20 {
+		items = items[:20]
+	}
+
+	s.completionActive = true
+	// Only reset index if items actually changed to preserve user selection
+	if !completionItemsEqual(s.completionItems, items) {
+		s.completionItems = items
+		s.completionIndex = 0
+		s.completionVersion++
+		s.completionResolved = make(map[int]bool)
+	} else if s.completionIndex >= len(items) {
+		// Clamp index if it's out of bounds
+		s.completionIndex = 0
+	}
+	s.completionTrigger = editor.Cursor{Line: cursor.Line, Col: wordStart}
+
+	if s.window != nil {
+		s.window.Invalidate()
+	}
+}
+
+// collectWordsFromBuffer collects unique words from the buffer that start with prefix
+func (s *appState) collectWordsFromBuffer(buf *editor.Buffer, prefix string) []string {
+	if buf == nil || prefix == "" {
+		return nil
+	}
+
+	prefixLower := strings.ToLower(prefix)
+	wordSet := make(map[string]bool)
+	var words []string
+
+	// Scan all lines in the buffer
+	for i := 0; i < buf.LineCount(); i++ {
+		line := buf.Line(i)
+		lineRunes := []rune(line)
+
+		// Extract words from the line
+		wordStart := -1
+		for j := 0; j <= len(lineRunes); j++ {
+			isWord := j < len(lineRunes) && isWordChar(lineRunes[j])
+			if isWord && wordStart < 0 {
+				wordStart = j
+			} else if !isWord && wordStart >= 0 {
+				word := string(lineRunes[wordStart:j])
+				wordLower := strings.ToLower(word)
+
+				// Check if it starts with prefix and is different from prefix
+				if strings.HasPrefix(wordLower, prefixLower) && wordLower != prefixLower {
+					if !wordSet[word] {
+						wordSet[word] = true
+						words = append(words, word)
+					}
+				}
+				wordStart = -1
+			}
+		}
+	}
+
+	// Sort words alphabetically
+	sort.Strings(words)
+	return words
 }

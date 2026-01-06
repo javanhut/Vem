@@ -758,8 +758,10 @@ func (b *Buffer) clampCursor() {
 // NewBufferFromFile creates a new buffer and loads content from a file.
 func NewBufferFromFile(path string) (*Buffer, error) {
 	buf := &Buffer{
-		lines:  []string{""},
-		cursor: Cursor{},
+		lines:     []string{""},
+		cursor:    Cursor{},
+		undoStack: make([]UndoEntry, 0),
+		maxUndos:  100,
 	}
 
 	if err := buf.LoadFromFile(path); err != nil {
