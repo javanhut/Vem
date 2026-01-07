@@ -560,7 +560,12 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 				s.skipNextEdit = true
 				break
 			}
-			s.insertText("\n")
+			// Use smart indent if enabled and not in a comment
+			if s.autoIndentEnabled && !s.isCursorInComment() {
+				s.insertNewlineWithIndent()
+			} else {
+				s.insertText("\n")
+			}
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
 		} else if s.mode == modeCommand {
 			s.executeCommandLine()

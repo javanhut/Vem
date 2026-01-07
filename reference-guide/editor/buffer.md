@@ -90,10 +90,23 @@ type Cursor struct {
 
 ### Lines 113-161: Line Operations
 
-#### MoveToLine (Lines 113-125)
+#### MoveToLine (Lines 115-126)
 Moves cursor to line, clamping to valid range.
 
-#### DeleteLines (Lines 127-161)
+#### SetCursor (Lines 128-141)
+Moves cursor to specific line and column:
+1. Clamps line to valid range
+2. Sets cursor line and column
+3. Clamps column to line length
+
+#### ReplaceLine (Lines 143-154)
+Replaces content of a specific line:
+1. Checks bounds and read-only flag
+2. Saves undo state
+3. Replaces line content
+4. Marks modified
+
+#### DeleteLines (Lines 156-189)
 Deletes inclusive line range:
 1. Checks read-only flag
 2. Saves state for undo
@@ -102,7 +115,7 @@ Deletes inclusive line range:
 5. Repositions cursor
 6. Marks modified
 
-### Lines 163-225: Text Insertion
+### Lines 191-253: Text Insertion
 
 #### InsertLines (Lines 163-190)
 Inserts lines at index, saves undo state.

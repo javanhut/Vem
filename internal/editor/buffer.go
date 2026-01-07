@@ -125,6 +125,34 @@ func (b *Buffer) MoveToLine(line int) {
 	b.clampColumn()
 }
 
+// SetCursor moves the cursor to the specified line and column.
+func (b *Buffer) SetCursor(line, col int) {
+	if len(b.lines) == 0 {
+		b.lines = []string{""}
+	}
+	if line < 0 {
+		line = 0
+	} else if line >= len(b.lines) {
+		line = len(b.lines) - 1
+	}
+	b.cursor.Line = line
+	b.cursor.Col = col
+	b.clampColumn()
+}
+
+// ReplaceLine replaces the content of the specified line.
+func (b *Buffer) ReplaceLine(lineIdx int, content string) {
+	if lineIdx < 0 || lineIdx >= len(b.lines) {
+		return
+	}
+	if b.readOnly {
+		return
+	}
+	b.saveState("replace line")
+	b.lines[lineIdx] = content
+	b.markModified()
+}
+
 // DeleteLines removes the inclusive line range and repositions the cursor.
 func (b *Buffer) DeleteLines(start, end int) {
 	if len(b.lines) == 0 {

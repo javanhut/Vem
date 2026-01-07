@@ -9,6 +9,7 @@
 |------|-------|---------|
 | [app.go](app.md) | 4000+ | Main application state and event loop |
 | [keybindings.go](keybindings.md) | 870+ | Keybinding definitions and action execution |
+| [autopairs.go](autopairs.md) | 280 | Auto-close brackets/quotes and smart indent |
 | [buffer_completion.go](buffer_completion.md) | 112 | Buffer word completion (Ctrl+N style) |
 | [command_completion.go](command_completion.md) | 175 | Command mode path completion (Tab) |
 | [fuzzy.go](fuzzy.md) | 179 | Fuzzy file finder algorithm |
@@ -54,6 +55,8 @@ type KeyBinding struct {
 
 ## Recent Fixes
 
+- **Auto-pairs** - Added automatic bracket/quote closing (`autopairs.go`)
+- **Auto-indent** - Added smart indentation with bracket expansion
 - **Syntax highlighter cache** - Fixed highlighting disappearing when opening files from explorer (buffer index mismatch after closing empty buffer)
 - **Cursor positioning** - Fixed visual offset caused by token-based rendering vs single-string measurement
 - **Tab key stuck** - Fixed `skipNextEdit` timing race condition

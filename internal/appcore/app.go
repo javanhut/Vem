@@ -249,6 +249,13 @@ type appState struct {
 
 	// Soft wrap
 	softWrapEnabled bool
+
+	// Auto-pairs (auto-close brackets/quotes)
+	autoPairsEnabled bool
+
+	// Auto-indent
+	autoIndentEnabled bool
+	indentString      string // "\t" or spaces
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -413,6 +420,9 @@ func newAppState(filePaths []string) *appState {
 		lspCompletionReq:     make(map[string]lspCompletionRequest),
 		completionResolved:   make(map[int]bool),
 		softWrapEnabled:      true, // Enable soft wrap by default
+		autoPairsEnabled:     true, // Enable auto-close brackets/quotes by default
+		autoIndentEnabled:    true, // Enable auto-indent by default
+		indentString:         "\t", // Use tabs by default
 	}
 
 	// Set up LSP callbacks
@@ -749,6 +759,20 @@ func (s *appState) handleEvents(gtx layout.Context) {
 					continue
 				}
 				// Platform didn't send KeyEvent, only EditEvent - use it
+				// Try auto-pairs for single character input
+				if len(e.Text) == 1 {
+					r := rune(e.Text[0])
+					if s.handleAutoPairInsertion(r) {
+						s.maybeTriggerAutoCompletion(e.Text)
+						if s.shiftPressed {
+							s.shiftPressed = false
+						}
+						if s.ctrlPressed {
+							s.ctrlPressed = false
+						}
+						continue
+					}
+				}
 				s.insertText(e.Text)
 				// Reset modifiers after EditEvent insertion
 				if s.shiftPressed {
@@ -2007,7 +2031,22 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 
 func (s *appState) handleInsertModeSpecial(ev key.Event) bool {
 	if r, ok := s.printableKey(ev); ok {
-		// Insert character immediately from KeyEvent (bypassing delayed EditEvent)
+		// Try auto-pair insertion first (brackets, quotes)
+		if s.handleAutoPairInsertion(r) {
+			// Reset modifiers
+			if s.shiftPressed {
+				s.shiftPressed = false
+			}
+			if s.ctrlPressed {
+				s.ctrlPressed = false
+			}
+			s.skipNextEdit = true
+			// Trigger auto-completion if needed
+			s.maybeTriggerAutoCompletion(string(r))
+			return true
+		}
+
+		// Normal insertion
 		s.insertText(string(r))
 
 		// Reset modifiers immediately after insertion
@@ -3168,6 +3207,24 @@ func (s *appState) executeCommandLine() {
 		s.handleLSPFormat()
 	case "wrap":
 		s.handleWrapCommand(strings.TrimSpace(args))
+	case "autopairs":
+		s.autoPairsEnabled = true
+		s.status = "Auto-pairs enabled"
+	case "noautopairs":
+		s.autoPairsEnabled = false
+		s.status = "Auto-pairs disabled"
+	case "autoindent":
+		s.autoIndentEnabled = true
+		s.status = "Auto-indent enabled"
+	case "noautoindent":
+		s.autoIndentEnabled = false
+		s.status = "Auto-indent disabled"
+	case "expandtab":
+		s.indentString = "    " // 4 spaces
+		s.status = "Using spaces for indent"
+	case "noexpandtab":
+		s.indentString = "\t"
+		s.status = "Using tabs for indent"
 	default:
 		// Try LSP commands
 		if s.processLSPCommand(name, args) {
