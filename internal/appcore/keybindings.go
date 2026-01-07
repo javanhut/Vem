@@ -125,6 +125,16 @@ const (
 	ActionLSPReferencesNext
 	ActionLSPReferencesPrev
 	ActionLSPReferencesOpen
+
+	// Buffer word completion (Ctrl+N style, for when LSP is not available)
+	ActionBufferCompletionTrigger
+	ActionBufferCompletionAccept
+	ActionBufferCompletionCancel
+	ActionBufferCompletionNext
+	ActionBufferCompletionPrev
+
+	// Command mode path completion
+	ActionCommandTabComplete
 )
 
 type KeyBinding struct {
@@ -189,6 +199,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionPaneCycleNext},
 		// LSP keybindings
 		{Modifiers: key.ModShift, Key: "k", Modes: nil, Action: ActionLSPHover},
+		// Undo
+		{Modifiers: 0, Key: "u", Modes: nil, Action: ActionUndo},
 	},
 	modeInsert: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -196,13 +208,14 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameSpace, Modes: nil, Action: ActionInsertSpace},
 		{Modifiers: 0, Key: key.NameTab, Modes: nil, Action: ActionInsertTab},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionLSPCompletionPrev},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
 		{Modifiers: 0, Key: key.NameDeleteForward, Modes: nil, Action: ActionDeleteForward},
 		{Modifiers: 0, Key: key.NameLeftArrow, Modes: nil, Action: ActionMoveLeft},
 		{Modifiers: 0, Key: key.NameRightArrow, Modes: nil, Action: ActionMoveRight},
 		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionMoveUp},
 		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionMoveDown},
-		// LSP completion
+		// LSP and buffer completion
 		{Modifiers: key.ModCtrl, Key: key.NameSpace, Modes: nil, Action: ActionLSPCompletion},
 		{Modifiers: key.ModCtrl, Key: "n", Modes: nil, Action: ActionLSPCompletionNext},
 		{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionLSPCompletionPrev},
@@ -238,6 +251,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameReturn, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameEnter, Modes: nil, Action: ActionInsertNewline},
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
+		{Modifiers: 0, Key: key.NameTab, Modes: nil, Action: ActionCommandTabComplete},
+		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionCommandTabComplete},
 	},
 	modeExplorer: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -436,6 +451,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		s.enterExplorerMode()
 
 	case ActionExitMode:
+		// Cancel buffer completion if active
+		if s.bufferCompletionActive {
+			s.handleBufferCompletionCancel()
+			break
+		}
 		switch s.mode {
 		case modeInsert:
 			s.mode = modeNormal
@@ -535,6 +555,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 				s.skipNextEdit = true
 				break
 			}
+			if s.bufferCompletionActive {
+				s.handleBufferCompletionAccept()
+				s.skipNextEdit = true
+				break
+			}
 			s.insertText("\n")
 			s.skipNextEdit = true // Prevent EditEvent from inserting again
 		} else if s.mode == modeCommand {
@@ -551,6 +576,11 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		if s.mode == modeInsert {
 			if s.completionActive {
 				s.handleLSPCompletionNext()
+				s.skipNextEdit = true
+				break
+			}
+			if s.bufferCompletionActive {
+				s.handleBufferCompletionNext()
 				s.skipNextEdit = true
 				break
 			}
@@ -759,10 +789,22 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		s.handleLSPCompletionCancel()
 
 	case ActionLSPCompletionNext:
-		s.handleLSPCompletionNext()
+		// Smart completion: LSP takes priority, then buffer completion, then trigger buffer completion
+		if s.completionActive {
+			s.handleLSPCompletionNext()
+		} else if s.bufferCompletionActive {
+			s.handleBufferCompletionNext()
+		} else {
+			s.handleBufferCompletionTrigger()
+		}
 
 	case ActionLSPCompletionPrev:
-		s.handleLSPCompletionPrev()
+		// Smart completion: LSP takes priority, then buffer completion
+		if s.completionActive {
+			s.handleLSPCompletionPrev()
+		} else if s.bufferCompletionActive {
+			s.handleBufferCompletionPrev()
+		}
 
 	case ActionLSPNextDiagnostic:
 		s.handleLSPNextDiagnostic()
@@ -774,18 +816,54 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		s.handleLSPDismissHover()
 
 	case ActionLSPDismissReferences:
-		s.handleLSPDismissReferences()
+		if s.diagnosticsListActive {
+			s.handleDiagnosticsListClose()
+		} else {
+			s.handleLSPDismissReferences()
+		}
 
 	case ActionLSPDismissCodeActions:
 		s.handleLSPDismissCodeActions()
 
 	case ActionLSPReferencesNext:
-		s.handleLSPReferencesNext()
+		if s.diagnosticsListActive {
+			s.handleDiagnosticsListNext()
+		} else {
+			s.handleLSPReferencesNext()
+		}
 
 	case ActionLSPReferencesPrev:
-		s.handleLSPReferencesPrev()
+		if s.diagnosticsListActive {
+			s.handleDiagnosticsListPrev()
+		} else {
+			s.handleLSPReferencesPrev()
+		}
 
 	case ActionLSPReferencesOpen:
-		s.handleLSPReferencesOpen()
+		if s.diagnosticsListActive {
+			s.handleDiagnosticsListOpen()
+		} else {
+			s.handleLSPReferencesOpen()
+		}
+
+	// Buffer word completion actions
+	case ActionBufferCompletionTrigger:
+		s.handleBufferCompletionTrigger()
+
+	case ActionBufferCompletionAccept:
+		s.handleBufferCompletionAccept()
+
+	case ActionBufferCompletionCancel:
+		s.handleBufferCompletionCancel()
+
+	case ActionBufferCompletionNext:
+		s.handleBufferCompletionNext()
+
+	case ActionBufferCompletionPrev:
+		s.handleBufferCompletionPrev()
+
+	// Command mode path completion
+	case ActionCommandTabComplete:
+		s.handleCommandTabComplete()
 	}
 }

@@ -1,6 +1,7 @@
 package appcore
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"path/filepath"
@@ -692,4 +693,213 @@ func formatInt(n int) string {
 		return string(rune('0' + n))
 	}
 	return formatInt(n/10) + string(rune('0'+n%10))
+}
+
+// drawBufferCompletionMenu draws the buffer word completion popup.
+func (s *appState) drawBufferCompletionMenu(gtx layout.Context, offsetX, offsetY int) {
+	if !s.bufferCompletionActive || len(s.bufferCompletionItems) == 0 {
+		return
+	}
+
+	maxWidth := 300
+	itemHeight := 22
+	maxVisible := 10
+	padding := 4
+
+	visibleItems := len(s.bufferCompletionItems)
+	if visibleItems > maxVisible {
+		visibleItems = maxVisible
+	}
+
+	popupHeight := visibleItems*itemHeight + padding*2
+	popupWidth := maxWidth
+
+	// Position popup below cursor
+	popupX := offsetX
+	popupY := offsetY + 20
+
+	// Ensure popup stays within window bounds
+	if popupX+popupWidth > gtx.Constraints.Max.X {
+		popupX = gtx.Constraints.Max.X - popupWidth
+	}
+	if popupY+popupHeight > gtx.Constraints.Max.Y {
+		popupY = offsetY - popupHeight
+	}
+
+	// Draw background
+	bgRect := clip.Rect{
+		Min: image.Pt(popupX, popupY),
+		Max: image.Pt(popupX+popupWidth, popupY+popupHeight),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: completionBgColor}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	bgRect.Pop()
+
+	// Draw border
+	s.drawBorder(gtx, popupX, popupY, popupWidth, popupHeight, completionBorderColor)
+
+	// Draw items
+	startIdx := 0
+	if s.bufferCompletionIndex >= maxVisible {
+		startIdx = s.bufferCompletionIndex - maxVisible + 1
+	}
+
+	for i := 0; i < visibleItems && startIdx+i < len(s.bufferCompletionItems); i++ {
+		itemIdx := startIdx + i
+		item := s.bufferCompletionItems[itemIdx]
+		itemY := popupY + padding + i*itemHeight
+
+		// Highlight selected item
+		if itemIdx == s.bufferCompletionIndex {
+			selRect := clip.Rect{
+				Min: image.Pt(popupX+2, itemY),
+				Max: image.Pt(popupX+popupWidth-2, itemY+itemHeight),
+			}.Push(gtx.Ops)
+			paint.ColorOp{Color: completionSelectedColor}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			selRect.Pop()
+		}
+
+		// Draw word icon
+		iconLabel := material.Body2(s.theme, "w")
+		iconLabel.Font.Typeface = "JetBrainsMono"
+		iconLabel.Color = color.NRGBA{R: 0x9c, G: 0xdc, B: 0xfe, A: 0xff} // Light blue
+		iconLabel.TextSize = 12
+
+		iconOffset := op.Offset(image.Pt(popupX+6, itemY+3)).Push(gtx.Ops)
+		iconLabel.Layout(gtx)
+		iconOffset.Pop()
+
+		// Draw completion text
+		label := material.Body2(s.theme, item)
+		label.Font.Typeface = "JetBrainsMono"
+		label.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+		label.TextSize = 12
+
+		labelOffset := op.Offset(image.Pt(popupX+24, itemY+3)).Push(gtx.Ops)
+		label.Layout(gtx)
+		labelOffset.Pop()
+	}
+
+	// Draw hint at bottom
+	hint := "[Tab: accept] [Esc: cancel] [Ctrl+N/P: navigate]"
+	hintLabel := material.Caption(s.theme, hint)
+	hintLabel.Font.Typeface = "JetBrainsMono"
+	hintLabel.Color = color.NRGBA{R: 0x60, G: 0x60, B: 0x60, A: 0xff}
+	hintLabel.TextSize = 9
+
+	hintOffset := op.Offset(image.Pt(popupX+4, popupY+popupHeight+2)).Push(gtx.Ops)
+	hintLabel.Layout(gtx)
+	hintOffset.Pop()
+}
+
+// drawDiagnosticsList draws the diagnostics list at the bottom of the screen.
+func (s *appState) drawDiagnosticsList(gtx layout.Context) {
+	if !s.diagnosticsListActive || len(s.diagnosticsListItems) == 0 {
+		return
+	}
+
+	itemHeight := 24
+	maxVisible := 10
+	padding := 4
+
+	visibleItems := len(s.diagnosticsListItems)
+	if visibleItems > maxVisible {
+		visibleItems = maxVisible
+	}
+
+	listHeight := visibleItems*itemHeight + padding*2 + 20 // Extra for header
+
+	// Draw at bottom of screen
+	listY := gtx.Constraints.Max.Y - listHeight
+	listWidth := gtx.Constraints.Max.X
+
+	// Draw background
+	bgRect := clip.Rect{
+		Min: image.Pt(0, listY),
+		Max: image.Pt(listWidth, gtx.Constraints.Max.Y),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: referencesBgColor}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	bgRect.Pop()
+
+	// Draw separator
+	sepRect := clip.Rect{
+		Min: image.Pt(0, listY),
+		Max: image.Pt(listWidth, listY+1),
+	}.Push(gtx.Ops)
+	paint.ColorOp{Color: paneSeparator}.Add(gtx.Ops)
+	paint.PaintOp{}.Add(gtx.Ops)
+	sepRect.Pop()
+
+	// Draw header
+	headerText := fmt.Sprintf("Diagnostics (%d) - j/k: navigate, Enter: jump, Esc: close", len(s.diagnosticsListItems))
+	headerLabel := material.Body2(s.theme, headerText)
+	headerLabel.Font.Typeface = "JetBrainsMono Nerd Font"
+	headerLabel.Color = color.NRGBA{R: 0xa0, G: 0xa0, B: 0xa0, A: 0xff}
+	headerLabel.TextSize = 11
+	headerOffset := op.Offset(image.Pt(8, listY+4)).Push(gtx.Ops)
+	headerLabel.Layout(gtx)
+	headerOffset.Pop()
+
+	// Calculate scroll position
+	startIdx := 0
+	if s.diagnosticsListIndex >= maxVisible {
+		startIdx = s.diagnosticsListIndex - maxVisible + 1
+	}
+
+	// Draw items
+	for i := 0; i < visibleItems && startIdx+i < len(s.diagnosticsListItems); i++ {
+		itemIdx := startIdx + i
+		diag := s.diagnosticsListItems[itemIdx]
+		itemY := listY + 20 + padding + i*itemHeight
+
+		// Highlight selected
+		if itemIdx == s.diagnosticsListIndex {
+			selRect := clip.Rect{
+				Min: image.Pt(2, itemY),
+				Max: image.Pt(listWidth-2, itemY+itemHeight),
+			}.Push(gtx.Ops)
+			paint.ColorOp{Color: completionSelectedColor}.Add(gtx.Ops)
+			paint.PaintOp{}.Add(gtx.Ops)
+			selRect.Pop()
+		}
+
+		// Severity icon and color
+		var icon string
+		var textColor color.NRGBA
+		switch diag.Severity {
+		case lsp.DiagnosticSeverityError:
+			icon = "E"
+			textColor = color.NRGBA{R: 0xff, G: 0x60, B: 0x60, A: 0xff}
+		case lsp.DiagnosticSeverityWarning:
+			icon = "W"
+			textColor = color.NRGBA{R: 0xff, G: 0xcc, B: 0x00, A: 0xff}
+		case lsp.DiagnosticSeverityInformation:
+			icon = "I"
+			textColor = color.NRGBA{R: 0x60, G: 0xb0, B: 0xff, A: 0xff}
+		case lsp.DiagnosticSeverityHint:
+			icon = "H"
+			textColor = color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xff}
+		default:
+			icon = "?"
+			textColor = color.NRGBA{R: 0xe0, G: 0xe0, B: 0xe0, A: 0xff}
+		}
+
+		// Format: "[E] L12:C4 message"
+		line := diag.Range.Start.Line + 1
+		col := diag.Range.Start.Character + 1
+		message := truncateString(diag.Message, 80)
+		text := fmt.Sprintf("[%s] L%d:C%d %s", icon, line, col, message)
+
+		label := material.Body2(s.theme, text)
+		label.Font.Typeface = "JetBrainsMono Nerd Font"
+		label.Font.Weight = font.Normal
+		label.Color = textColor
+		label.TextSize = 12
+
+		offset := op.Offset(image.Pt(8, itemY+4)).Push(gtx.Ops)
+		label.Layout(gtx)
+		offset.Pop()
+	}
 }

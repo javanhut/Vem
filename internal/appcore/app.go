@@ -167,10 +167,12 @@ type appState struct {
 	viewportTopLine   int // First visible line in viewport (0-based)
 	scrollOffsetLines int // Context lines around cursor (Vim's scrolloff)
 	listPosition      layout.List
+	cachedLineHeight  int // Cached line height in pixels for scrolling calculations
 
 	// Syntax highlighting state
 	syntaxHighlighters map[int]*syntax.Highlighter // Map from buffer index to highlighter
 	syntaxEnabled      bool                        // Global toggle for syntax highlighting
+	currentTheme       string                      // Current color theme name
 
 	// Terminal state
 	terminals          map[int]*terminal.Terminal // Map from buffer index to terminal
@@ -214,10 +216,33 @@ type appState struct {
 	referencesItems  []lsp.Location
 	referencesIndex  int
 
+	// Diagnostics list state
+	diagnosticsListActive bool
+	diagnosticsListItems  []lsp.Diagnostic
+	diagnosticsListIndex  int
+	diagnosticsListFile   string
+
 	// LSP Code Actions state
 	codeActionsActive bool
 	codeActionItems   []lsp.CodeAction
 	codeActionIndex   int
+
+	// Buffer word completion state (Ctrl+N style)
+	bufferCompletionActive bool
+	bufferCompletionItems  []string
+	bufferCompletionIndex  int
+	bufferCompletionPrefix string
+
+	// Command path completion state
+	cmdCompletionActive  bool
+	cmdCompletionItems   []string
+	cmdCompletionIndex   int
+	cmdCompletionPrefix  string
+	cmdCompletionReverse bool // For Shift+Tab
+
+	// Status line git branch cache
+	gitBranch          string
+	gitBranchLastCheck time.Time
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -363,6 +388,7 @@ func newAppState(filePaths []string) *appState {
 		listPosition:         layout.List{Axis: layout.Vertical},
 		syntaxHighlighters:   make(map[int]*syntax.Highlighter),
 		syntaxEnabled:        true,
+		currentTheme:         "monokai",
 		terminals:            make(map[int]*terminal.Terminal),
 		terminalViewports:    make(map[int]int),
 		terminalAutoScroll:   make(map[int]bool),
@@ -502,6 +528,10 @@ func (s *appState) getOrCreateHighlighter() *syntax.Highlighter {
 
 	// Create syntax highlighter for this file
 	highlighter := syntax.NewHighlighter(filePath)
+	// Apply current theme
+	if s.currentTheme != "" {
+		highlighter.SetTheme(s.currentTheme)
+	}
 	s.syntaxHighlighters[bufferIndex] = highlighter
 	return highlighter
 }
@@ -553,6 +583,9 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return s.drawHeader(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawTabBar(gtx)
 		}),
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if s.explorerVisible && s.fileTree != nil {
@@ -752,6 +785,101 @@ func (s *appState) drawHeader(gtx layout.Context) layout.Dimensions {
 	return inset.Layout(gtx, label.Layout)
 }
 
+// drawTabBar draws a tab bar showing all open buffers.
+// Only shows when there are multiple buffers open.
+func (s *appState) drawTabBar(gtx layout.Context) layout.Dimensions {
+	if s.bufferMgr == nil || s.bufferMgr.BufferCount() <= 1 {
+		return layout.Dimensions{}
+	}
+
+	// Tab bar background
+	tabBarBg := color.NRGBA{R: 30, G: 30, B: 35, A: 255}
+
+	// Tab colors
+	activeTabBg := color.NRGBA{R: 50, G: 50, B: 60, A: 255}
+	inactiveTabBg := color.NRGBA{R: 35, G: 35, B: 40, A: 255}
+	activeTabColor := color.NRGBA{R: 220, G: 220, B: 220, A: 255}
+	inactiveTabColor := color.NRGBA{R: 140, G: 140, B: 140, A: 255}
+	modifiedColor := color.NRGBA{R: 230, G: 180, B: 80, A: 255}
+
+	tabHeight := gtx.Dp(unit.Dp(28))
+	padding := gtx.Dp(unit.Dp(8))
+
+	// Draw background
+	rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, tabHeight)}
+	paint.FillShape(gtx.Ops, tabBarBg, rect.Op())
+
+	// Draw tabs
+	activeIndex := s.bufferMgr.ActiveIndex()
+	offsetX := padding
+
+	for i := 0; i < s.bufferMgr.BufferCount(); i++ {
+		buf := s.bufferMgr.GetBuffer(i)
+		if buf == nil {
+			continue
+		}
+
+		// Get buffer name
+		name := buf.FilePath()
+		if name == "" {
+			if buf.IsTerminal() {
+				name = "[Terminal]"
+			} else {
+				name = "[No Name]"
+			}
+		} else {
+			// Show only filename
+			parts := strings.Split(name, "/")
+			name = parts[len(parts)-1]
+		}
+
+		// Add modified indicator
+		if buf.Modified() {
+			name = name + " [+]"
+		}
+
+		isActive := i == activeIndex
+		var bgColor, textColor color.NRGBA
+		if isActive {
+			bgColor = activeTabBg
+			textColor = activeTabColor
+		} else {
+			bgColor = inactiveTabBg
+			textColor = inactiveTabColor
+		}
+
+		// Modified buffers get special color
+		if buf.Modified() {
+			textColor = modifiedColor
+		}
+
+		// Measure text width
+		label := material.Body2(s.theme, name)
+		label.Color = textColor
+		macro := op.Record(gtx.Ops)
+		dims := label.Layout(gtx)
+		call := macro.Stop()
+
+		tabWidth := dims.Size.X + padding*2
+
+		// Draw tab background
+		tabRect := clip.Rect{
+			Min: image.Pt(offsetX, 2),
+			Max: image.Pt(offsetX+tabWidth, tabHeight-2),
+		}
+		paint.FillShape(gtx.Ops, bgColor, tabRect.Op())
+
+		// Draw tab text
+		stack := op.Offset(image.Pt(offsetX+padding, (tabHeight-dims.Size.Y)/2)).Push(gtx.Ops)
+		call.Add(gtx.Ops)
+		stack.Pop()
+
+		offsetX += tabWidth + 4 // Gap between tabs
+	}
+
+	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, tabHeight)}
+}
+
 func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dimensions {
 	buf := s.activeBuffer()
 	lines := buf.LineCount()
@@ -759,12 +887,21 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	selStart, selEnd, hasSel := s.visualSelectionRange()
 	cursorCol := buf.Cursor().Col
 
-	// Calculate approximate lines per page for viewport scrolling
-	// Use a rough estimate: line height ~20dp, inset ~16dp top+bottom
-	lineHeightDp := 20
+	// Measure and cache line height for accurate scrolling
+	measuredHeight := s.measureLineHeight(gtx)
+	if measuredHeight > 0 {
+		s.cachedLineHeight = measuredHeight
+	}
+
+	// Calculate lines per page using actual line height
+	lineHeight := s.cachedLineHeight
+	if lineHeight <= 0 {
+		lineHeight = gtx.Dp(unit.Dp(20)) // Fallback
+	}
+
 	insetDp := 32
 	availableHeight := gtx.Constraints.Max.Y - gtx.Dp(unit.Dp(insetDp))
-	linesPerPage := availableHeight / gtx.Dp(unit.Dp(lineHeightDp))
+	linesPerPage := availableHeight / lineHeight
 	if linesPerPage < 1 {
 		linesPerPage = 1
 	}
@@ -772,9 +909,10 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	// Ensure cursor is visible in viewport
 	s.ensureCursorVisible(linesPerPage)
 
-	// Set scroll position to viewport top line
+	// Set scroll position to viewport top line - force the list to this position
 	s.listPosition.Position.First = s.viewportTopLine
 	s.listPosition.Position.Offset = 0
+	s.listPosition.Position.BeforeEnd = true // Ensure we're scrolling from the start
 
 	// Draw focus border on the left edge if editor is focused (not in explorer mode)
 	editorFocused := !s.explorerFocused && s.explorerVisible
@@ -802,9 +940,9 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	})
 
 	if showOverlays {
-		lineHeight := s.measureLineHeight(gtx)
-		if lineHeight <= 0 {
-			lineHeight = gtx.Dp(unit.Dp(lineHeightDp))
+		overlayLineHeight := s.cachedLineHeight
+		if overlayLineHeight <= 0 {
+			overlayLineHeight = gtx.Dp(unit.Dp(20))
 		}
 
 		visibleLine := cursorLine - s.viewportTopLine
@@ -812,13 +950,18 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 			gutter := fmt.Sprintf("%4d  ", cursorLine+1)
 			prefix := buf.LinePrefix(cursorLine, cursorCol)
 			cursorX := gtx.Dp(inset.Left) + s.measureTextWidth(gtx, gutter) + s.measureTextWidth(gtx, prefix)
-			cursorY := gtx.Dp(inset.Top) + visibleLine*lineHeight
+			cursorY := gtx.Dp(inset.Top) + visibleLine*overlayLineHeight
 			s.drawCompletionMenu(gtx, cursorX, cursorY)
+			s.drawBufferCompletionMenu(gtx, cursorX, cursorY)
 			s.drawHoverTooltip(gtx, cursorX, cursorY)
 		}
 
 		if s.referencesActive {
 			s.drawReferencesList(gtx)
+		}
+
+		if s.diagnosticsListActive {
+			s.drawDiagnosticsList(gtx)
 		}
 	}
 
@@ -1051,6 +1194,12 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 				readOnlyFlag = " [RO]"
 			}
 
+			// Add large file indicator
+			largeFileFlag := ""
+			if buf.IsLargeFile() {
+				largeFileFlag = " [Large]"
+			}
+
 			// Add pane information
 			paneInfo := ""
 			if s.paneManager != nil && s.paneManager.PaneCount() > 1 {
@@ -1083,8 +1232,27 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 				hint = " | HINT: " + s.lspHint
 			}
 
-			status = fmt.Sprintf("MODE %s | FILE %s%s%s | CURSOR %d:%d%s%s%s | %s%s",
-				s.mode, fileName, modFlag, readOnlyFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, s.status, hint,
+			// Git branch info
+			gitInfo := ""
+			if branch := s.getGitBranch(); branch != "" {
+				gitInfo = fmt.Sprintf(" | GIT %s", branch)
+			}
+
+			// LSP status
+			lspInfo := ""
+			if lspStatus := s.getLSPStatus(); lspStatus != "" {
+				lspInfo = fmt.Sprintf(" | %s", lspStatus)
+			}
+
+			// Diagnostics count
+			diagInfo := ""
+			errors, warnings := s.getDiagnosticCounts()
+			if errors > 0 || warnings > 0 {
+				diagInfo = fmt.Sprintf(" | E:%d W:%d", errors, warnings)
+			}
+
+			status = fmt.Sprintf("MODE %s | FILE %s%s%s%s | CURSOR %d:%d%s%s%s%s%s%s | %s%s",
+				s.mode, fileName, modFlag, readOnlyFlag, largeFileFlag, cur.Line+1, cur.Col+1, paneInfo, fullscreenInfo, zoomInfo, gitInfo, lspInfo, diagInfo, s.status, hint,
 			)
 		}
 	}
@@ -1105,6 +1273,73 @@ func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
 	return layout.Dimensions{
 		Size: image.Pt(gtx.Constraints.Max.X, dims.Size.Y),
 	}
+}
+
+// getGitBranch returns the current git branch, cached for 5 seconds.
+func (s *appState) getGitBranch() string {
+	// Cache for 5 seconds to avoid running git too often
+	if time.Since(s.gitBranchLastCheck) < 5*time.Second && s.gitBranch != "" {
+		return s.gitBranch
+	}
+
+	cmd := exec.Command("git", "branch", "--show-current")
+	output, err := cmd.Output()
+	if err != nil {
+		s.gitBranch = ""
+		s.gitBranchLastCheck = time.Now()
+		return ""
+	}
+
+	s.gitBranch = strings.TrimSpace(string(output))
+	s.gitBranchLastCheck = time.Now()
+	return s.gitBranch
+}
+
+// getDiagnosticCounts returns error and warning counts for the current file.
+func (s *appState) getDiagnosticCounts() (errors, warnings int) {
+	buf := s.activeBuffer()
+	if buf == nil || s.lspManager == nil {
+		return 0, 0
+	}
+
+	filePath := buf.FilePath()
+	if filePath == "" {
+		return 0, 0
+	}
+
+	diagnostics := s.lspManager.GetDiagnostics(filePath)
+	for _, d := range diagnostics {
+		switch d.Severity {
+		case lsp.DiagnosticSeverityError:
+			errors++
+		case lsp.DiagnosticSeverityWarning:
+			warnings++
+		}
+	}
+	return errors, warnings
+}
+
+// getLSPStatus returns the LSP connection status for the current file.
+func (s *appState) getLSPStatus() string {
+	if !s.lspEnabled || s.lspManager == nil {
+		return ""
+	}
+
+	buf := s.activeBuffer()
+	if buf == nil {
+		return ""
+	}
+
+	filePath := buf.FilePath()
+	if filePath == "" {
+		return ""
+	}
+
+	// Check if LSP is active for this file type
+	if s.lspManager.HasServerForFile(filePath) {
+		return "LSP"
+	}
+	return ""
 }
 
 func (s *appState) drawFuzzyFinder(gtx layout.Context) layout.Dimensions {
@@ -1593,6 +1828,11 @@ func (s *appState) handleVisualModeSpecial(ev key.Event) bool {
 }
 
 func (s *appState) moveCursor(direction string) {
+	// Cancel buffer completion when cursor moves
+	if s.bufferCompletionActive {
+		s.handleBufferCompletionCancel()
+	}
+
 	var moved bool
 	switch direction {
 	case "left":
@@ -2499,6 +2739,8 @@ func (s *appState) appendCommandText(text string) {
 	if text == "" {
 		return
 	}
+	// Cancel completion when user types
+	s.cancelCommandCompletion()
 	for _, r := range text {
 		if r == '\n' || r == '\r' {
 			continue
@@ -2508,6 +2750,8 @@ func (s *appState) appendCommandText(text string) {
 }
 
 func (s *appState) deleteCommandChar() {
+	// Cancel completion when user deletes
+	s.cancelCommandCompletion()
 	if s.cmdText == "" {
 		return
 	}
@@ -2585,6 +2829,12 @@ func (s *appState) executeCommandLine() {
 		s.handleInstallCommand(strings.TrimSpace(args))
 	case "lspauto":
 		s.handleLSPAutoCommand(strings.TrimSpace(args))
+	case "theme":
+		s.handleThemeCommand(strings.TrimSpace(args))
+	case "themes":
+		s.handleListThemesCommand()
+	case "diagnostics", "diag":
+		s.handleDiagnosticsListCommand()
 	default:
 		// Try LSP commands
 		if s.processLSPCommand(name, args) {
@@ -2864,6 +3114,125 @@ func (s *appState) handleBufferDeleteCommand(force bool) {
 func (s *appState) handleListBuffersCommand() {
 	buffers := s.bufferMgr.ListBuffers()
 	s.status = fmt.Sprintf("Buffers: %s", strings.Join(buffers, " | "))
+}
+
+func (s *appState) handleThemeCommand(themeName string) {
+	if themeName == "" {
+		// Show current theme
+		if len(s.syntaxHighlighters) > 0 {
+			for _, h := range s.syntaxHighlighters {
+				s.status = fmt.Sprintf("Current theme: %s", h.GetThemeName())
+				return
+			}
+		}
+		s.status = "No theme set (use :theme <name> to set)"
+		return
+	}
+
+	// Validate theme exists
+	available := syntax.ListAvailableThemes()
+	found := false
+	for _, t := range available {
+		if t == themeName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.status = fmt.Sprintf("Unknown theme: %s (use :themes to list available)", themeName)
+		return
+	}
+
+	// Apply theme to all highlighters
+	for _, h := range s.syntaxHighlighters {
+		h.SetTheme(themeName)
+	}
+
+	// Store current theme for new buffers
+	s.currentTheme = themeName
+
+	s.status = fmt.Sprintf("Theme set to: %s", themeName)
+}
+
+func (s *appState) handleListThemesCommand() {
+	// Show recommended themes
+	recommended := syntax.PresetThemes
+	s.status = fmt.Sprintf("Themes: %s", strings.Join(recommended, ", "))
+}
+
+func (s *appState) handleDiagnosticsListCommand() {
+	buf := s.activeBuffer()
+	if buf == nil {
+		s.status = "No active buffer"
+		return
+	}
+
+	if s.lspManager == nil {
+		s.status = "LSP not available"
+		return
+	}
+
+	filePath := buf.FilePath()
+	if filePath == "" {
+		s.status = "No file path for current buffer"
+		return
+	}
+
+	diagnostics := s.lspManager.GetDiagnostics(filePath)
+	if len(diagnostics) == 0 {
+		s.status = "No diagnostics for this file"
+		return
+	}
+
+	s.diagnosticsListItems = diagnostics
+	s.diagnosticsListIndex = 0
+	s.diagnosticsListFile = filePath
+	s.diagnosticsListActive = true
+	s.status = fmt.Sprintf("Showing %d diagnostics", len(diagnostics))
+}
+
+func (s *appState) handleDiagnosticsListNext() {
+	if !s.diagnosticsListActive || len(s.diagnosticsListItems) == 0 {
+		return
+	}
+	s.diagnosticsListIndex = (s.diagnosticsListIndex + 1) % len(s.diagnosticsListItems)
+}
+
+func (s *appState) handleDiagnosticsListPrev() {
+	if !s.diagnosticsListActive || len(s.diagnosticsListItems) == 0 {
+		return
+	}
+	s.diagnosticsListIndex--
+	if s.diagnosticsListIndex < 0 {
+		s.diagnosticsListIndex = len(s.diagnosticsListItems) - 1
+	}
+}
+
+func (s *appState) handleDiagnosticsListOpen() {
+	if !s.diagnosticsListActive || len(s.diagnosticsListItems) == 0 {
+		return
+	}
+
+	diag := s.diagnosticsListItems[s.diagnosticsListIndex]
+
+	// Jump to the diagnostic location
+	buf := s.activeBuffer()
+	if buf != nil {
+		buf.MoveToLine(diag.Range.Start.Line)
+		// Move to column
+		for i := 0; i < diag.Range.Start.Character && buf.Cursor().Col < diag.Range.Start.Character; i++ {
+			buf.MoveRight()
+		}
+		s.ensureCursorVisible(20) // Approximate lines per page
+	}
+
+	s.diagnosticsListActive = false
+	s.status = diag.Message
+}
+
+func (s *appState) handleDiagnosticsListClose() {
+	s.diagnosticsListActive = false
+	s.diagnosticsListItems = nil
 }
 
 func (s *appState) handleChangeDirectoryCommand(path string) {
@@ -3150,9 +3519,79 @@ func (s *appState) insertText(text string) {
 	// Debug: Log buffer content and cursor position after insertion
 	s.setCursorStatus(fmt.Sprintf("Insert %q", text))
 
-	if s.mode == modeInsert {
-		s.maybeTriggerLSPCompletion(text)
+	// Cancel buffer completion when user types (will be re-triggered if needed)
+	if s.bufferCompletionActive {
+		s.handleBufferCompletionCancel()
 	}
+
+	if s.mode == modeInsert {
+		// Try to trigger auto-completion
+		s.maybeTriggerAutoCompletion(text)
+	}
+}
+
+// maybeTriggerAutoCompletion tries LSP completion first, falls back to buffer completion
+func (s *appState) maybeTriggerAutoCompletion(text string) {
+	if text == "" {
+		return
+	}
+
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+
+	// Check if this is a word character (for completion triggering)
+	runes := []rune(text)
+	last := runes[len(runes)-1]
+	if last == '\n' || last == '\r' || unicode.IsSpace(last) {
+		s.completionActive = false
+		s.completionItems = nil
+		s.bufferCompletionActive = false
+		return
+	}
+
+	// Check if LSP is available for this file
+	lspAvailable := s.lspEnabled && s.lspManager != nil &&
+		buf.FilePath() != "" &&
+		s.lspManager.IsServerRunningForFile(buf.FilePath())
+
+	if lspAvailable {
+		// Use LSP completion
+		s.maybeTriggerLSPCompletion(text)
+	} else if isWordChar(last) {
+		// No LSP available, use buffer word completion
+		s.maybeTriggerBufferCompletion()
+	}
+}
+
+// maybeTriggerBufferCompletion triggers buffer completion if conditions are met
+func (s *appState) maybeTriggerBufferCompletion() {
+	buf := s.activeBuffer()
+	if buf == nil {
+		return
+	}
+
+	// Get the word prefix at cursor
+	prefix := buf.GetCurrentWordPrefix()
+	if len(prefix) < 2 {
+		// Need at least 2 characters to trigger
+		s.bufferCompletionActive = false
+		return
+	}
+
+	// Get matching words from buffer
+	matches := buf.GetWordsMatching(prefix)
+	if len(matches) == 0 {
+		s.bufferCompletionActive = false
+		return
+	}
+
+	// Activate buffer completion
+	s.bufferCompletionActive = true
+	s.bufferCompletionItems = matches
+	s.bufferCompletionIndex = 0
+	s.bufferCompletionPrefix = prefix
 }
 
 func (s *appState) saveBufferToFile(path string) error {

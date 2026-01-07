@@ -23,15 +23,16 @@ type UndoEntry struct {
 
 // Buffer represents an in-memory text buffer with a Vim-style cursor.
 type Buffer struct {
-	lines      []string
-	cursor     Cursor
-	filePath   string
-	modified   bool
-	undoStack  []UndoEntry
-	maxUndos   int
-	bufferType BufferType
-	terminal   interface{} // *terminal.Terminal (avoid import cycle)
-	readOnly   bool        // Prevent edits if true (for help, etc.)
+	lines       []string
+	cursor      Cursor
+	filePath    string
+	modified    bool
+	undoStack   []UndoEntry
+	maxUndos    int
+	bufferType  BufferType
+	terminal    interface{} // *terminal.Terminal (avoid import cycle)
+	readOnly    bool        // Prevent edits if true (for help, etc.)
+	isLargeFile bool        // File is > 5MB (show warning in status bar)
 
 	// LSP integration
 	lspOnChange func(content string) // Callback for LSP change notification
@@ -645,6 +646,16 @@ func (b *Buffer) IsReadOnly() bool {
 	return b.readOnly
 }
 
+// SetLargeFile marks the buffer as containing a large file.
+func (b *Buffer) SetLargeFile(large bool) {
+	b.isLargeFile = large
+}
+
+// IsLargeFile returns whether the buffer contains a large file (> 5MB).
+func (b *Buffer) IsLargeFile() bool {
+	return b.isLargeFile
+}
+
 // LoadFromFile loads the buffer content from a file.
 func (b *Buffer) LoadFromFile(path string) error {
 	content, err := os.ReadFile(path)
@@ -884,4 +895,114 @@ func (b *Buffer) SetTerminal(term interface{}) {
 // IsTerminal returns whether this is a terminal buffer
 func (b *Buffer) IsTerminal() bool {
 	return b.bufferType == BufferTypeTerminal
+}
+
+// GetCurrentWordPrefix returns the word being typed at the cursor position.
+// Returns empty string if cursor is not at or after a word.
+func (b *Buffer) GetCurrentWordPrefix() string {
+	if b.cursor.Line < 0 || b.cursor.Line >= len(b.lines) {
+		return ""
+	}
+
+	line := b.lines[b.cursor.Line]
+	runes := []rune(line)
+
+	if b.cursor.Col <= 0 || b.cursor.Col > len(runes) {
+		return ""
+	}
+
+	// Find start of current word
+	start := b.cursor.Col
+	for start > 0 && isWordRune(runes[start-1]) {
+		start--
+	}
+
+	if start == b.cursor.Col {
+		return "" // Cursor not at a word
+	}
+
+	return string(runes[start:b.cursor.Col])
+}
+
+// GetWordsMatching returns all unique words in the buffer that start with the given prefix.
+// Words are returned sorted by frequency (most common first), then alphabetically.
+func (b *Buffer) GetWordsMatching(prefix string) []string {
+	if prefix == "" {
+		return nil
+	}
+
+	prefixLower := strings.ToLower(prefix)
+	wordCounts := make(map[string]int)
+
+	for _, line := range b.lines {
+		words := extractWords(line)
+		for _, word := range words {
+			if len(word) > len(prefix) && strings.HasPrefix(strings.ToLower(word), prefixLower) {
+				wordCounts[word]++
+			}
+		}
+	}
+
+	// Convert to slice and sort by frequency, then alphabetically
+	type wordFreq struct {
+		word  string
+		count int
+	}
+	var wf []wordFreq
+	for word, count := range wordCounts {
+		wf = append(wf, wordFreq{word, count})
+	}
+
+	// Sort: higher frequency first, then alphabetically
+	for i := 0; i < len(wf); i++ {
+		for j := i + 1; j < len(wf); j++ {
+			if wf[j].count > wf[i].count || (wf[j].count == wf[i].count && wf[j].word < wf[i].word) {
+				wf[i], wf[j] = wf[j], wf[i]
+			}
+		}
+	}
+
+	result := make([]string, len(wf))
+	for i, w := range wf {
+		result[i] = w.word
+	}
+	return result
+}
+
+// isWordRune returns true if the rune is part of a word (alphanumeric or underscore)
+func isWordRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
+}
+
+// extractWords extracts all words from a line
+func extractWords(line string) []string {
+	var words []string
+	runes := []rune(line)
+	start := -1
+
+	for i, r := range runes {
+		if isWordRune(r) {
+			if start == -1 {
+				start = i
+			}
+		} else {
+			if start != -1 {
+				word := string(runes[start:i])
+				if len(word) >= 2 { // Only include words with 2+ chars
+					words = append(words, word)
+				}
+				start = -1
+			}
+		}
+	}
+
+	// Handle word at end of line
+	if start != -1 {
+		word := string(runes[start:])
+		if len(word) >= 2 {
+			words = append(words, word)
+		}
+	}
+
+	return words
 }

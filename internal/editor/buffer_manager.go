@@ -79,6 +79,12 @@ func (bm *BufferManager) GetBufferByPath(path string) *Buffer {
 
 // OpenFile opens a file into a new or existing buffer and makes it active.
 // If the file is already open, it switches to that buffer instead.
+// Large file thresholds
+const (
+	LargeFileWarningBytes = 5 * 1024 * 1024  // 5MB - warn
+	LargeFileRejectBytes  = 50 * 1024 * 1024 // 50MB - reject
+)
+
 func (bm *BufferManager) OpenFile(path string) (*Buffer, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -97,7 +103,8 @@ func (bm *BufferManager) OpenFile(path string) (*Buffer, error) {
 	}
 
 	// Check if file exists
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+	stat, err := os.Stat(absPath)
+	if os.IsNotExist(err) {
 		// Create new empty buffer for new file
 		buf := NewBuffer("")
 		buf.SetFilePath(absPath)
@@ -105,10 +112,25 @@ func (bm *BufferManager) OpenFile(path string) (*Buffer, error) {
 		return bm.addBuffer(buf), nil
 	}
 
+	if err != nil {
+		return nil, err
+	}
+
+	// Check file size
+	fileSize := stat.Size()
+	if fileSize > LargeFileRejectBytes {
+		return nil, fmt.Errorf("file too large (%.1fMB > 50MB limit)", float64(fileSize)/(1024*1024))
+	}
+
 	// Load existing file
 	buf, err := NewBufferFromFile(absPath)
 	if err != nil {
 		return nil, err
+	}
+
+	// Mark as large file if > 5MB
+	if fileSize > LargeFileWarningBytes {
+		buf.SetLargeFile(true)
 	}
 
 	return bm.addBuffer(buf), nil
