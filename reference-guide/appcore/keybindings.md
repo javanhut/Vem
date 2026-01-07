@@ -209,5 +209,9 @@ Modifier key matching with platform quirk handling.
    - Fixed `skipNextEdit` flag race condition for Tab key in INSERT mode
    - Flag is now set BEFORE action processing to prevent duplicate tab insertion
 
+4. **Cursor Positioning Fix**
+   - Fixed visual cursor offset caused by measuring prefix as single string vs rendering tokens separately
+   - New `drawCursorAtX()` function uses pre-calculated X position from accumulated token widths
+
 ---
-*Last Updated: After Tab key fix and soft wrap implementation*
+*Last Updated: After cursor positioning fix*

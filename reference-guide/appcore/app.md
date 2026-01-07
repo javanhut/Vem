@@ -281,5 +281,12 @@ softWrapEnabled      bool     // Soft wrap long lines to viewport width
 - Line numbers shown only on first segment
 - Cursor properly positioned within wrapped segments
 
+### Cursor Positioning Fix
+- **Problem**: Cursor was visually offset from actual character position due to measuring prefix as one string while rendering tokens separately (font kerning differences)
+- **Solution**: Token-based cursor positioning that accumulates actual rendered token widths
+- `drawCursorAtX()` - New function that draws cursor at pre-calculated X position
+- `drawBufferLine()` - Tracks cursor X by summing token widths during rendering
+- `drawBufferLineWrapped()` - Same token-based tracking for wrapped segments
+
 ---
-*Last Updated: After format on save and soft wrap implementation*
+*Last Updated: After cursor positioning fix*

@@ -46,11 +46,18 @@ type KeyBinding struct {
 
 ## Known Issues Summary
 
-1. **app.go:650** - `os.ReadFile()` loads entire file into memory (large file problem)
-2. **keybindings.go:257** - `u` key not bound to undo in Normal mode
+1. ~~**app.go:650** - `os.ReadFile()` loads entire file into memory~~ MITIGATED - Large files >5MB show warning, >50MB rejected
+2. ~~**keybindings.go:257** - `u` key not bound to undo in Normal mode~~ FIXED
 3. **pane_actions.go:16-48** - Debug print statements should be removed
 4. **pane_actions.go:349-350** - j/k inverted for vertical resize
 5. **lsp_rendering.go:533** - Hardcoded 8px character width
+
+## Recent Fixes
+
+- **Cursor positioning** - Fixed visual offset caused by token-based rendering vs single-string measurement
+- **Tab key stuck** - Fixed `skipNextEdit` timing race condition
+- **Format on save** - Added `:formatonsave` and `:format` commands
+- **Soft wrap** - Added `:wrap` command for dynamic text wrapping
 
 ## Architecture
 
