@@ -253,6 +253,16 @@ New status components:
 7. **Automatic Completion** - `maybeTriggerAutoCompletion()` falls back to buffer completion when LSP unavailable
 8. **Improved Viewport Scrolling** - Uses `cachedLineHeight` for accurate scroll calculations
 9. **Command Path Completion** - Tab completion for `:cd`, `:e`, `:w` paths (see `command_completion.go`)
+10. **Format on Save** - `:formatonsave on/off` toggle and `:format` manual command for LSP formatting
+11. **Soft Wrap** - `:wrap` toggle for dynamic text wrapping to viewport width
+12. **Tab Key Fix** - Fixed `skipNextEdit` timing race to prevent double key presses
+
+### New Commands
+| Command | Description |
+|---------|-------------|
+| `:formatonsave on/off` | Toggle LSP format on save |
+| `:format` or `:fmt` | Manual LSP format current buffer |
+| `:wrap` or `:wrap on/off` | Toggle soft wrap (no arg toggles) |
 
 ### New State Fields
 ```go
@@ -261,7 +271,15 @@ cmdCompletionActive  bool     // Command mode path completion state
 cmdCompletionItems   []string
 cmdCompletionIndex   int
 cmdCompletionPrefix  string
+formatOnSave         bool     // Auto-format on save when LSP available
+softWrapEnabled      bool     // Soft wrap long lines to viewport width
 ```
 
+### Soft Wrap Implementation
+- `wrapLine()` function splits lines into segments based on visual width
+- `drawBufferLineWrapped()` renders wrapped segments with continuation indicators (`↪`)
+- Line numbers shown only on first segment
+- Cursor properly positioned within wrapped segments
+
 ---
-*Last Updated: After automatic completion and path completion implementation*
+*Last Updated: After format on save and soft wrap implementation*

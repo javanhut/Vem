@@ -243,6 +243,12 @@ type appState struct {
 	// Status line git branch cache
 	gitBranch          string
 	gitBranchLastCheck time.Time
+
+	// Format on save
+	formatOnSave bool
+
+	// Soft wrap
+	softWrapEnabled bool
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -973,13 +979,17 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	// Get the line text
 	lineText := s.activeBuffer().Line(index)
 	gutter := fmt.Sprintf("%4d  ", index+1)
+	gutterExpanded := expandTabs(gutter, tabWidth)
+	gutterWidth := s.measureTextWidth(gtx, gutterExpanded)
+
+	// Check if soft wrap is enabled
+	if s.softWrapEnabled {
+		return s.drawBufferLineWrapped(gtx, index, lineText, gutter, gutterExpanded, gutterWidth, cursorLine, cursorCol, selStart, selEnd, hasSel, showOverlays)
+	}
 
 	// Get syntax highlighter and tokenize the line
 	highlighter := s.getOrCreateHighlighter()
 	tokens := highlighter.HighlightLine(index, lineText)
-
-	// Expand tabs in gutter (tabs should not affect content column tracking).
-	gutterExpanded := expandTabs(gutter, tabWidth)
 
 	// Create flex children for gutter + tokens
 	var flexChildren []layout.FlexChild
@@ -992,12 +1002,38 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 		return label.Layout(gtx)
 	}))
 
+	// Track cursor X position by accumulating token widths
+	// This ensures cursor position matches actual rendered token positions
+	cursorX := gutterWidth
+	runesSoFar := 0
+	cursorXFound := false
+
 	// Add each token as a flex child with its color.
 	contentCol := 0
 	for _, token := range tokens {
 		// Capture token in closure
 		t := token
 		tokenText, nextCol := expandTabsWithColumn(t.Text, tabWidth, contentCol)
+		tokenRuneCount := len([]rune(t.Text))
+
+		// Check if cursor is within this token
+		if index == cursorLine && !cursorXFound {
+			if runesSoFar+tokenRuneCount >= cursorCol {
+				// Cursor is within this token
+				runesIntoToken := cursorCol - runesSoFar
+				if runesIntoToken > 0 {
+					// Measure partial token up to cursor
+					partialText := string([]rune(t.Text)[:runesIntoToken])
+					partialExpanded, _ := expandTabsWithColumn(partialText, tabWidth, contentCol)
+					cursorX += s.measureTextWidth(gtx, partialExpanded)
+				}
+				cursorXFound = true
+			} else {
+				// Cursor is after this token, add full token width
+				cursorX += s.measureTextWidth(gtx, tokenText)
+			}
+		}
+		runesSoFar += tokenRuneCount
 		contentCol = nextCol
 
 		flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -1037,17 +1073,172 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	// Draw the text on top
 	call.Add(gtx.Ops)
 
-	gutterWidth := s.measureTextWidth(gtx, gutterExpanded)
 	s.drawDiagnosticUnderlines(gtx, s.activeBuffer(), index, gutterWidth, 0, dims.Size.Y)
 
 	// Draw cursor if on cursor line
 	if showOverlays && index == cursorLine {
-		prefix := s.activeBuffer().LinePrefix(index, cursorCol)
 		charUnder := s.getCharAtCursor(index, cursorCol)
-		s.drawCursor(gtx, gutter, prefix, charUnder, dims.Size.Y)
+		// Use the pre-calculated cursorX position for accurate cursor placement
+		s.drawCursorAtX(gtx, cursorX, charUnder, dims.Size.Y, s.activeBuffer().LinePrefix(index, cursorCol))
 	}
 
 	return dims
+}
+
+// drawBufferLineWrapped renders a single logical line with soft wrapping.
+func (s *appState) drawBufferLineWrapped(gtx layout.Context, index int, lineText string, gutter string, gutterExpanded string, gutterWidth int, cursorLine int, cursorCol int, selStart int, selEnd int, hasSel bool, showOverlays bool) layout.Dimensions {
+	// Calculate available width for content (viewport width - gutter - some padding)
+	availableWidth := gtx.Constraints.Max.X - gutterWidth - 20
+	if availableWidth < 50 {
+		availableWidth = 50 // Minimum width
+	}
+
+	// Estimate characters per line based on approximate char width
+	charWidth := s.measureTextWidth(gtx, "M")
+	if charWidth <= 0 {
+		charWidth = 10
+	}
+	charsPerLine := availableWidth / charWidth
+	if charsPerLine < 10 {
+		charsPerLine = 10
+	}
+
+	// Wrap the line into segments
+	segments := wrapLine(lineText, charsPerLine, tabWidth)
+
+	// Get syntax highlighter
+	highlighter := s.getOrCreateHighlighter()
+
+	// Build vertical flex children for each wrapped segment
+	var verticalChildren []layout.FlexChild
+	totalHeight := 0
+
+	for segIdx, seg := range segments {
+		segmentIdx := segIdx
+		segment := seg
+
+		verticalChildren = append(verticalChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			var flexChildren []layout.FlexChild
+
+			// Add gutter only for first segment, placeholder for continuation lines
+			if segmentIdx == 0 {
+				flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					label := material.Body1(s.theme, gutterExpanded)
+					label.Font.Typeface = "JetBrainsMono"
+					label.Color = color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff}
+					return label.Layout(gtx)
+				}))
+			} else {
+				// Continuation line - show wrap indicator
+				wrapIndicator := strings.Repeat(" ", len(gutter)-2) + "↪ "
+				flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					label := material.Body1(s.theme, wrapIndicator)
+					label.Font.Typeface = "JetBrainsMono"
+					label.Color = color.NRGBA{R: 0x66, G: 0x66, B: 0x66, A: 0xff}
+					return label.Layout(gtx)
+				}))
+			}
+
+			// Tokenize the segment text for syntax highlighting
+			segmentTokens := highlighter.HighlightLine(index, segment.text)
+
+			// Track cursor X position for this segment
+			segmentCursorX := gutterWidth
+			segmentRunesSoFar := 0
+			segmentCursorXFound := false
+			segmentCursorCol := cursorCol - segment.runeStart
+
+			// Add tokens for this segment
+			contentCol := 0
+			for _, token := range segmentTokens {
+				t := token
+				tokenText, nextCol := expandTabsWithColumn(t.Text, tabWidth, contentCol)
+				tokenRuneCount := len([]rune(t.Text))
+
+				// Track cursor X within this segment
+				if index == cursorLine && !segmentCursorXFound {
+					if segmentRunesSoFar+tokenRuneCount >= segmentCursorCol {
+						runesIntoToken := segmentCursorCol - segmentRunesSoFar
+						if runesIntoToken > 0 {
+							partialText := string([]rune(t.Text)[:runesIntoToken])
+							partialExpanded, _ := expandTabsWithColumn(partialText, tabWidth, contentCol)
+							segmentCursorX += s.measureTextWidth(gtx, partialExpanded)
+						}
+						segmentCursorXFound = true
+					} else {
+						segmentCursorX += s.measureTextWidth(gtx, tokenText)
+					}
+				}
+				segmentRunesSoFar += tokenRuneCount
+				contentCol = nextCol
+
+				flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					label := material.Body1(s.theme, tokenText)
+					label.Font.Typeface = "JetBrainsMono"
+					label.Color = syntax.GetTokenColor(t.Type, t.Style)
+					return label.Layout(gtx)
+				}))
+			}
+
+			// Record and draw the line
+			macro := op.Record(gtx.Ops)
+			dims := layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx, flexChildren...)
+			call := macro.Stop()
+
+			// Draw backgrounds for this segment
+			if showOverlays {
+				// Cursor line highlight (only on first segment or segment containing cursor)
+				if index == cursorLine && s.visualMode != visualModeChar {
+					// Check if cursor is in this segment
+					cursorInSegment := cursorCol >= segment.runeStart && cursorCol < segment.runeEnd
+					if segmentIdx == 0 || cursorInSegment || (segmentIdx == len(segments)-1 && cursorCol >= segment.runeEnd) {
+						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+						paint.Fill(gtx.Ops, highlightColor)
+						rect.Pop()
+					}
+				}
+
+				// Line selection for visual mode
+				if hasSel && index >= selStart && index <= selEnd && s.visualMode != visualModeChar {
+					rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+					paint.Fill(gtx.Ops, selectionColor)
+					rect.Pop()
+				}
+			}
+
+			// Draw text
+			call.Add(gtx.Ops)
+
+			// Draw cursor if on this segment
+			if showOverlays && index == cursorLine {
+				cursorInSegment := cursorCol >= segment.runeStart && cursorCol < segment.runeEnd
+				// Also handle cursor at end of last segment
+				if cursorInSegment || (segmentIdx == len(segments)-1 && cursorCol >= segment.runeEnd) {
+					// Get character under cursor
+					localCursorCol := cursorCol - segment.runeStart
+					if localCursorCol < 0 {
+						localCursorCol = 0
+					}
+					if localCursorCol > len([]rune(segment.text)) {
+						localCursorCol = len([]rune(segment.text))
+					}
+
+					charUnder := " "
+					if localCursorCol < len([]rune(segment.text)) {
+						charUnder = string([]rune(segment.text)[localCursorCol])
+					}
+					prefix := string([]rune(segment.text)[:localCursorCol])
+					s.drawCursorAtX(gtx, segmentCursorX, charUnder, dims.Size.Y, prefix)
+				}
+			}
+
+			totalHeight += dims.Size.Y
+			return dims
+		}))
+	}
+
+	// Render all segments vertically
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, verticalChildren...)
 }
 
 func (s *appState) drawSearchHighlights(gtx layout.Context, lineIdx int, lineHeight int) {
@@ -1585,9 +1776,12 @@ func (s *appState) handleKey(ev key.Event) {
 	}
 	s.lastKey = describeKey(ev)
 
-	// Clear skipNextEdit at the start of each KeyEvent to prevent stale state
-	// This ensures we only skip EditEvents that correspond to THIS KeyEvent
-	if s.mode == modeInsert {
+	// For Tab key in INSERT mode, set skipNextEdit BEFORE action processing
+	// to prevent the EditEvent from inserting a duplicate tab character
+	if isTabRelease && s.mode == modeInsert {
+		s.skipNextEdit = true
+	} else if s.mode == modeInsert {
+		// Clear skipNextEdit for non-Tab keys to prevent stale state
 		s.skipNextEdit = false
 	}
 
@@ -1911,6 +2105,59 @@ func (s *appState) drawCursor(gtx layout.Context, gutter, prefix, charUnder stri
 	x := gutterWidth + prefixWidth
 
 	// Cursor drawing (debug logs removed for clarity)
+
+	if s.mode == modeInsert {
+		// Thin line cursor for INSERT mode
+		width := gtx.Dp(unit.Dp(2))
+		if width < 2 {
+			width = 2
+		}
+		rect := image.Rect(x, 0, x+width, height)
+		stack := clip.Rect(rect).Push(gtx.Ops)
+		paint.Fill(gtx.Ops, cursorColor)
+		stack.Pop()
+	} else {
+		// Block cursor for NORMAL/VISUAL/DELETE modes.
+		displayChar := charUnder
+		cellWidth := s.measureTextWidth(gtx, " ")
+		if cellWidth < 1 {
+			cellWidth = 8
+		}
+
+		charWidth := s.measureTextWidth(gtx, charUnder)
+		if charUnder == "\t" {
+			visualCol := visualColumn(prefix, tabWidth)
+			spaces := tabWidth - (visualCol % tabWidth)
+			if spaces == 0 {
+				spaces = tabWidth
+			}
+			displayChar = strings.Repeat(" ", spaces)
+			charWidth = s.measureTextWidth(gtx, displayChar)
+		} else if charWidth < cellWidth {
+			charWidth = cellWidth
+		}
+		rect := image.Rect(x, 0, x+charWidth, height)
+		stack := clip.Rect(rect).Push(gtx.Ops)
+		paint.Fill(gtx.Ops, cursorColor)
+		stack.Pop()
+
+		// Draw the character on top of the cursor in contrasting color
+		label := material.Body1(s.theme, displayChar)
+		label.Font.Typeface = "JetBrainsMono"
+		label.Color = color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xff}
+		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+		label.Layout(gtx)
+		offset.Pop()
+	}
+}
+
+// drawCursorAtX draws the cursor at a pre-calculated X position.
+// This is more accurate than drawCursor because the X position is calculated
+// by accumulating actual rendered token widths.
+func (s *appState) drawCursorAtX(gtx layout.Context, x int, charUnder string, height int, prefix string) {
+	if !s.caretVisible {
+		return
+	}
 
 	if s.mode == modeInsert {
 		// Thin line cursor for INSERT mode
@@ -2835,6 +3082,12 @@ func (s *appState) executeCommandLine() {
 		s.handleListThemesCommand()
 	case "diagnostics", "diag":
 		s.handleDiagnosticsListCommand()
+	case "formatonsave":
+		s.handleFormatOnSaveCommand(strings.TrimSpace(args))
+	case "format", "fmt":
+		s.handleLSPFormat()
+	case "wrap":
+		s.handleWrapCommand(strings.TrimSpace(args))
 	default:
 		// Try LSP commands
 		if s.processLSPCommand(name, args) {
@@ -2936,6 +3189,20 @@ func (s *appState) handleWriteCommand(arg string, andQuit bool) {
 	if buf == nil {
 		s.status = "No active buffer to save"
 		return
+	}
+
+	// Format on save if enabled and LSP available
+	if s.formatOnSave && s.lspEnabled && s.lspManager != nil && buf.FilePath() != "" {
+		if s.lspManager.IsServerRunningForFile(buf.FilePath()) {
+			s.syncDocumentWithLSP(buf)
+			server, err := s.lspManager.GetServerForFile(buf.FilePath())
+			if err == nil {
+				edits, err := server.FormatDocument(buf.FilePath())
+				if err == nil && len(edits) > 0 {
+					s.applyTextEdits(buf, edits)
+				}
+			}
+		}
 	}
 
 	var err error
@@ -3158,6 +3425,43 @@ func (s *appState) handleListThemesCommand() {
 	// Show recommended themes
 	recommended := syntax.PresetThemes
 	s.status = fmt.Sprintf("Themes: %s", strings.Join(recommended, ", "))
+}
+
+func (s *appState) handleFormatOnSaveCommand(arg string) {
+	switch strings.ToLower(arg) {
+	case "on", "true", "1":
+		s.formatOnSave = true
+		s.status = "Format on save: enabled"
+	case "off", "false", "0":
+		s.formatOnSave = false
+		s.status = "Format on save: disabled"
+	default:
+		// No argument - show current status
+		if s.formatOnSave {
+			s.status = "Format on save: enabled"
+		} else {
+			s.status = "Format on save: disabled"
+		}
+	}
+}
+
+func (s *appState) handleWrapCommand(arg string) {
+	switch strings.ToLower(arg) {
+	case "on", "true", "1":
+		s.softWrapEnabled = true
+		s.status = "Soft wrap: enabled"
+	case "off", "false", "0":
+		s.softWrapEnabled = false
+		s.status = "Soft wrap: disabled"
+	default:
+		// No argument - toggle
+		s.softWrapEnabled = !s.softWrapEnabled
+		if s.softWrapEnabled {
+			s.status = "Soft wrap: enabled"
+		} else {
+			s.status = "Soft wrap: disabled"
+		}
+	}
 }
 
 func (s *appState) handleDiagnosticsListCommand() {
@@ -3718,6 +4022,22 @@ func visualColumn(s string, tabWidth int) int {
 	return col
 }
 
+// runeColToVisualCol converts a rune-based column position to a visual column position,
+// accounting for tab expansion and wide characters.
+func runeColToVisualCol(line string, runeCol, tabWidth int) int {
+	visualCol := 0
+	runes := []rune(line)
+	for i := 0; i < runeCol && i < len(runes); i++ {
+		r := runes[i]
+		if r == '\t' {
+			visualCol += tabWidth - (visualCol % tabWidth)
+		} else {
+			visualCol += runeDisplayWidth(r)
+		}
+	}
+	return visualCol
+}
+
 func runeDisplayWidth(r rune) int {
 	switch {
 	case r == '\n' || r == '\r':
@@ -3763,6 +4083,68 @@ func isWideRune(r rune) bool {
 		return true
 	}
 	return unicode.In(r, unicode.Han, unicode.Hangul, unicode.Hiragana, unicode.Katakana)
+}
+
+// wrapLineSegment represents a segment of a wrapped line
+type wrapLineSegment struct {
+	text     string // The text for this segment
+	runeStart int   // Starting rune index in the original line
+	runeEnd   int   // Ending rune index (exclusive)
+}
+
+// wrapLine splits a line into segments that fit within maxVisualWidth.
+// Each segment represents one visual line when soft wrap is enabled.
+func wrapLine(line string, maxVisualWidth, tabWidth int) []wrapLineSegment {
+	if maxVisualWidth <= 0 {
+		return []wrapLineSegment{{text: line, runeStart: 0, runeEnd: len([]rune(line))}}
+	}
+
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return []wrapLineSegment{{text: "", runeStart: 0, runeEnd: 0}}
+	}
+
+	var segments []wrapLineSegment
+	segmentStart := 0
+	visualCol := 0
+
+	for i, r := range runes {
+		var charWidth int
+		if r == '\t' {
+			charWidth = tabWidth - (visualCol % tabWidth)
+		} else {
+			charWidth = runeDisplayWidth(r)
+		}
+
+		// If adding this character would exceed max width, wrap
+		if visualCol+charWidth > maxVisualWidth && i > segmentStart {
+			segments = append(segments, wrapLineSegment{
+				text:      string(runes[segmentStart:i]),
+				runeStart: segmentStart,
+				runeEnd:   i,
+			})
+			segmentStart = i
+			visualCol = 0
+		}
+
+		visualCol += charWidth
+	}
+
+	// Add the remaining segment
+	if segmentStart < len(runes) {
+		segments = append(segments, wrapLineSegment{
+			text:      string(runes[segmentStart:]),
+			runeStart: segmentStart,
+			runeEnd:   len(runes),
+		})
+	}
+
+	// Ensure at least one empty segment for empty lines
+	if len(segments) == 0 {
+		segments = []wrapLineSegment{{text: "", runeStart: 0, runeEnd: 0}}
+	}
+
+	return segments
 }
 
 // Search mode methods

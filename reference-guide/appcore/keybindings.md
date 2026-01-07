@@ -205,5 +205,9 @@ Modifier key matching with platform quirk handling.
    - `ActionInsertNewline` accepts buffer completion when active
    - `ActionExitMode` cancels buffer completion before exiting mode
 
+3. **Tab Key Timing Fix**
+   - Fixed `skipNextEdit` flag race condition for Tab key in INSERT mode
+   - Flag is now set BEFORE action processing to prevent duplicate tab insertion
+
 ---
-*Last Updated: After enhancement plan implementation*
+*Last Updated: After Tab key fix and soft wrap implementation*
