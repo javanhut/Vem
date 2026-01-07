@@ -444,6 +444,8 @@ ifeq ($(GOOS),linux)
 	@sudo install -m 644 $(ICON_SOURCE) $(ICON_PATH)
 	@echo "Desktop entry installed to $(DESKTOP_PATH)"
 endif
+	@echo "Cleaning up build artifact from source directory..."
+	@rm -f $(BINARY_NAME)
 	@echo "Installation complete. Run 'vem' to start the editor."
 endif
 
