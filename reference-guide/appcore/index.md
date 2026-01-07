@@ -54,10 +54,11 @@ type KeyBinding struct {
 
 ## Recent Fixes
 
+- **Syntax highlighter cache** - Fixed highlighting disappearing when opening files from explorer (buffer index mismatch after closing empty buffer)
 - **Cursor positioning** - Fixed visual offset caused by token-based rendering vs single-string measurement
 - **Tab key stuck** - Fixed `skipNextEdit` timing race condition
 - **Format on save** - Added `:formatonsave` and `:format` commands
-- **Soft wrap** - Added `:wrap` command for dynamic text wrapping
+- **Soft wrap** - Added `:wrap` command for dynamic text wrapping (enabled by default)
 
 ## Architecture
 

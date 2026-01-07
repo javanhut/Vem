@@ -288,5 +288,19 @@ softWrapEnabled      bool     // Soft wrap long lines to viewport width
 - `drawBufferLine()` - Tracks cursor X by summing token widths during rendering
 - `drawBufferLineWrapped()` - Same token-based tracking for wrapped segments
 
+### Syntax Highlighter Cache Fix
+- **Problem**: Syntax highlighting disappeared when opening files from explorer
+- **Root Cause**: When closing buffer 0 (empty `[No Name]` buffer), the highlighter cache became stale. The new file's highlighter was stored at index 1, but after closing buffer 0, the file shifted to index 0 while the cache still pointed to index 1.
+- **Solution**: Added `updateHighlighterCacheOnBufferClose()` function (lines 556-572) that:
+  1. Deletes the highlighter for the closed buffer
+  2. Shifts all higher-indexed highlighters down by one
+- This function is now called before every `CloseBuffer()` call throughout the codebase
+
+### Helper Functions (Lines 546-572)
+| Function | Purpose |
+|----------|---------|
+| `invalidateSyntaxCache()` | Clears syntax cache for active buffer on content change |
+| `updateHighlighterCacheOnBufferClose()` | Updates highlighter indices when a buffer is closed |
+
 ---
-*Last Updated: After cursor positioning fix*
+*Last Updated: After syntax highlighter cache fix*
