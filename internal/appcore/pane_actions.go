@@ -220,6 +220,7 @@ func (s *appState) handlePaneClose() {
 			return
 		}
 		s.cleanupLSPForBuffer(buf)
+		s.updateHighlighterCacheOnBufferClose(bufferIndex)
 		s.bufferMgr.CloseBuffer(bufferIndex, false)
 		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		return
@@ -227,6 +228,7 @@ func (s *appState) handlePaneClose() {
 
 	// Last pane - close buffer but keep editor open
 	s.cleanupLSPForBuffer(buf)
+	s.updateHighlighterCacheOnBufferClose(bufferIndex)
 	s.bufferMgr.CloseBuffer(bufferIndex, false)
 
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)

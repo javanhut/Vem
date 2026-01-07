@@ -412,6 +412,7 @@ func newAppState(filePaths []string) *appState {
 		lspCompletionSeq:     make(map[string]int),
 		lspCompletionReq:     make(map[string]lspCompletionRequest),
 		completionResolved:   make(map[int]bool),
+		softWrapEnabled:      true, // Enable soft wrap by default
 	}
 
 	// Set up LSP callbacks
@@ -550,6 +551,24 @@ func (s *appState) invalidateSyntaxCache() {
 			highlighter.InvalidateAll()
 		}
 	}
+}
+
+// updateHighlighterCacheOnBufferClose updates the syntax highlighter cache when a buffer is closed.
+// Since buffer indices shift down after closing, we need to move highlighters accordingly.
+func (s *appState) updateHighlighterCacheOnBufferClose(closedIndex int) {
+	// Delete the highlighter for the closed buffer
+	delete(s.syntaxHighlighters, closedIndex)
+
+	// Shift all higher-indexed highlighters down by one
+	newCache := make(map[int]*syntax.Highlighter)
+	for idx, highlighter := range s.syntaxHighlighters {
+		if idx > closedIndex {
+			newCache[idx-1] = highlighter
+		} else {
+			newCache[idx] = highlighter
+		}
+	}
+	s.syntaxHighlighters = newCache
 }
 
 // activePaneViewportTop returns the viewport top line for the active pane.
@@ -1013,8 +1032,12 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	for _, token := range tokens {
 		// Capture token in closure
 		t := token
-		tokenText, nextCol := expandTabsWithColumn(t.Text, tabWidth, contentCol)
+		tText, nextCol := expandTabsWithColumn(t.Text, tabWidth, contentCol)
 		tokenRuneCount := len([]rune(t.Text))
+		// Capture for closure to avoid loop variable issues
+		capturedText := tText
+		capturedType := t.Type
+		capturedStyle := t.Style
 
 		// Check if cursor is within this token
 		if index == cursorLine && !cursorXFound {
@@ -1030,16 +1053,16 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 				cursorXFound = true
 			} else {
 				// Cursor is after this token, add full token width
-				cursorX += s.measureTextWidth(gtx, tokenText)
+				cursorX += s.measureTextWidth(gtx, tText)
 			}
 		}
 		runesSoFar += tokenRuneCount
 		contentCol = nextCol
 
 		flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			label := material.Body1(s.theme, tokenText)
+			label := material.Body1(s.theme, capturedText)
 			label.Font.Typeface = "JetBrainsMono"
-			label.Color = syntax.GetTokenColor(t.Type, t.Style)
+			label.Color = syntax.GetTokenColor(capturedType, capturedStyle)
 			return label.Layout(gtx)
 		}))
 	}
@@ -1086,42 +1109,74 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 }
 
 // drawBufferLineWrapped renders a single logical line with soft wrapping.
+// This version wraps based on actual pixel widths for accurate wrapping.
 func (s *appState) drawBufferLineWrapped(gtx layout.Context, index int, lineText string, gutter string, gutterExpanded string, gutterWidth int, cursorLine int, cursorCol int, selStart int, selEnd int, hasSel bool, showOverlays bool) layout.Dimensions {
-	// Calculate available width for content (viewport width - gutter - some padding)
-	availableWidth := gtx.Constraints.Max.X - gutterWidth - 20
-	if availableWidth < 50 {
-		availableWidth = 50 // Minimum width
+	// Calculate available width for content (viewport width - gutter - padding)
+	maxWidth := gtx.Constraints.Max.X
+	availableContentWidth := maxWidth - gutterWidth - 10
+	if availableContentWidth < 100 {
+		availableContentWidth = 100 // Minimum width
 	}
 
-	// Estimate characters per line based on approximate char width
-	charWidth := s.measureTextWidth(gtx, "M")
-	if charWidth <= 0 {
-		charWidth = 10
-	}
-	charsPerLine := availableWidth / charWidth
-	if charsPerLine < 10 {
-		charsPerLine = 10
-	}
-
-	// Wrap the line into segments
-	segments := wrapLine(lineText, charsPerLine, tabWidth)
-
-	// Get syntax highlighter
+	// Get syntax highlighter and tokenize the full line
 	highlighter := s.getOrCreateHighlighter()
+	tokens := highlighter.HighlightLine(index, lineText)
 
-	// Build vertical flex children for each wrapped segment
+	// Build wrapped visual lines based on actual pixel widths
+	type visualLine struct {
+		tokens    []syntax.Token
+		runeStart int
+		runeEnd   int
+		isFirst   bool
+	}
+	var visualLines []visualLine
+
+	currentLine := visualLine{isFirst: true, runeStart: 0}
+	currentWidth := 0
+	currentRunePos := 0
+	contentCol := 0
+
+	for _, token := range tokens {
+		tokenText, nextCol := expandTabsWithColumn(token.Text, tabWidth, contentCol)
+		tokenWidth := s.measureTextWidth(gtx, tokenText)
+		tokenRunes := len([]rune(token.Text))
+
+		// Check if this token fits on current line
+		if currentWidth+tokenWidth > availableContentWidth && len(currentLine.tokens) > 0 {
+			// Current line is full, start new line
+			currentLine.runeEnd = currentRunePos
+			visualLines = append(visualLines, currentLine)
+			currentLine = visualLine{isFirst: false, runeStart: currentRunePos}
+			currentWidth = 0
+		}
+
+		currentLine.tokens = append(currentLine.tokens, token)
+		currentWidth += tokenWidth
+		currentRunePos += tokenRunes
+		contentCol = nextCol
+	}
+
+	// Add the last line
+	currentLine.runeEnd = currentRunePos
+	visualLines = append(visualLines, currentLine)
+
+	// If no lines (empty line), add one empty visual line
+	if len(visualLines) == 0 {
+		visualLines = []visualLine{{isFirst: true, runeStart: 0, runeEnd: 0}}
+	}
+
+	// Build vertical flex children for each visual line
 	var verticalChildren []layout.FlexChild
-	totalHeight := 0
 
-	for segIdx, seg := range segments {
-		segmentIdx := segIdx
-		segment := seg
+	for vIdx, vLine := range visualLines {
+		visualLineIdx := vIdx
+		visualLine := vLine
 
 		verticalChildren = append(verticalChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			var flexChildren []layout.FlexChild
 
-			// Add gutter only for first segment, placeholder for continuation lines
-			if segmentIdx == 0 {
+			// Add gutter only for first visual line, continuation indicator for others
+			if visualLine.isFirst {
 				flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					label := material.Body1(s.theme, gutterExpanded)
 					label.Font.Typeface = "JetBrainsMono"
@@ -1139,43 +1194,48 @@ func (s *appState) drawBufferLineWrapped(gtx layout.Context, index int, lineText
 				}))
 			}
 
-			// Tokenize the segment text for syntax highlighting
-			segmentTokens := highlighter.HighlightLine(index, segment.text)
+			// Track cursor X position for this visual line
+			cursorX := gutterWidth
+			runesSoFar := visualLine.runeStart
+			cursorXFound := false
+			localCursorCol := cursorCol - visualLine.runeStart
 
-			// Track cursor X position for this segment
-			segmentCursorX := gutterWidth
-			segmentRunesSoFar := 0
-			segmentCursorXFound := false
-			segmentCursorCol := cursorCol - segment.runeStart
-
-			// Add tokens for this segment
-			contentCol := 0
-			for _, token := range segmentTokens {
+			// Add tokens for this visual line
+			lineContentCol := 0
+			for _, token := range visualLine.tokens {
 				t := token
-				tokenText, nextCol := expandTabsWithColumn(t.Text, tabWidth, contentCol)
+				tText, nextCol := expandTabsWithColumn(t.Text, tabWidth, lineContentCol)
 				tokenRuneCount := len([]rune(t.Text))
+				// Capture for closure
+				capturedText := tText
+				capturedType := t.Type
+				capturedStyle := t.Style
 
-				// Track cursor X within this segment
-				if index == cursorLine && !segmentCursorXFound {
-					if segmentRunesSoFar+tokenRuneCount >= segmentCursorCol {
-						runesIntoToken := segmentCursorCol - segmentRunesSoFar
-						if runesIntoToken > 0 {
-							partialText := string([]rune(t.Text)[:runesIntoToken])
-							partialExpanded, _ := expandTabsWithColumn(partialText, tabWidth, contentCol)
-							segmentCursorX += s.measureTextWidth(gtx, partialExpanded)
+				// Track cursor X within this visual line
+				if index == cursorLine && !cursorXFound && cursorCol >= visualLine.runeStart && cursorCol < visualLine.runeEnd {
+					localPos := cursorCol - runesSoFar
+					if localPos >= 0 && localPos < tokenRuneCount {
+						// Cursor is within this token
+						if localPos > 0 {
+							partialText := string([]rune(t.Text)[:localPos])
+							partialExpanded, _ := expandTabsWithColumn(partialText, tabWidth, lineContentCol)
+							cursorX += s.measureTextWidth(gtx, partialExpanded)
 						}
-						segmentCursorXFound = true
-					} else {
-						segmentCursorX += s.measureTextWidth(gtx, tokenText)
+						cursorXFound = true
+					} else if localPos >= tokenRuneCount {
+						cursorX += s.measureTextWidth(gtx, tText)
 					}
+				} else if index == cursorLine && !cursorXFound && cursorCol >= visualLine.runeEnd && visualLineIdx == len(visualLines)-1 {
+					// Cursor at end of last visual line
+					cursorX += s.measureTextWidth(gtx, tText)
 				}
-				segmentRunesSoFar += tokenRuneCount
-				contentCol = nextCol
+				runesSoFar += tokenRuneCount
+				lineContentCol = nextCol
 
 				flexChildren = append(flexChildren, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					label := material.Body1(s.theme, tokenText)
+					label := material.Body1(s.theme, capturedText)
 					label.Font.Typeface = "JetBrainsMono"
-					label.Color = syntax.GetTokenColor(t.Type, t.Style)
+					label.Color = syntax.GetTokenColor(capturedType, capturedStyle)
 					return label.Layout(gtx)
 				}))
 			}
@@ -1185,13 +1245,12 @@ func (s *appState) drawBufferLineWrapped(gtx layout.Context, index int, lineText
 			dims := layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx, flexChildren...)
 			call := macro.Stop()
 
-			// Draw backgrounds for this segment
+			// Draw backgrounds for this visual line
 			if showOverlays {
-				// Cursor line highlight (only on first segment or segment containing cursor)
+				// Cursor line highlight
 				if index == cursorLine && s.visualMode != visualModeChar {
-					// Check if cursor is in this segment
-					cursorInSegment := cursorCol >= segment.runeStart && cursorCol < segment.runeEnd
-					if segmentIdx == 0 || cursorInSegment || (segmentIdx == len(segments)-1 && cursorCol >= segment.runeEnd) {
+					cursorInLine := cursorCol >= visualLine.runeStart && cursorCol < visualLine.runeEnd
+					if visualLine.isFirst || cursorInLine || (visualLineIdx == len(visualLines)-1 && cursorCol >= visualLine.runeEnd) {
 						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
 						paint.Fill(gtx.Ops, highlightColor)
 						rect.Pop()
@@ -1209,35 +1268,37 @@ func (s *appState) drawBufferLineWrapped(gtx layout.Context, index int, lineText
 			// Draw text
 			call.Add(gtx.Ops)
 
-			// Draw cursor if on this segment
+			// Draw cursor if on this visual line
 			if showOverlays && index == cursorLine {
-				cursorInSegment := cursorCol >= segment.runeStart && cursorCol < segment.runeEnd
-				// Also handle cursor at end of last segment
-				if cursorInSegment || (segmentIdx == len(segments)-1 && cursorCol >= segment.runeEnd) {
+				cursorInLine := cursorCol >= visualLine.runeStart && cursorCol < visualLine.runeEnd
+				// Also handle cursor at end of last visual line
+				if cursorInLine || (visualLineIdx == len(visualLines)-1 && cursorCol >= visualLine.runeEnd) {
 					// Get character under cursor
-					localCursorCol := cursorCol - segment.runeStart
-					if localCursorCol < 0 {
-						localCursorCol = 0
-					}
-					if localCursorCol > len([]rune(segment.text)) {
-						localCursorCol = len([]rune(segment.text))
-					}
-
 					charUnder := " "
-					if localCursorCol < len([]rune(segment.text)) {
-						charUnder = string([]rune(segment.text)[localCursorCol])
+					if localCursorCol >= 0 && localCursorCol < len([]rune(lineText))-visualLine.runeStart {
+						lineRunes := []rune(lineText)
+						if cursorCol < len(lineRunes) {
+							charUnder = string(lineRunes[cursorCol])
+						}
 					}
-					prefix := string([]rune(segment.text)[:localCursorCol])
-					s.drawCursorAtX(gtx, segmentCursorX, charUnder, dims.Size.Y, prefix)
+					prefix := ""
+					if cursorCol > visualLine.runeStart {
+						lineRunes := []rune(lineText)
+						end := cursorCol
+						if end > len(lineRunes) {
+							end = len(lineRunes)
+						}
+						prefix = string(lineRunes[visualLine.runeStart:end])
+					}
+					s.drawCursorAtX(gtx, cursorX, charUnder, dims.Size.Y, prefix)
 				}
 			}
 
-			totalHeight += dims.Size.Y
 			return dims
 		}))
 	}
 
-	// Render all segments vertically
+	// Render all visual lines vertically
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, verticalChildren...)
 }
 
@@ -2698,6 +2759,17 @@ func (s *appState) openSelectedNode() {
 		return
 	}
 
+	// Check if we should replace an empty unnamed buffer instead of creating a new one
+	// This prevents showing "[No Name]" tab when opening first file
+	shouldReplace := false
+	if s.bufferMgr.BufferCount() == 1 {
+		existingBuf := s.bufferMgr.GetBuffer(0)
+		if existingBuf != nil && existingBuf.FilePath() == "" && !existingBuf.Modified() && existingBuf.LineCount() <= 1 {
+			// Single empty unnamed unmodified buffer - replace it
+			shouldReplace = true
+		}
+	}
+
 	// Open file
 	buf, err := s.bufferMgr.OpenFile(node.Path)
 	if err != nil {
@@ -2705,6 +2777,14 @@ func (s *appState) openSelectedNode() {
 		return
 	}
 	s.setupLSPForBuffer(buf)
+
+	// If we should replace the empty buffer, close it now
+	if shouldReplace && s.bufferMgr.BufferCount() > 1 {
+		// Update highlighter cache before closing buffer (indices will shift)
+		s.updateHighlighterCacheOnBufferClose(0)
+		// The new buffer is now active, close buffer at index 0 (the old empty one)
+		s.bufferMgr.CloseBuffer(0, true)
+	}
 
 	// Update the active pane to display the newly opened buffer
 	if s.paneManager != nil {
@@ -3141,6 +3221,7 @@ func (s *appState) handleQuitCommand(force bool) {
 			return
 		}
 		s.cleanupLSPForBuffer(buf)
+		s.updateHighlighterCacheOnBufferClose(bufferIndex)
 		s.bufferMgr.CloseBuffer(bufferIndex, force)
 		s.status = fmt.Sprintf("Pane closed - %d panes remaining", s.paneManager.PaneCount())
 		return
@@ -3148,6 +3229,7 @@ func (s *appState) handleQuitCommand(force bool) {
 
 	// Last pane - close buffer but keep editor open
 	s.cleanupLSPForBuffer(buf)
+	s.updateHighlighterCacheOnBufferClose(bufferIndex)
 	s.bufferMgr.CloseBuffer(bufferIndex, force)
 
 	// Ensure we have at least one buffer (switch to buffer 0 - sample buffer)
@@ -4550,16 +4632,19 @@ func (s *appState) handleTerminalAutoClose(bufIdx int) {
 			// Multiple panes: close the pane
 			if s.paneManager.PaneCount() > 1 {
 				s.paneManager.ClosePane()
+				s.updateHighlighterCacheOnBufferClose(bufIdx)
 				s.bufferMgr.CloseBuffer(bufIdx, true) // Force close (no unsaved warning for terminals)
 				s.status = fmt.Sprintf("Terminal exited - %d panes remaining", s.paneManager.PaneCount())
 			} else {
 				// Last pane: close buffer, switch to buffer 0
+				s.updateHighlighterCacheOnBufferClose(bufIdx)
 				s.bufferMgr.CloseBuffer(bufIdx, true)
 				activePane.SetBufferIndex(0)
 				s.status = "Terminal exited"
 			}
 		} else {
 			// Terminal is in a background pane/buffer - just close it silently
+			s.updateHighlighterCacheOnBufferClose(bufIdx)
 			s.bufferMgr.CloseBuffer(bufIdx, true)
 		}
 	}
