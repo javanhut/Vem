@@ -266,14 +266,23 @@ New status components:
 
 ### New State Fields
 ```go
-cachedLineHeight     int      // Cached line height for accurate scrolling
-cmdCompletionActive  bool     // Command mode path completion state
-cmdCompletionItems   []string
-cmdCompletionIndex   int
-cmdCompletionPrefix  string
-formatOnSave         bool     // Auto-format on save when LSP available
-softWrapEnabled      bool     // Soft wrap long lines to viewport width
+cachedLineHeight      int      // Cached line height for accurate scrolling
+cmdCompletionActive   bool     // Command mode path completion state
+cmdCompletionItems    []string
+cmdCompletionIndex    int
+cmdCompletionPrefix   string
+commandHistory        []string // List of executed commands (in-memory)
+commandHistoryIndex   int      // Current position in history (-1 = new input)
+commandHistorySaved   string   // Saves current input when navigating history
+formatOnSave          bool     // Auto-format on save when LSP available
+softWrapEnabled       bool     // Soft wrap long lines to viewport width
 ```
+
+### Command History Functions
+- `commandHistoryUp()` - Navigate to previous command (Up arrow in command mode)
+- `commandHistoryDown()` - Navigate to next command (Down arrow in command mode)
+- History is saved when commands are executed via `executeCommandLine()`
+- Duplicate consecutive commands are not saved
 
 ### Soft Wrap Implementation
 - `wrapLine()` function splits lines into segments based on visual width

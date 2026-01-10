@@ -116,11 +116,12 @@ Same navigation as Normal, plus:
 - Escape exits
 - Shift+Tab cycles panes
 
-#### modeCommand (Lines 249-256)
+#### modeCommand (Lines 254-263)
 - Escape exits
 - Enter executes command
 - Backspace deletes char
 - Tab/Shift+Tab: Path completion for `:cd`, `:e`, `:w` commands
+- Up/Down arrows: Navigate command history
 
 #### modeExplorer (Lines 242-260)
 | Line | Keys | Action |
@@ -213,5 +214,16 @@ Modifier key matching with platform quirk handling.
    - Fixed visual cursor offset caused by measuring prefix as single string vs rendering tokens separately
    - New `drawCursorAtX()` function uses pre-calculated X position from accumulated token widths
 
+5. **Normal Mode Count Backspace** (Lines 597-603)
+   - Backspace in Normal mode now removes the last digit from `pendingCount`
+   - Allows correcting line number input (e.g., typed "123", backspace removes "3" to get "12")
+   - Updates status bar to show remaining count, or clears it when count reaches 0
+
+6. **Command History Navigation** (Lines 140-142, 261-262, 888-896)
+   - New actions: `ActionCommandHistoryUp`, `ActionCommandHistoryDown`
+   - Up/Down arrows in command mode navigate through previously executed commands
+   - History stored in `commandHistory` slice (in-memory, newest last)
+   - Typing or deleting resets history navigation position
+
 ---
-*Last Updated: After cursor positioning fix*
+*Last Updated: After command history feature*

@@ -123,6 +123,9 @@ type appState struct {
 	clipLines            []string
 	clipboardIsLine      bool
 	cmdText              string
+	commandHistory       []string
+	commandHistoryIndex  int
+	commandHistorySaved  string
 	window               *app.Window
 
 	// Explorer state
@@ -3107,6 +3110,8 @@ func (s *appState) appendCommandText(text string) {
 	}
 	// Cancel completion when user types
 	s.cancelCommandCompletion()
+	// Reset history navigation when user types
+	s.commandHistoryIndex = -1
 	for _, r := range text {
 		if r == '\n' || r == '\r' {
 			continue
@@ -3118,6 +3123,8 @@ func (s *appState) appendCommandText(text string) {
 func (s *appState) deleteCommandChar() {
 	// Cancel completion when user deletes
 	s.cancelCommandCompletion()
+	// Reset history navigation when user deletes
+	s.commandHistoryIndex = -1
 	if s.cmdText == "" {
 		return
 	}
@@ -3128,8 +3135,48 @@ func (s *appState) deleteCommandChar() {
 	s.cmdText = string(runes[:len(runes)-1])
 }
 
+func (s *appState) commandHistoryUp() {
+	if len(s.commandHistory) == 0 {
+		return
+	}
+	// First time pressing up - save current input
+	if s.commandHistoryIndex == -1 {
+		s.commandHistorySaved = s.cmdText
+		s.commandHistoryIndex = 0
+	} else if s.commandHistoryIndex < len(s.commandHistory)-1 {
+		s.commandHistoryIndex++
+	}
+	// Get command from history (newest first)
+	histIdx := len(s.commandHistory) - 1 - s.commandHistoryIndex
+	s.cmdText = s.commandHistory[histIdx]
+}
+
+func (s *appState) commandHistoryDown() {
+	if s.commandHistoryIndex == -1 {
+		return
+	}
+	if s.commandHistoryIndex == 0 {
+		// Restore saved input
+		s.cmdText = s.commandHistorySaved
+		s.commandHistoryIndex = -1
+		s.commandHistorySaved = ""
+	} else {
+		s.commandHistoryIndex--
+		histIdx := len(s.commandHistory) - 1 - s.commandHistoryIndex
+		s.cmdText = s.commandHistory[histIdx]
+	}
+}
+
 func (s *appState) executeCommandLine() {
 	cmd := strings.TrimSpace(s.cmdText)
+	// Save to history before exiting (avoid duplicates)
+	if cmd != "" {
+		if len(s.commandHistory) == 0 || s.commandHistory[len(s.commandHistory)-1] != cmd {
+			s.commandHistory = append(s.commandHistory, cmd)
+		}
+	}
+	s.commandHistoryIndex = -1
+	s.commandHistorySaved = ""
 	s.exitCommandMode()
 	if cmd == "" {
 		s.status = "No command"

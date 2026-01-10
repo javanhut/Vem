@@ -1,6 +1,7 @@
 package appcore
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -135,6 +136,10 @@ const (
 
 	// Command mode path completion
 	ActionCommandTabComplete
+
+	// Command history navigation
+	ActionCommandHistoryUp
+	ActionCommandHistoryDown
 )
 
 type KeyBinding struct {
@@ -253,6 +258,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: 0, Key: key.NameDeleteBackward, Modes: nil, Action: ActionDeleteBackward},
 		{Modifiers: 0, Key: key.NameTab, Modes: nil, Action: ActionCommandTabComplete},
 		{Modifiers: key.ModShift, Key: key.NameTab, Modes: nil, Action: ActionCommandTabComplete},
+		{Modifiers: 0, Key: key.NameUpArrow, Modes: nil, Action: ActionCommandHistoryUp},
+		{Modifiers: 0, Key: key.NameDownArrow, Modes: nil, Action: ActionCommandHistoryDown},
 	},
 	modeExplorer: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -594,7 +601,14 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 		}
 
 	case ActionDeleteBackward:
-		if s.mode == modeInsert {
+		if s.mode == modeNormal && s.pendingCount > 0 {
+			s.pendingCount = s.pendingCount / 10
+			if s.pendingCount > 0 {
+				s.status = fmt.Sprintf("Count %d", s.pendingCount)
+			} else {
+				s.status = ""
+			}
+		} else if s.mode == modeInsert {
 			if s.activeBuffer().DeleteBackward() {
 				s.setCursorStatus("Backspace")
 			} else {
@@ -870,5 +884,15 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 	// Command mode path completion
 	case ActionCommandTabComplete:
 		s.handleCommandTabComplete()
+
+	// Command history navigation
+	case ActionCommandHistoryUp:
+		if s.mode == modeCommand {
+			s.commandHistoryUp()
+		}
+	case ActionCommandHistoryDown:
+		if s.mode == modeCommand {
+			s.commandHistoryDown()
+		}
 	}
 }
