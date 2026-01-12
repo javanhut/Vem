@@ -477,15 +477,222 @@ The fullscreen toggle (`Shift+Enter`) may behave differently depending on the pl
 - **macOS**: Uses native fullscreen (separate space)
 - **Windows**: Uses borderless maximized window
 
-## Customization (Future)
+## Leader Bar (Custom Keybindings)
 
-In future releases, keybindings will be customizable via:
+Vem features a **Leader Bar** - a which-key style popup for custom keybindings. Press **Space twice** quickly in NORMAL mode to open it.
 
-- Configuration file (`~/.vemrc`)
-- Lua/Python/Carrion scripts
-- GUI keybinding editor
+### Opening the Leader Bar
 
-See the [ROADMAP.md](../ROADMAP.md) for planned customization features.
+| Key Sequence | Description |
+|--------------|-------------|
+| `Space Space` | Open leader bar popup (double-press within 300ms) |
+
+### Using the Leader Bar
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| Any letter/key | Filter | Filter bindings by key sequence |
+| `↑` / `↓` | Navigate | Move selection up/down |
+| `Enter` | Execute | Execute selected binding |
+| `Backspace` | Delete | Remove last key from sequence |
+| `Esc` | Cancel | Close leader bar |
+
+### How It Works
+
+1. Press `Space Space` in NORMAL mode → Leader bar appears
+2. Type key sequence (e.g., `g`) → Shows all bindings starting with "g"
+3. Continue typing (e.g., `d`) → Auto-executes when sequence matches exactly
+4. Or use arrow keys + Enter to select manually
+
+### Configuration File
+
+Custom keybindings are defined in `~/.config/vem/keybindings.toml`. This file is created automatically when you run `make install`.
+
+**Location:** `~/.config/vem/keybindings.toml`
+
+### Configuration Format
+
+```toml
+# Each keybinding is defined with [[keybind]]
+[[keybind]]
+name = "Go to Definition"      # Display name in popup
+keys = "gd"                     # Key sequence (g then d)
+action = "lsp_goto_definition"  # Vem action to execute
+
+[[keybind]]
+name = "Find References"
+keys = "gr"
+action = "lsp_find_references"
+
+# Shell commands use "command" instead of "action"
+[[keybind]]
+name = "Run Tests"
+keys = "rt"
+command = "go test ./..."
+
+[[keybind]]
+name = "Git Status"
+keys = "gs"
+command = "git status"
+```
+
+### Available Actions
+
+These action names can be used in the `action` field:
+
+#### LSP Actions
+| Action Name | Description |
+|-------------|-------------|
+| `lsp_goto_definition` | Go to symbol definition |
+| `lsp_find_references` | Find all references |
+| `lsp_hover` | Show hover information |
+| `lsp_rename` | Rename symbol |
+| `lsp_code_action` | Show code actions |
+| `lsp_format` | Format current file |
+
+#### File/Buffer Actions
+| Action Name | Description |
+|-------------|-------------|
+| `save_file` | Save current buffer (`:w`) |
+| `close_buffer` | Close current buffer (`:bd`) |
+| `next_buffer` | Switch to next buffer |
+| `prev_buffer` | Switch to previous buffer |
+| `fuzzy_finder` | Open fuzzy file finder |
+| `toggle_explorer` | Toggle file explorer |
+
+#### Pane Actions
+| Action Name | Description |
+|-------------|-------------|
+| `split_vertical` | Split pane vertically |
+| `split_horizontal` | Split pane horizontally |
+| `pane_close` | Close current pane |
+
+### Shell Commands
+
+Use the `command` field to run shell commands:
+
+```toml
+[[keybind]]
+name = "Build Project"
+keys = "b"
+command = "make build"
+
+[[keybind]]
+name = "Run Tests"
+keys = "rt"
+command = "go test ./..."
+
+[[keybind]]
+name = "Git Push"
+keys = "gp"
+command = "git push"
+
+[[keybind]]
+name = "Format Go Files"
+keys = "gf"
+command = "go fmt ./..."
+```
+
+### Example Configurations
+
+#### Go Development
+```toml
+[[keybind]]
+name = "Go to Definition"
+keys = "gd"
+action = "lsp_goto_definition"
+
+[[keybind]]
+name = "Find References"
+keys = "gr"
+action = "lsp_find_references"
+
+[[keybind]]
+name = "Run Tests"
+keys = "rt"
+command = "go test ./..."
+
+[[keybind]]
+name = "Build"
+keys = "b"
+command = "go build ."
+
+[[keybind]]
+name = "Format"
+keys = "fm"
+action = "lsp_format"
+```
+
+#### Rust Development
+```toml
+[[keybind]]
+name = "Cargo Build"
+keys = "cb"
+command = "cargo build"
+
+[[keybind]]
+name = "Cargo Test"
+keys = "ct"
+command = "cargo test"
+
+[[keybind]]
+name = "Cargo Run"
+keys = "cr"
+command = "cargo run"
+
+[[keybind]]
+name = "Cargo Check"
+keys = "cc"
+command = "cargo check"
+```
+
+#### Git Shortcuts
+```toml
+[[keybind]]
+name = "Git Status"
+keys = "gs"
+command = "git status"
+
+[[keybind]]
+name = "Git Diff"
+keys = "gd"
+command = "git diff"
+
+[[keybind]]
+name = "Git Add All"
+keys = "ga"
+command = "git add -A"
+
+[[keybind]]
+name = "Git Commit"
+keys = "gc"
+command = "git commit"
+
+[[keybind]]
+name = "Git Push"
+keys = "gp"
+command = "git push"
+
+[[keybind]]
+name = "Git Pull"
+keys = "gl"
+command = "git pull"
+```
+
+### Reloading Configuration
+
+After editing `~/.config/vem/keybindings.toml`, reload without restarting:
+
+```
+:leaderreload
+```
+
+### Tips
+
+1. **Short sequences for common actions**: Use single keys like `w` for save, `e` for explorer
+2. **Group related commands**: Use prefixes like `g` for git, `l` for LSP, `t` for tests
+3. **Avoid conflicts**: Don't use sequences that are substrings of others (e.g., `g` and `gd`)
+4. **Test your config**: Use `:leaderreload` after changes to verify syntax
 
 ## Pane Management (Ctrl+S prefix)
 
@@ -574,6 +781,7 @@ For details on how the keybinding system works internally, see [Architecture.md]
 
 ## See Also
 
+- [Leader Bar (Custom Keybindings)](#leader-bar-custom-keybindings) - Configure custom keybindings with Space Space
 - [Pane Splitting Guide](pane-splitting.md) - Complete guide to pane management
 - [Navigation Guide](navigation.md) - Pane navigation and fullscreen features
 - [Tutorial](tutorial.md) - Step-by-step guide for new users

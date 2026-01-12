@@ -256,6 +256,7 @@ New status components:
 10. **Format on Save** - `:formatonsave on/off` toggle and `:format` manual command for LSP formatting
 11. **Soft Wrap** - `:wrap` toggle for dynamic text wrapping to viewport width
 12. **Tab Key Fix** - Fixed `skipNextEdit` timing race to prevent double key presses
+13. **Leader Bar** - Which-key style popup with custom keybindings (see `leader.md`)
 
 ### New Commands
 | Command | Description |
@@ -263,6 +264,7 @@ New status components:
 | `:formatonsave on/off` | Toggle LSP format on save |
 | `:format` or `:fmt` | Manual LSP format current buffer |
 | `:wrap` or `:wrap on/off` | Toggle soft wrap (no arg toggles) |
+| `:leaderreload` | Reload leader keybindings from config |
 
 ### New State Fields
 ```go
@@ -276,6 +278,12 @@ commandHistoryIndex   int      // Current position in history (-1 = new input)
 commandHistorySaved   string   // Saves current input when navigating history
 formatOnSave          bool     // Auto-format on save when LSP available
 softWrapEnabled       bool     // Soft wrap long lines to viewport width
+leaderBarActive       bool     // Whether leader bar popup is visible
+leaderBarSequence     string   // Accumulated key sequence after leader
+leaderBarBindings     []LeaderBinding  // All loaded bindings
+leaderBarMatches      []LeaderBinding  // Bindings matching current sequence
+leaderBarIndex        int      // Selected item in popup
+lastSpaceTime         time.Time // For double-space detection
 ```
 
 ### Command History Functions

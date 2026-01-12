@@ -6,6 +6,7 @@ require gioui.org v0.9.0
 
 require (
 	gioui.org/shader v1.0.8 // indirect
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/UserExistsError/conpty v0.1.4 // indirect
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect

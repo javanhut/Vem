@@ -112,7 +112,13 @@ func (m *Manager) startServer(cfg ServerConfig, workspaceRoot string) (*ServerIn
 		m.onStatus(fmt.Sprintf("Starting %s...", cfg.Name))
 	}
 
-	client, err := NewClient(cfg.Command, cfg.Args, workspaceRoot)
+	// Get full path to server command (handles ~/go/bin for gopls, etc.)
+	cmdPath := FindServerCommand(&cfg)
+	if cmdPath == "" {
+		return nil, fmt.Errorf("language server %s not found", cfg.Name)
+	}
+
+	client, err := NewClient(cmdPath, cfg.Args, workspaceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("create client: %w", err)
 	}

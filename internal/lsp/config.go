@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -316,13 +317,67 @@ func isShellScript(filePath string) bool {
 	return false
 }
 
+// findGoExecutable tries to locate a Go-installed executable.
+// Checks GOBIN, GOPATH/bin, and default ~/go/bin locations.
+func findGoExecutable(name string) (string, error) {
+	// Check GOBIN first
+	if gobin := os.Getenv("GOBIN"); gobin != "" {
+		path := filepath.Join(gobin, name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// Check GOPATH/bin
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		path := filepath.Join(gopath, "bin", name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// Check default ~/go/bin
+	if home, err := os.UserHomeDir(); err == nil {
+		path := filepath.Join(home, "go", "bin", name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// Check /usr/local/go/bin
+	path := filepath.Join("/usr/local/go/bin", name)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("%s not found in Go paths", name)
+}
+
+// FindServerCommand returns the full path to a server executable.
+// First tries PATH, then language-specific locations.
+func FindServerCommand(cfg *ServerConfig) string {
+	if cfg == nil {
+		return ""
+	}
+
+	// Try PATH first
+	if path, err := exec.LookPath(cfg.Command); err == nil {
+		return path
+	}
+
+	// For Go tools, check Go-specific locations
+	if cfg.Command == "gopls" {
+		if path, err := findGoExecutable("gopls"); err == nil {
+			return path
+		}
+	}
+
+	return ""
+}
+
 // IsServerAvailable checks if a language server is installed and executable.
 func IsServerAvailable(cfg *ServerConfig) bool {
-	if cfg == nil {
-		return false
-	}
-	_, err := exec.LookPath(cfg.Command)
-	return err == nil
+	return FindServerCommand(cfg) != ""
 }
 
 // FindProjectRoot finds the project root directory based on marker files.

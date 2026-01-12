@@ -76,17 +76,18 @@ Gets or creates server for file:
 4. Check for existing server at root
 5. Start new server if needed
 
-### Lines 109-275: Server Startup
+### Lines 109-280: Server Startup
 
-#### startServer (Lines 109-275)
+#### startServer (Lines 109-280)
 Starts new language server:
-1. Creates LSP client with command
-2. Starts client process
-3. Sets up error callback
-4. Registers diagnostic notification handler
-5. Sends `initialize` request with full capabilities
-6. Sends `initialized` notification
-7. Starts server monitor goroutine
+1. Resolves full command path via `FindServerCommand()` (handles gopls in ~/go/bin)
+2. Creates LSP client with resolved path
+3. Starts client process
+4. Sets up error callback
+5. Registers diagnostic notification handler
+6. Sends `initialize` request with full capabilities
+7. Sends `initialized` notification
+8. Starts server monitor goroutine
 
 **Client Capabilities Registered:**
 - Workspace: applyEdit, documentChanges, workspaceFolders
@@ -165,4 +166,4 @@ GetServerForFile()
 ```
 
 ---
-*Last Updated: Reference guide creation*
+*Last Updated: After gopls PATH detection fix*

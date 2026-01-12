@@ -126,7 +126,16 @@ type appState struct {
 	commandHistory       []string
 	commandHistoryIndex  int
 	commandHistorySaved  string
-	window               *app.Window
+
+	// Leader bar state
+	leaderBarActive   bool
+	leaderBarSequence string
+	leaderBarBindings []LeaderBinding
+	leaderBarMatches  []LeaderBinding
+	leaderBarIndex    int
+	lastSpaceTime     time.Time
+
+	window *app.Window
 
 	// Explorer state
 	explorerVisible      bool
@@ -428,6 +437,9 @@ func newAppState(filePaths []string) *appState {
 		indentString:         "\t", // Use tabs by default
 	}
 
+	// Load leader bar keybindings
+	state.loadLeaderConfig()
+
 	// Set up LSP callbacks
 	lspManager.OnDiagnostics(func(uri lsp.DocumentURI, diagnostics []lsp.Diagnostic) {
 		filePath := lsp.URIToFilePath(uri)
@@ -650,6 +662,11 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 	// Draw fuzzy finder overlay on top if active
 	if s.fuzzyFinderActive {
 		s.drawFuzzyFinder(gtx)
+	}
+
+	// Draw leader bar overlay on top if active
+	if s.leaderBarActive {
+		s.drawLeaderBar(gtx)
 	}
 
 	return dims
@@ -1897,6 +1914,12 @@ func (s *appState) handleKey(ev key.Event) {
 		}
 	}
 
+	// Handle leader bar input if active
+	if s.leaderBarActive {
+		s.handleLeaderKey(string(ev.Name))
+		return
+	}
+
 	// Handle Ctrl+S prefix for pane commands
 	if s.ctrlPressed && strings.ToLower(string(ev.Name)) == "s" && !s.pendingPaneCmd {
 		s.pendingPaneCmd = true
@@ -1997,6 +2020,14 @@ func (s *appState) handleNormalModeSpecial(ev key.Event) bool {
 	if s.isColonKey(ev) {
 		s.enterCommandMode()
 		return true
+	}
+
+	// Handle space key for leader bar (double-space detection)
+	if ev.Name == key.NameSpace || ev.Name == " " {
+		if s.handleSpaceKey() {
+			return true
+		}
+		// Single space - don't consume, let it be handled normally
 	}
 
 	if r, ok := s.printableKey(ev); ok {
@@ -3272,6 +3303,8 @@ func (s *appState) executeCommandLine() {
 	case "noexpandtab":
 		s.indentString = "\t"
 		s.status = "Using tabs for indent"
+	case "leaderreload":
+		s.reloadLeaderConfig()
 	default:
 		// Try LSP commands
 		if s.processLSPCommand(name, args) {

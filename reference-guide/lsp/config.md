@@ -1,8 +1,8 @@
 # config.go
 
 **Path:** `/home/javanhut/Development/Vem/internal/lsp/config.go`
-**Lines:** 492
-**Purpose:** Language server configuration and project root detection
+**Lines:** ~545
+**Purpose:** Language server configuration, command discovery, and project root detection
 
 ## Overview
 
@@ -16,11 +16,12 @@ Provides:
 
 ## Code Blocks
 
-### Lines 1-8: Package and Imports
+### Lines 1-9: Package and Imports
 
 ```go
 package lsp
 import (
+    "fmt"
     "os"
     "os/exec"
     "path/filepath"
@@ -98,18 +99,50 @@ Checks if file is shell script by shebang:
 2. Checks for `#!` prefix
 3. Looks for "sh", "bash", or "zsh" in first line
 
-### Lines 319-326: Server Availability
+### Lines 320-381: Server Command Discovery
 
-#### IsServerAvailable (Lines 319-326)
-Checks if server is installed:
+#### findGoExecutable (Lines 320-354)
+Locates Go-installed executables by checking:
+1. `GOBIN` environment variable
+2. `GOPATH/bin` directory
+3. Default `~/go/bin` location
+4. `/usr/local/go/bin` fallback
+
+This allows gopls and other Go tools to be found even when not in system PATH.
+
+#### FindServerCommand (Lines 356-376)
+Returns full path to server executable:
+1. First tries `exec.LookPath()` (system PATH)
+2. For gopls, falls back to Go-specific locations via `findGoExecutable()`
+3. Returns empty string if not found
+
 ```go
-_, err := exec.LookPath(cfg.Command)
-return err == nil
+func FindServerCommand(cfg *ServerConfig) string {
+    // Try PATH first
+    if path, err := exec.LookPath(cfg.Command); err == nil {
+        return path
+    }
+    // For Go tools, check Go-specific locations
+    if cfg.Command == "gopls" {
+        if path, err := findGoExecutable("gopls"); err == nil {
+            return path
+        }
+    }
+    return ""
+}
 ```
 
-### Lines 328-385: Project Root Detection
+#### IsServerAvailable (Lines 378-381)
+Checks if server is installed using `FindServerCommand()`:
+```go
+func IsServerAvailable(cfg *ServerConfig) bool {
+    return FindServerCommand(cfg) != ""
+}
+```
 
-#### FindProjectRoot (Lines 328-385)
+### Lines 383-440: Project Root Detection
+
+#### FindProjectRoot (Lines 383-440)
 Finds project root by marker files:
 1. Gets absolute path
 2. Determines starting directory
@@ -187,4 +220,4 @@ None identified.
    - `InstallCommand`: (optional) Installation command
 
 ---
-*Last Updated: Reference guide creation*
+*Last Updated: After gopls PATH detection fix*

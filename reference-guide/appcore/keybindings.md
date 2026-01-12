@@ -225,5 +225,12 @@ Modifier key matching with platform quirk handling.
    - History stored in `commandHistory` slice (in-memory, newest last)
    - Typing or deleting resets history navigation position
 
+7. **Leader Bar** (see `leader.md`)
+   - Double-press Space in normal mode opens which-key style popup
+   - Custom keybindings loaded from `~/.config/vem/keybindings.toml`
+   - Supports multi-key sequences (e.g., `gd` for goto definition)
+   - Supports both Vem actions and shell commands
+   - `:leaderreload` command to reload config
+
 ---
-*Last Updated: After command history feature*
+*Last Updated: After leader bar feature*

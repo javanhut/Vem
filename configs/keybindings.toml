@@ -1,0 +1,116 @@
+# Vem Leader Keybindings
+# Keys are pressed after <Leader> (double-space)
+#
+# Format:
+#   [[keybind]]
+#   name = "Display Name"
+#   keys = "key_sequence"    # e.g., "gd" for g then d
+#   action = "action_name"   # For Vem actions
+#   command = "shell_cmd"    # For shell commands (optional)
+#
+# Available actions:
+#   lsp_goto_definition, lsp_find_references, lsp_hover,
+#   lsp_rename, lsp_code_action, lsp_format,
+#   save_file, fuzzy_finder, toggle_explorer,
+#   split_vertical, split_horizontal, pane_close,
+#   next_buffer, prev_buffer, close_buffer
+
+# === LSP Commands ===
+
+[[keybind]]
+name = "Go to Definition"
+keys = "gd"
+action = "lsp_goto_definition"
+
+[[keybind]]
+name = "Find References"
+keys = "gr"
+action = "lsp_find_references"
+
+[[keybind]]
+name = "Hover Info"
+keys = "K"
+action = "lsp_hover"
+
+[[keybind]]
+name = "Rename Symbol"
+keys = "rn"
+action = "lsp_rename"
+
+[[keybind]]
+name = "Code Action"
+keys = "ca"
+action = "lsp_code_action"
+
+[[keybind]]
+name = "Format File"
+keys = "fm"
+action = "lsp_format"
+
+# === File Operations ===
+
+[[keybind]]
+name = "Save File"
+keys = "w"
+action = "save_file"
+
+[[keybind]]
+name = "Fuzzy Find"
+keys = "ff"
+action = "fuzzy_finder"
+
+[[keybind]]
+name = "Toggle Explorer"
+keys = "e"
+action = "toggle_explorer"
+
+# === Buffer Operations ===
+
+[[keybind]]
+name = "Next Buffer"
+keys = "bn"
+action = "next_buffer"
+
+[[keybind]]
+name = "Previous Buffer"
+keys = "bp"
+action = "prev_buffer"
+
+[[keybind]]
+name = "Close Buffer"
+keys = "bd"
+action = "close_buffer"
+
+# === Pane Operations ===
+
+[[keybind]]
+name = "Split Vertical"
+keys = "sv"
+action = "split_vertical"
+
+[[keybind]]
+name = "Split Horizontal"
+keys = "sh"
+action = "split_horizontal"
+
+[[keybind]]
+name = "Close Pane"
+keys = "x"
+action = "pane_close"
+
+# === Example Shell Commands (uncomment to use) ===
+
+# [[keybind]]
+# name = "Run Tests"
+# keys = "rt"
+# command = "go test ./..."
+
+# [[keybind]]
+# name = "Build Project"
+# keys = "b"
+# command = "make build"
+
+# [[keybind]]
+# name = "Git Status"
+# keys = "gs"
+# command = "git status"

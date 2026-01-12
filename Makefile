@@ -430,6 +430,14 @@ else
 		sudo mkdir -p $(INSTALL_DIR); \
 	fi
 	@sudo install -m 755 $(BINARY_NAME) $(INSTALL_PATH)
+	@echo "Installing default config..."
+	@mkdir -p $(HOME)/.config/vem
+	@if [ ! -f $(HOME)/.config/vem/keybindings.toml ]; then \
+		cp configs/keybindings.toml $(HOME)/.config/vem/keybindings.toml; \
+		echo "Installed default keybindings to $(HOME)/.config/vem/keybindings.toml"; \
+	else \
+		echo "Keybindings config already exists, skipping..."; \
+	fi
 ifeq ($(GOOS),linux)
 	@echo "Installing desktop entry and icon..."
 	@if [ ! -d $(DESKTOP_DIR) ]; then \
