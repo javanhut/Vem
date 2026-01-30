@@ -164,7 +164,9 @@ func (s *appState) applySettings() {
 
 	// UI settings
 	s.explorerWidth = s.settings.UI.ExplorerWidth
-	// FontSize and Theme will be applied in Phase 2 modal
+
+	// Theme settings
+	s.loadTheme(s.settings.UI.Theme)
 
 	// LSP settings
 	s.lspEnabled = s.settings.LSP.Enabled

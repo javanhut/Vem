@@ -49,6 +49,16 @@ type DocumentState struct {
 	LanguageID string
 }
 
+// LSPServerStatus contains detailed status info for a language server.
+type LSPServerStatus struct {
+	Name          string
+	Language      string
+	WorkspaceRoot string
+	Running       bool
+	DiagCount     int
+	DocCount      int
+}
+
 // NewManager creates a new LSP manager.
 func NewManager() *Manager {
 	return &Manager{
@@ -395,6 +405,66 @@ func (m *Manager) GetServerStatus() []string {
 	}
 
 	return status
+}
+
+// GetDetailedStatus returns detailed status for all servers.
+func (m *Manager) GetDetailedStatus() []LSPServerStatus {
+	m.serversMu.RLock()
+	defer m.serversMu.RUnlock()
+
+	result := make([]LSPServerStatus, 0, len(m.servers))
+	for root, server := range m.servers {
+		status := LSPServerStatus{
+			Name:          server.Config.Name,
+			WorkspaceRoot: root,
+			Running:       server.Client.IsRunning(),
+		}
+
+		// Get language from file extensions
+		if len(server.Config.FileExtensions) > 0 {
+			status.Language = server.Config.FileExtensions[0]
+		}
+
+		// Count diagnostics
+		server.DiagnosticsMu.RLock()
+		for _, diags := range server.Diagnostics {
+			status.DiagCount += len(diags)
+		}
+		server.DiagnosticsMu.RUnlock()
+
+		// Count open documents
+		server.DocumentsMu.RLock()
+		status.DocCount = len(server.Documents)
+		server.DocumentsMu.RUnlock()
+
+		result = append(result, status)
+	}
+
+	return result
+}
+
+// GetDiagnosticsSummary returns counts of errors, warnings, and info diagnostics.
+func (m *Manager) GetDiagnosticsSummary() (errors, warnings, info int) {
+	m.serversMu.RLock()
+	defer m.serversMu.RUnlock()
+
+	for _, server := range m.servers {
+		server.DiagnosticsMu.RLock()
+		for _, diags := range server.Diagnostics {
+			for _, d := range diags {
+				switch d.Severity {
+				case 1: // Error
+					errors++
+				case 2: // Warning
+					warnings++
+				case 3, 4: // Information, Hint
+					info++
+				}
+			}
+		}
+		server.DiagnosticsMu.RUnlock()
+	}
+	return
 }
 
 // HasServerForFile returns true if there's a server available for the file.

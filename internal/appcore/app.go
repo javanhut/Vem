@@ -30,6 +30,8 @@ import (
 
 	"golang.design/x/clipboard"
 
+	"github.com/alecthomas/chroma/v2"
+
 	"github.com/javanhut/vem/internal/editor"
 	"github.com/javanhut/vem/internal/filesystem"
 	"github.com/javanhut/vem/internal/fonts"
@@ -186,6 +188,10 @@ type appState struct {
 	syntaxHighlighters map[int]*syntax.Highlighter // Map from buffer index to highlighter
 	syntaxEnabled      bool                        // Global toggle for syntax highlighting
 	currentTheme       string                      // Current color theme name
+
+	// Theme state
+	chromaStyle *chroma.Style // Active Chroma style for syntax/UI
+	uiColors    UIColors      // Derived UI colors from theme
 
 	// Terminal state
 	terminals          map[int]*terminal.Terminal // Map from buffer index to terminal
@@ -534,6 +540,13 @@ func (s *appState) activeBuffer() *editor.Buffer {
 	}
 
 	return s.bufferMgr.GetBuffer(activePane.BufferIndex)
+}
+
+// loadTheme loads a theme by name, updating chromaStyle and uiColors.
+func (s *appState) loadTheme(themeName string) {
+	s.chromaStyle = LoadChromaStyle(themeName)
+	s.currentTheme = themeName
+	s.uiColors = ColorsFromChromaStyle(s.chromaStyle)
 }
 
 // getOrCreateHighlighter returns the syntax highlighter for the active buffer,

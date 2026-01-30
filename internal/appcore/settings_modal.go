@@ -15,6 +15,9 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+
+	"github.com/javanhut/vem/internal/lsp"
+	"github.com/javanhut/vem/internal/syntax"
 )
 
 // Tab constants
@@ -57,6 +60,20 @@ type settingsModalState struct {
 	lspEnabled    widget.Bool
 	lspAutoDetect widget.Bool
 
+	// LSP status widgets
+	lspServerList  widget.List
+	lspServers     []lsp.LSPServerStatus
+	lspRestartBtns []widget.Clickable // One per server
+	lspStopBtns    []widget.Clickable // One per server
+	lspStopAllBtn  widget.Clickable   // Stop all servers
+
+	// Theme selector widgets
+	themeList     widget.List
+	themeSelected int      // Currently selected theme index
+	themes        []string // Available theme names
+	themePreview  bool     // Whether preview mode is active
+	themeOriginal string   // Original theme before preview started
+
 	// Action buttons
 	saveButton   widget.Clickable
 	cancelButton widget.Clickable
@@ -79,6 +96,33 @@ func (s *appState) initSettingsModal() {
 	// LSP
 	s.settingsModal.lspEnabled.Value = s.settings.LSP.Enabled
 	s.settingsModal.lspAutoDetect.Value = s.settings.LSP.AutoDetect
+	s.settingsModal.lspServerList.List.Axis = layout.Vertical
+	s.settingsModal.lspServers = nil // Will be populated when tab is viewed
+	s.settingsModal.lspRestartBtns = nil
+	s.settingsModal.lspStopBtns = nil
+
+	// Theme
+	s.settingsModal.themes = make([]string, len(syntax.PresetThemes))
+	copy(s.settingsModal.themes, syntax.PresetThemes)
+	s.settingsModal.themeList.List.Axis = layout.Vertical
+	s.settingsModal.themePreview = false
+	s.settingsModal.themeOriginal = s.settings.UI.Theme
+
+	// Find current theme index
+	currentTheme := s.settings.UI.Theme
+	// Map "dark"/"light" to actual Chroma theme names for matching
+	if currentTheme == "dark" {
+		currentTheme = "monokai"
+	} else if currentTheme == "light" {
+		currentTheme = "solarized-light"
+	}
+	s.settingsModal.themeSelected = 0
+	for i, theme := range s.settingsModal.themes {
+		if theme == currentTheme {
+			s.settingsModal.themeSelected = i
+			break
+		}
+	}
 
 	// Reset to first tab and first item
 	s.settingsModal.selectedTab = tabGeneral
@@ -266,7 +310,7 @@ func (s *appState) drawGeneralTab(gtx layout.Context) layout.Dimensions {
 			return s.drawSectionHeader(gtx, "Appearance")
 		}),
 
-		// Font Size stepper
+		// Font Size stepper (item 0)
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return s.drawNumberStepper(gtx, "Font Size",
 				&s.settingsModal.fontSizeValue,
@@ -275,31 +319,9 @@ func (s *appState) drawGeneralTab(gtx layout.Context) layout.Dimensions {
 				8, 32, focused == 0)
 		}),
 
-		// Theme row (placeholder)
+		// Theme selector (item 1)
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Body1(s.theme, "Theme")
-						lbl.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
-						return lbl.Layout(gtx)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Body2(s.theme, s.settings.UI.Theme)
-						lbl.Color = color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
-						return lbl.Layout(gtx)
-					}),
-				)
-			})
-		}),
-
-		// Theme note
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Caption(s.theme, "Theme selection coming in Phase 3")
-				lbl.Color = color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
-				return lbl.Layout(gtx)
-			})
+			return s.drawThemeSelector(gtx, focused == 1)
 		}),
 	)
 }
@@ -448,12 +470,61 @@ func (s *appState) drawLSPTab(gtx layout.Context) layout.Dimensions {
 			})
 		}),
 
-		// Placeholder for Phase 3
+		// Section: Active Servers
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Active Servers")
+		}),
+
+		// Server status list
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawLSPServerStatus(gtx)
+		}),
+
+		// Section: Diagnostics
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Diagnostics Summary")
+		}),
+
+		// Diagnostics summary
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawDiagnosticsSummary(gtx)
+		}),
+
+		// Stop All button
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			// Handle click
+			if s.settingsModal.lspStopAllBtn.Clicked(gtx) {
+				if s.lspManager != nil {
+					s.lspManager.StopAll()
+					s.status = "All language servers stopped"
+				}
+			}
+
 			return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Caption(s.theme, "LSP health monitoring and diagnostics coming in Phase 3")
-				lbl.Color = hintColor
-				return lbl.Layout(gtx)
+				return s.settingsModal.lspStopAllBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Background{}.Layout(gtx,
+						func(gtx layout.Context) layout.Dimensions {
+							rr := gtx.Dp(unit.Dp(4))
+							rect := clip.RRect{
+								Rect: image.Rectangle{Max: gtx.Constraints.Min},
+								NE:   rr, NW: rr, SE: rr, SW: rr,
+							}.Push(gtx.Ops)
+							paint.Fill(gtx.Ops, color.NRGBA{R: 0x8b, G: 0x00, B: 0x00, A: 0xff}) // Dark red
+							rect.Pop()
+							return layout.Dimensions{Size: gtx.Constraints.Min}
+						},
+						func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{
+								Top: unit.Dp(6), Bottom: unit.Dp(6),
+								Left: unit.Dp(12), Right: unit.Dp(12),
+							}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Caption(s.theme, "Stop All Servers")
+								lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+								return lbl.Layout(gtx)
+							})
+						},
+					)
+				})
 			})
 		}),
 	)
@@ -546,6 +617,257 @@ func (s *appState) drawNumberStepper(gtx layout.Context, label string, value *in
 					)
 				})
 			},
+		)
+	})
+}
+
+// drawThemeSelector renders the theme selection list with live preview.
+func (s *appState) drawThemeSelector(gtx layout.Context, isFocused bool) layout.Dimensions {
+	labelColor := color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+	selectedBg := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x66}
+	focusBg := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x44}
+	descColor := color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// Label row
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Body1(s.theme, "Theme")
+				lbl.Color = labelColor
+				if isFocused {
+					lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+				}
+				return lbl.Layout(gtx)
+			})
+		}),
+
+		// Theme list with constrained height
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			// Focus highlight for the entire list area
+			if isFocused {
+				rr := gtx.Dp(unit.Dp(4))
+				rect := clip.RRect{
+					Rect: image.Rectangle{Max: image.Pt(gtx.Constraints.Max.X, gtx.Dp(unit.Dp(150)))},
+					NE:   rr, NW: rr, SE: rr, SW: rr,
+				}.Push(gtx.Ops)
+				paint.Fill(gtx.Ops, focusBg)
+				rect.Pop()
+			}
+
+			gtx.Constraints.Max.Y = gtx.Dp(unit.Dp(150))
+			gtx.Constraints.Min.Y = gtx.Dp(unit.Dp(150))
+
+			return material.List(s.theme, &s.settingsModal.themeList).Layout(gtx,
+				len(s.settingsModal.themes),
+				func(gtx layout.Context, index int) layout.Dimensions {
+					themeName := s.settingsModal.themes[index]
+					isSelected := index == s.settingsModal.themeSelected
+
+					return layout.Inset{Top: unit.Dp(2), Bottom: unit.Dp(2), Left: unit.Dp(4), Right: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return layout.Background{}.Layout(gtx,
+							func(gtx layout.Context) layout.Dimensions {
+								if isSelected {
+									rr := gtx.Dp(unit.Dp(3))
+									rect := clip.RRect{
+										Rect: image.Rectangle{Max: gtx.Constraints.Min},
+										NE:   rr, NW: rr, SE: rr, SW: rr,
+									}.Push(gtx.Ops)
+									paint.Fill(gtx.Ops, selectedBg)
+									rect.Pop()
+								}
+								return layout.Dimensions{Size: gtx.Constraints.Min}
+							},
+							func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4), Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+										// Theme name row
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											displayName := themeName
+											if isSelected {
+												displayName = themeName + " (selected)"
+											}
+											lbl := material.Body2(s.theme, displayName)
+											if isSelected {
+												lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+											} else {
+												lbl.Color = labelColor
+											}
+											return lbl.Layout(gtx)
+										}),
+										// Description row
+										layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+											desc := syntax.GetThemeDescription(themeName)
+											lbl := material.Caption(s.theme, desc)
+											lbl.Color = descColor
+											return lbl.Layout(gtx)
+										}),
+									)
+								})
+							},
+						)
+					})
+				},
+			)
+		}),
+	)
+}
+
+// drawLSPServerStatus renders the active servers status panel.
+func (s *appState) drawLSPServerStatus(gtx layout.Context) layout.Dimensions {
+	// Refresh server status
+	if s.lspManager != nil {
+		s.settingsModal.lspServers = s.lspManager.GetDetailedStatus()
+	}
+
+	labelColor := color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+	hintColor := color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
+	runningColor := color.NRGBA{R: 0x50, G: 0xfa, B: 0x7b, A: 0xff} // Green
+	stoppedColor := color.NRGBA{R: 0xff, G: 0x55, B: 0x55, A: 0xff} // Red
+	accentColor := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}  // Blue
+
+	if len(s.settingsModal.lspServers) == 0 {
+		return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Caption(s.theme, "No active language servers")
+			lbl.Color = hintColor
+			return lbl.Layout(gtx)
+		})
+	}
+
+	// Resize button slices to match server count
+	if len(s.settingsModal.lspRestartBtns) != len(s.settingsModal.lspServers) {
+		s.settingsModal.lspRestartBtns = make([]widget.Clickable, len(s.settingsModal.lspServers))
+		s.settingsModal.lspStopBtns = make([]widget.Clickable, len(s.settingsModal.lspServers))
+	}
+
+	// Constrain height
+	gtx.Constraints.Max.Y = gtx.Dp(unit.Dp(150))
+
+	return material.List(s.theme, &s.settingsModal.lspServerList).Layout(gtx,
+		len(s.settingsModal.lspServers),
+		func(gtx layout.Context, index int) layout.Dimensions {
+			server := s.settingsModal.lspServers[index]
+
+			// Handle button clicks
+			if s.settingsModal.lspRestartBtns[index].Clicked(gtx) {
+				s.lspManager.StopServer(server.WorkspaceRoot)
+				s.status = fmt.Sprintf("Restarting %s...", server.Name)
+			}
+			if s.settingsModal.lspStopBtns[index].Clicked(gtx) {
+				s.lspManager.StopServer(server.WorkspaceRoot)
+				s.status = fmt.Sprintf("Stopped %s", server.Name)
+			}
+
+			// Status indicator
+			statusText := "Stopped"
+			statusColor := stoppedColor
+			if server.Running {
+				statusText = "Running"
+				statusColor = runningColor
+			}
+
+			return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+					// Server name, status, and buttons
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body2(s.theme, server.Name)
+								lbl.Color = labelColor
+								return lbl.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									lbl := material.Caption(s.theme, statusText)
+									lbl.Color = statusColor
+									return lbl.Layout(gtx)
+								})
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									diagText := fmt.Sprintf("%d diag", server.DiagCount)
+									lbl := material.Caption(s.theme, diagText)
+									lbl.Color = hintColor
+									return lbl.Layout(gtx)
+								})
+							}),
+							// Restart button
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									return s.settingsModal.lspRestartBtns[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+										lbl := material.Caption(s.theme, "[Restart]")
+										lbl.Color = accentColor
+										return lbl.Layout(gtx)
+									})
+								})
+							}),
+							// Stop button
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									return s.settingsModal.lspStopBtns[index].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+										lbl := material.Caption(s.theme, "[Stop]")
+										lbl.Color = stoppedColor
+										return lbl.Layout(gtx)
+									})
+								})
+							}),
+						)
+					}),
+					// Workspace path
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							lbl := material.Caption(s.theme, server.WorkspaceRoot)
+							lbl.Color = hintColor
+							return lbl.Layout(gtx)
+						})
+					}),
+				)
+			})
+		},
+	)
+}
+
+// drawDiagnosticsSummary renders an overall diagnostics count summary.
+func (s *appState) drawDiagnosticsSummary(gtx layout.Context) layout.Dimensions {
+	errors, warnings, info := 0, 0, 0
+	if s.lspManager != nil {
+		errors, warnings, info = s.lspManager.GetDiagnosticsSummary()
+	}
+
+	errorColor := color.NRGBA{R: 0xff, G: 0x55, B: 0x55, A: 0xff}
+	warnColor := color.NRGBA{R: 0xff, G: 0xaa, B: 0x00, A: 0xff}
+	infoColor := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	hintColor := color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
+
+	total := errors + warnings + info
+	if total == 0 {
+		return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Caption(s.theme, "No diagnostics")
+			lbl.Color = hintColor
+			return lbl.Layout(gtx)
+		})
+	}
+
+	return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Caption(s.theme, fmt.Sprintf("%d errors", errors))
+				lbl.Color = errorColor
+				return lbl.Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Caption(s.theme, fmt.Sprintf("%d warnings", warnings))
+					lbl.Color = warnColor
+					return lbl.Layout(gtx)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					lbl := material.Caption(s.theme, fmt.Sprintf("%d info", info))
+					lbl.Color = infoColor
+					return lbl.Layout(gtx)
+				})
+			}),
 		)
 	})
 }
@@ -697,7 +1019,7 @@ func (s *appState) handleSettingsModalKey(ev key.Event) {
 func (s *appState) getTabItemCount() int {
 	switch s.settingsModal.selectedTab {
 	case tabGeneral:
-		return 1 // Font Size
+		return 2 // Font Size, Theme
 	case tabEditor:
 		return 7 // AutoIndent, AutoPairs, SoftWrap, FormatOnSave, UseSpaces, TabWidth, ScrollOffset
 	case tabLSP:
@@ -736,16 +1058,20 @@ func (s *appState) toggleFocusedSetting() {
 	}
 }
 
-// adjustFocusedSetting adjusts a numeric stepper setting.
+// adjustFocusedSetting adjusts a numeric stepper setting or cycles through theme list.
 func (s *appState) adjustFocusedSetting(delta int) {
 	switch s.settingsModal.selectedTab {
 	case tabGeneral:
-		if s.settingsModal.focusedItem == 0 {
+		switch s.settingsModal.focusedItem {
+		case 0:
 			// Font Size: 8-32
 			newVal := s.settingsModal.fontSizeValue + delta
 			if newVal >= 8 && newVal <= 32 {
 				s.settingsModal.fontSizeValue = newVal
 			}
+		case 1:
+			// Theme selector: use delta to navigate up/down
+			s.adjustThemeSelection(delta)
 		}
 	case tabEditor:
 		switch s.settingsModal.focusedItem {
@@ -765,8 +1091,42 @@ func (s *appState) adjustFocusedSetting(delta int) {
 	}
 }
 
+// adjustThemeSelection changes the selected theme and triggers live preview.
+func (s *appState) adjustThemeSelection(delta int) {
+	if len(s.settingsModal.themes) == 0 {
+		return
+	}
+
+	newIdx := s.settingsModal.themeSelected + delta
+	if newIdx < 0 {
+		newIdx = 0
+	}
+	if newIdx >= len(s.settingsModal.themes) {
+		newIdx = len(s.settingsModal.themes) - 1
+	}
+
+	if newIdx != s.settingsModal.themeSelected {
+		s.settingsModal.themeSelected = newIdx
+
+		// Enable preview mode and store original theme
+		if !s.settingsModal.themePreview {
+			s.settingsModal.themePreview = true
+			s.settingsModal.themeOriginal = s.currentTheme
+		}
+
+		// Apply theme for live preview
+		s.loadTheme(s.settingsModal.themes[s.settingsModal.themeSelected])
+	}
+}
+
 // closeSettingsModal closes the modal without saving changes.
 func (s *appState) closeSettingsModal() {
+	// Restore original theme if preview was active
+	if s.settingsModal.themePreview {
+		s.loadTheme(s.settingsModal.themeOriginal)
+		s.settingsModal.themePreview = false
+	}
+
 	s.settingsModal.active = false
 	s.status = ""
 }
@@ -775,6 +1135,13 @@ func (s *appState) closeSettingsModal() {
 func (s *appState) saveAndCloseSettings() {
 	// UI settings
 	s.settings.UI.FontSize = s.settingsModal.fontSizeValue
+
+	// Theme setting - save the selected theme name
+	if s.settingsModal.themeSelected >= 0 && s.settingsModal.themeSelected < len(s.settingsModal.themes) {
+		s.settings.UI.Theme = s.settingsModal.themes[s.settingsModal.themeSelected]
+	}
+	// Clear preview mode (theme already applied via live preview)
+	s.settingsModal.themePreview = false
 
 	// Editor settings
 	s.settings.Editor.AutoIndent = s.settingsModal.autoIndent.Value
