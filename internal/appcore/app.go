@@ -96,6 +96,7 @@ var (
 )
 
 type appState struct {
+	settings             *Settings
 	theme                *material.Theme
 	bufferMgr            *editor.BufferManager
 	paneManager          *panes.PaneManager
@@ -268,6 +269,9 @@ type appState struct {
 	// Auto-indent
 	autoIndentEnabled bool
 	indentString      string // "\t" or spaces
+
+	// Settings modal state
+	settingsModal settingsModalState
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -436,6 +440,13 @@ func newAppState(filePaths []string) *appState {
 		autoIndentEnabled:    true, // Enable auto-indent by default
 		indentString:         "\t", // Use tabs by default
 	}
+
+	// Load settings
+	state.settings = NewSettings()
+	if err := state.settings.Load(); err != nil {
+		state.status = fmt.Sprintf("Settings load error: %v (using defaults)", err)
+	}
+	state.applySettings()
 
 	// Load leader bar keybindings
 	state.loadLeaderConfig()
@@ -658,6 +669,11 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 			return s.drawStatusBar(gtx)
 		}),
 	)
+
+	// Draw settings modal overlay on top if active
+	if s.settingsModal.active {
+		s.drawSettingsModal(gtx)
+	}
 
 	// Draw fuzzy finder overlay on top if active
 	if s.fuzzyFinderActive {
@@ -1899,6 +1915,12 @@ func (s *appState) handleKey(ev key.Event) {
 		if s.handlePaneResizeKey(ev) {
 			return
 		}
+	}
+
+	// Settings modal intercepts all keys when active
+	if s.settingsModal.active {
+		s.handleSettingsModalKey(ev)
+		return
 	}
 
 	// Handle terminal input if in terminal mode
@@ -3305,6 +3327,8 @@ func (s *appState) executeCommandLine() {
 		s.status = "Using tabs for indent"
 	case "leaderreload":
 		s.reloadLeaderConfig()
+	case "settings":
+		s.openSettingsModal()
 	default:
 		// Try LSP commands
 		if s.processLSPCommand(name, args) {

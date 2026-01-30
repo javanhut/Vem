@@ -1,0 +1,803 @@
+package appcore
+
+import (
+	"fmt"
+	"image"
+	"image/color"
+	"strings"
+
+	"gioui.org/font"
+	"gioui.org/io/key"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
+	"gioui.org/unit"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+)
+
+// Tab constants
+const (
+	tabGeneral = iota
+	tabEditor
+	tabLSP
+)
+
+// settingsModalState holds the persistent state for the settings modal.
+type settingsModalState struct {
+	active      bool
+	selectedTab int
+	focusedItem int // Currently focused item within the tab (for keyboard navigation)
+
+	// Tab buttons
+	tabGeneral widget.Clickable
+	tabEditor  widget.Clickable
+	tabLSP     widget.Clickable
+
+	// General settings widgets
+	fontSizeMinus widget.Clickable
+	fontSizePlus  widget.Clickable
+	fontSizeValue int
+
+	// Editor settings widgets
+	autoIndent        widget.Bool
+	autoPairs         widget.Bool
+	softWrap          widget.Bool
+	formatOnSave      widget.Bool
+	useSpaces         widget.Bool
+	tabWidthMinus     widget.Clickable
+	tabWidthPlus      widget.Clickable
+	tabWidthValue     int
+	scrollOffsetMinus widget.Clickable
+	scrollOffsetPlus  widget.Clickable
+	scrollOffsetValue int
+
+	// LSP settings widgets
+	lspEnabled    widget.Bool
+	lspAutoDetect widget.Bool
+
+	// Action buttons
+	saveButton   widget.Clickable
+	cancelButton widget.Clickable
+}
+
+// initSettingsModal initializes the modal widget values from current settings.
+func (s *appState) initSettingsModal() {
+	// UI
+	s.settingsModal.fontSizeValue = s.settings.UI.FontSize
+
+	// Editor
+	s.settingsModal.autoIndent.Value = s.settings.Editor.AutoIndent
+	s.settingsModal.autoPairs.Value = s.settings.Editor.AutoPairs
+	s.settingsModal.softWrap.Value = s.settings.Editor.SoftWrap
+	s.settingsModal.formatOnSave.Value = s.settings.Editor.FormatOnSave
+	s.settingsModal.useSpaces.Value = s.settings.Editor.UseSpaces
+	s.settingsModal.tabWidthValue = s.settings.Editor.TabWidth
+	s.settingsModal.scrollOffsetValue = s.settings.Editor.ScrollOffset
+
+	// LSP
+	s.settingsModal.lspEnabled.Value = s.settings.LSP.Enabled
+	s.settingsModal.lspAutoDetect.Value = s.settings.LSP.AutoDetect
+
+	// Reset to first tab and first item
+	s.settingsModal.selectedTab = tabGeneral
+	s.settingsModal.focusedItem = 0
+}
+
+// drawSettingsModal renders the settings modal overlay.
+func (s *appState) drawSettingsModal(gtx layout.Context) layout.Dimensions {
+	// Colors
+	overlayBg := color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0xcc}
+	boxBg := color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
+	boxBorder := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	titleColor := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+
+	// Overlay background (semi-transparent)
+	overlayRect := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, overlayBg)
+	overlayRect.Pop()
+
+	// Calculate centered popup dimensions
+	popupWidth := gtx.Constraints.Max.X * 2 / 3
+	if popupWidth > 600 {
+		popupWidth = 600
+	}
+	if popupWidth < 300 {
+		popupWidth = 300
+	}
+	popupHeight := 450
+	if popupHeight > gtx.Constraints.Max.Y*2/3 {
+		popupHeight = gtx.Constraints.Max.Y * 2 / 3
+	}
+
+	offsetX := (gtx.Constraints.Max.X - popupWidth) / 2
+	offsetY := (gtx.Constraints.Max.Y - popupHeight) / 3
+
+	// Position the popup
+	offset := op.Offset(image.Pt(offsetX, offsetY)).Push(gtx.Ops)
+	defer offset.Pop()
+
+	// Draw border
+	borderRect := clip.Rect{Max: image.Pt(popupWidth, popupHeight)}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, boxBorder)
+	borderRect.Pop()
+
+	// Draw background (slightly inset for border effect)
+	bgRect := clip.Rect{
+		Min: image.Pt(2, 2),
+		Max: image.Pt(popupWidth-2, popupHeight-2),
+	}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, boxBg)
+	bgRect.Pop()
+
+	// Constrain drawing to popup area
+	gtx.Constraints.Max.X = popupWidth - 4
+	gtx.Constraints.Max.Y = popupHeight - 4
+
+	inset := layout.Inset{
+		Top:    unit.Dp(12),
+		Right:  unit.Dp(16),
+		Bottom: unit.Dp(12),
+		Left:   unit.Dp(16),
+	}
+
+	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			// Title
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				label := material.H6(s.theme, "Settings")
+				label.Color = titleColor
+				return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, label.Layout)
+			}),
+
+			// Tab bar
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return s.drawSettingsTabs(gtx)
+			}),
+
+			// Content area (flexible)
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return s.drawTabContent(gtx)
+				})
+			}),
+
+			// Button row at bottom
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return s.drawSettingsButtons(gtx)
+			}),
+		)
+	})
+}
+
+// drawSettingsTabs renders the tab bar for settings navigation.
+func (s *appState) drawSettingsTabs(gtx layout.Context) layout.Dimensions {
+	tabNames := []string{"General", "Editor", "LSP"}
+	tabButtons := []*widget.Clickable{
+		&s.settingsModal.tabGeneral,
+		&s.settingsModal.tabEditor,
+		&s.settingsModal.tabLSP,
+	}
+
+	// Check for tab clicks
+	for i, btn := range tabButtons {
+		if btn.Clicked(gtx) {
+			s.settingsModal.selectedTab = i
+		}
+	}
+
+	// Colors
+	selectedBg := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0xff}
+	unselectedBg := color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0x00}
+	selectedText := color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	unselectedText := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+
+	var children []layout.FlexChild
+	for i, name := range tabNames {
+		idx := i
+		tabName := name
+		btn := tabButtons[i]
+
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			isSelected := s.settingsModal.selectedTab == idx
+
+			return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return btn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					// Draw tab background
+					bgColor := unselectedBg
+					textColor := unselectedText
+					if isSelected {
+						bgColor = selectedBg
+						textColor = selectedText
+					}
+
+					return layout.Background{}.Layout(gtx,
+						func(gtx layout.Context) layout.Dimensions {
+							rr := gtx.Dp(unit.Dp(4))
+							rect := clip.RRect{
+								Rect: image.Rectangle{Max: gtx.Constraints.Min},
+								NE:   rr, NW: rr, SE: rr, SW: rr,
+							}.Push(gtx.Ops)
+							paint.Fill(gtx.Ops, bgColor)
+							rect.Pop()
+							return layout.Dimensions{Size: gtx.Constraints.Min}
+						},
+						func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{
+								Top: unit.Dp(6), Bottom: unit.Dp(6),
+								Left: unit.Dp(12), Right: unit.Dp(12),
+							}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body2(s.theme, tabName)
+								lbl.Color = textColor
+								return lbl.Layout(gtx)
+							})
+						},
+					)
+				})
+			})
+		}))
+	}
+
+	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
+}
+
+// drawTabContent renders the content for the selected tab.
+func (s *appState) drawTabContent(gtx layout.Context) layout.Dimensions {
+	switch s.settingsModal.selectedTab {
+	case tabGeneral:
+		return s.drawGeneralTab(gtx)
+	case tabEditor:
+		return s.drawEditorTab(gtx)
+	case tabLSP:
+		return s.drawLSPTab(gtx)
+	default:
+		return s.drawGeneralTab(gtx)
+	}
+}
+
+// drawGeneralTab renders the General settings content.
+func (s *appState) drawGeneralTab(gtx layout.Context) layout.Dimensions {
+	focused := s.settingsModal.focusedItem
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// Section: Appearance
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Appearance")
+		}),
+
+		// Font Size stepper
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawNumberStepper(gtx, "Font Size",
+				&s.settingsModal.fontSizeValue,
+				&s.settingsModal.fontSizeMinus,
+				&s.settingsModal.fontSizePlus,
+				8, 32, focused == 0)
+		}),
+
+		// Theme row (placeholder)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Body1(s.theme, "Theme")
+						lbl.Color = color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+						return lbl.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Body2(s.theme, s.settings.UI.Theme)
+						lbl.Color = color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
+						return lbl.Layout(gtx)
+					}),
+				)
+			})
+		}),
+
+		// Theme note
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Caption(s.theme, "Theme selection coming in Phase 3")
+				lbl.Color = color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
+}
+
+// drawEditorTab renders the Editor settings content.
+func (s *appState) drawEditorTab(gtx layout.Context) layout.Dimensions {
+	focused := s.settingsModal.focusedItem
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// Section: Behavior
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Behavior")
+		}),
+
+		// Auto Indent toggle (item 0)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.autoIndent, "Auto Indent", focused == 0)
+		}),
+
+		// Auto Pairs toggle (item 1)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.autoPairs, "Auto Pairs", focused == 1)
+		}),
+
+		// Soft Wrap toggle (item 2)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.softWrap, "Soft Wrap", focused == 2)
+		}),
+
+		// Format on Save toggle (item 3)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.formatOnSave, "Format on Save", focused == 3)
+		}),
+
+		// Section: Indentation
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Indentation")
+		}),
+
+		// Use Spaces toggle (item 4)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.useSpaces, "Use Spaces", focused == 4)
+		}),
+
+		// Tab Width stepper (item 5)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawNumberStepper(gtx, "Tab Width",
+				&s.settingsModal.tabWidthValue,
+				&s.settingsModal.tabWidthMinus,
+				&s.settingsModal.tabWidthPlus,
+				2, 8, focused == 5)
+		}),
+
+		// Section: Scrolling
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Scrolling")
+		}),
+
+		// Scroll Offset stepper (item 6)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawNumberStepper(gtx, "Scroll Offset",
+				&s.settingsModal.scrollOffsetValue,
+				&s.settingsModal.scrollOffsetMinus,
+				&s.settingsModal.scrollOffsetPlus,
+				0, 20, focused == 6)
+		}),
+	)
+}
+
+// drawBoolSetting renders a consistent row layout for boolean switches with optional focus highlight.
+func (s *appState) drawBoolSetting(gtx layout.Context, boolWidget *widget.Bool, label string, isFocused bool) layout.Dimensions {
+	labelColor := color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+	focusBgColor := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x44}
+
+	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Background{}.Layout(gtx,
+			func(gtx layout.Context) layout.Dimensions {
+				if isFocused {
+					rr := gtx.Dp(unit.Dp(4))
+					rect := clip.RRect{
+						Rect: image.Rectangle{Max: gtx.Constraints.Min},
+						NE:   rr, NW: rr, SE: rr, SW: rr,
+					}.Push(gtx.Ops)
+					paint.Fill(gtx.Ops, focusBgColor)
+					rect.Pop()
+				}
+				return layout.Dimensions{Size: gtx.Constraints.Min}
+			},
+			func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(4), Right: unit.Dp(4), Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							lbl := material.Body1(s.theme, label)
+							lbl.Color = labelColor
+							if isFocused {
+								lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+							}
+							return lbl.Layout(gtx)
+						}),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return material.Switch(s.theme, boolWidget, "").Layout(gtx)
+						}),
+					)
+				})
+			},
+		)
+	})
+}
+
+// drawLSPTab renders the LSP settings content.
+func (s *appState) drawLSPTab(gtx layout.Context) layout.Dimensions {
+	hintColor := color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
+	focused := s.settingsModal.focusedItem
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		// Section: Language Server Protocol
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawSectionHeader(gtx, "Language Server Protocol")
+		}),
+
+		// LSP Enabled toggle (item 0)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.lspEnabled, "Enable LSP", focused == 0)
+		}),
+
+		// Help text for Enable LSP
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: unit.Dp(4), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Caption(s.theme, "Connect to language servers for completions, diagnostics, etc.")
+				lbl.Color = hintColor
+				return lbl.Layout(gtx)
+			})
+		}),
+
+		// Auto Detect toggle (item 1)
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return s.drawBoolSetting(gtx, &s.settingsModal.lspAutoDetect, "Auto Detect", focused == 1)
+		}),
+
+		// Help text for Auto Detect
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: unit.Dp(4), Bottom: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Caption(s.theme, "Automatically start language server based on file type")
+				lbl.Color = hintColor
+				return lbl.Layout(gtx)
+			})
+		}),
+
+		// Placeholder for Phase 3
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Caption(s.theme, "LSP health monitoring and diagnostics coming in Phase 3")
+				lbl.Color = hintColor
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
+}
+
+// drawSectionHeader renders a section header with styled text.
+func (s *appState) drawSectionHeader(gtx layout.Context, title string) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(12), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		lbl := material.Body2(s.theme, title)
+		lbl.Color = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+		lbl.Font.Weight = font.Bold
+		return lbl.Layout(gtx)
+	})
+}
+
+// drawNumberStepper renders a label with +/- buttons and value display.
+func (s *appState) drawNumberStepper(gtx layout.Context, label string, value *int, minus, plus *widget.Clickable, minVal, maxVal int, isFocused bool) layout.Dimensions {
+	// Handle button clicks
+	if minus.Clicked(gtx) && *value > minVal {
+		*value--
+	}
+	if plus.Clicked(gtx) && *value < maxVal {
+		*value++
+	}
+
+	// Colors
+	labelColor := color.NRGBA{R: 0xdf, G: 0xe7, B: 0xff, A: 0xff}
+	btnColor := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	valueColor := color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	focusBgColor := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x44}
+
+	if isFocused {
+		labelColor = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	}
+
+	return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Background{}.Layout(gtx,
+			func(gtx layout.Context) layout.Dimensions {
+				if isFocused {
+					rr := gtx.Dp(unit.Dp(4))
+					rect := clip.RRect{
+						Rect: image.Rectangle{Max: gtx.Constraints.Min},
+						NE:   rr, NW: rr, SE: rr, SW: rr,
+					}.Push(gtx.Ops)
+					paint.Fill(gtx.Ops, focusBgColor)
+					rect.Pop()
+				}
+				return layout.Dimensions{Size: gtx.Constraints.Min}
+			},
+			func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(4), Right: unit.Dp(4), Top: unit.Dp(2), Bottom: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+						// Label
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							lbl := material.Body1(s.theme, label)
+							lbl.Color = labelColor
+							return lbl.Layout(gtx)
+						}),
+
+						// Minus button
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return minus.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									lbl := material.Body1(s.theme, "-")
+									lbl.Color = btnColor
+									return lbl.Layout(gtx)
+								})
+							})
+						}),
+
+						// Value
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body1(s.theme, fmt.Sprintf("%d", *value))
+								lbl.Color = valueColor
+								return lbl.Layout(gtx)
+							})
+						}),
+
+						// Plus button
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return plus.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								return layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+									lbl := material.Body1(s.theme, "+")
+									lbl.Color = btnColor
+									return lbl.Layout(gtx)
+								})
+							})
+						}),
+					)
+				})
+			},
+		)
+	})
+}
+
+// drawSettingsButtons renders the Save and Cancel buttons.
+func (s *appState) drawSettingsButtons(gtx layout.Context) layout.Dimensions {
+	// Check for button clicks
+	if s.settingsModal.saveButton.Clicked(gtx) {
+		s.saveAndCloseSettings()
+	}
+	if s.settingsModal.cancelButton.Clicked(gtx) {
+		s.closeSettingsModal()
+	}
+
+	// Colors
+	saveBg := color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0xff}
+	saveText := color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	cancelText := color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+
+	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx,
+			// Cancel button
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return s.settingsModal.cancelButton.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{
+						Top: unit.Dp(8), Bottom: unit.Dp(8),
+						Left: unit.Dp(16), Right: unit.Dp(16),
+					}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Body2(s.theme, "Cancel")
+						lbl.Color = cancelText
+						return lbl.Layout(gtx)
+					})
+				})
+			}),
+
+			// Spacer
+			layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
+
+			// Save button
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return s.settingsModal.saveButton.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Background{}.Layout(gtx,
+						func(gtx layout.Context) layout.Dimensions {
+							rr := gtx.Dp(unit.Dp(4))
+							rect := clip.RRect{
+								Rect: image.Rectangle{Max: gtx.Constraints.Min},
+								NE:   rr, NW: rr, SE: rr, SW: rr,
+							}.Push(gtx.Ops)
+							paint.Fill(gtx.Ops, saveBg)
+							rect.Pop()
+							return layout.Dimensions{Size: gtx.Constraints.Min}
+						},
+						func(gtx layout.Context) layout.Dimensions {
+							return layout.Inset{
+								Top: unit.Dp(8), Bottom: unit.Dp(8),
+								Left: unit.Dp(16), Right: unit.Dp(16),
+							}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body2(s.theme, "Save")
+								lbl.Color = saveText
+								return lbl.Layout(gtx)
+							})
+						},
+					)
+				})
+			}),
+		)
+	})
+}
+
+// handleSettingsModalKey handles key events when the settings modal is active.
+func (s *appState) handleSettingsModalKey(ev key.Event) {
+	// Special case: Tab events only come through on Release (consumed by focus system on Press)
+	isTabRelease := ev.Name == key.NameTab && ev.State == key.Release
+
+	// Only process Press events, except Tab which comes as Release
+	if ev.State != key.Press && !isTabRelease {
+		return
+	}
+
+	// Get max items for current tab
+	maxItems := s.getTabItemCount()
+
+	// Normalize key name for case-insensitive matching
+	keyName := strings.ToLower(string(ev.Name))
+
+	// Handle special keys first
+	switch ev.Name {
+	case key.NameEscape:
+		s.closeSettingsModal()
+		return
+	case key.NameReturn, key.NameEnter:
+		s.saveAndCloseSettings()
+		return
+	case key.NameTab:
+		// Cycle tabs and reset focus
+		s.settingsModal.selectedTab = (s.settingsModal.selectedTab + 1) % 3
+		s.settingsModal.focusedItem = 0
+		return
+	case key.NameDownArrow:
+		if s.settingsModal.focusedItem < maxItems-1 {
+			s.settingsModal.focusedItem++
+		}
+		return
+	case key.NameUpArrow:
+		if s.settingsModal.focusedItem > 0 {
+			s.settingsModal.focusedItem--
+		}
+		return
+	case key.NameLeftArrow:
+		s.adjustFocusedSetting(-1)
+		return
+	case key.NameRightArrow:
+		s.adjustFocusedSetting(1)
+		return
+	case key.NameSpace:
+		s.toggleFocusedSetting()
+		return
+	}
+
+	// Handle character keys (case-insensitive)
+	switch keyName {
+	case "1":
+		s.settingsModal.selectedTab = tabGeneral
+		s.settingsModal.focusedItem = 0
+	case "2":
+		s.settingsModal.selectedTab = tabEditor
+		s.settingsModal.focusedItem = 0
+	case "3":
+		s.settingsModal.selectedTab = tabLSP
+		s.settingsModal.focusedItem = 0
+	case "j":
+		if s.settingsModal.focusedItem < maxItems-1 {
+			s.settingsModal.focusedItem++
+		}
+	case "k":
+		if s.settingsModal.focusedItem > 0 {
+			s.settingsModal.focusedItem--
+		}
+	case "h":
+		s.adjustFocusedSetting(-1)
+	case "l":
+		s.adjustFocusedSetting(1)
+	case " ":
+		s.toggleFocusedSetting()
+	}
+}
+
+// getTabItemCount returns the number of focusable items in the current tab.
+func (s *appState) getTabItemCount() int {
+	switch s.settingsModal.selectedTab {
+	case tabGeneral:
+		return 1 // Font Size
+	case tabEditor:
+		return 7 // AutoIndent, AutoPairs, SoftWrap, FormatOnSave, UseSpaces, TabWidth, ScrollOffset
+	case tabLSP:
+		return 2 // Enabled, AutoDetect
+	default:
+		return 1
+	}
+}
+
+// toggleFocusedSetting toggles a boolean setting at the focused position.
+func (s *appState) toggleFocusedSetting() {
+	switch s.settingsModal.selectedTab {
+	case tabGeneral:
+		// Font size is a stepper, space does nothing
+	case tabEditor:
+		switch s.settingsModal.focusedItem {
+		case 0:
+			s.settingsModal.autoIndent.Value = !s.settingsModal.autoIndent.Value
+		case 1:
+			s.settingsModal.autoPairs.Value = !s.settingsModal.autoPairs.Value
+		case 2:
+			s.settingsModal.softWrap.Value = !s.settingsModal.softWrap.Value
+		case 3:
+			s.settingsModal.formatOnSave.Value = !s.settingsModal.formatOnSave.Value
+		case 4:
+			s.settingsModal.useSpaces.Value = !s.settingsModal.useSpaces.Value
+		// 5 and 6 are steppers
+		}
+	case tabLSP:
+		switch s.settingsModal.focusedItem {
+		case 0:
+			s.settingsModal.lspEnabled.Value = !s.settingsModal.lspEnabled.Value
+		case 1:
+			s.settingsModal.lspAutoDetect.Value = !s.settingsModal.lspAutoDetect.Value
+		}
+	}
+}
+
+// adjustFocusedSetting adjusts a numeric stepper setting.
+func (s *appState) adjustFocusedSetting(delta int) {
+	switch s.settingsModal.selectedTab {
+	case tabGeneral:
+		if s.settingsModal.focusedItem == 0 {
+			// Font Size: 8-32
+			newVal := s.settingsModal.fontSizeValue + delta
+			if newVal >= 8 && newVal <= 32 {
+				s.settingsModal.fontSizeValue = newVal
+			}
+		}
+	case tabEditor:
+		switch s.settingsModal.focusedItem {
+		case 5:
+			// Tab Width: 2-8
+			newVal := s.settingsModal.tabWidthValue + delta
+			if newVal >= 2 && newVal <= 8 {
+				s.settingsModal.tabWidthValue = newVal
+			}
+		case 6:
+			// Scroll Offset: 0-20
+			newVal := s.settingsModal.scrollOffsetValue + delta
+			if newVal >= 0 && newVal <= 20 {
+				s.settingsModal.scrollOffsetValue = newVal
+			}
+		}
+	}
+}
+
+// closeSettingsModal closes the modal without saving changes.
+func (s *appState) closeSettingsModal() {
+	s.settingsModal.active = false
+	s.status = ""
+}
+
+// saveAndCloseSettings saves settings and closes the modal.
+func (s *appState) saveAndCloseSettings() {
+	// UI settings
+	s.settings.UI.FontSize = s.settingsModal.fontSizeValue
+
+	// Editor settings
+	s.settings.Editor.AutoIndent = s.settingsModal.autoIndent.Value
+	s.settings.Editor.AutoPairs = s.settingsModal.autoPairs.Value
+	s.settings.Editor.SoftWrap = s.settingsModal.softWrap.Value
+	s.settings.Editor.FormatOnSave = s.settingsModal.formatOnSave.Value
+	s.settings.Editor.UseSpaces = s.settingsModal.useSpaces.Value
+	s.settings.Editor.TabWidth = s.settingsModal.tabWidthValue
+	s.settings.Editor.ScrollOffset = s.settingsModal.scrollOffsetValue
+
+	// LSP settings
+	s.settings.LSP.Enabled = s.settingsModal.lspEnabled.Value
+	s.settings.LSP.AutoDetect = s.settingsModal.lspAutoDetect.Value
+
+	// Save to file
+	if err := s.settings.Save(); err != nil {
+		s.status = fmt.Sprintf("Error saving settings: %v", err)
+		return
+	}
+
+	// Apply to runtime
+	s.applySettings()
+
+	s.settingsModal.active = false
+	s.status = "Settings saved"
+}

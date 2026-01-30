@@ -20,6 +20,8 @@
 | [lsp_rendering.go](lsp_rendering.md) | 905 | LSP UI components + buffer completion + diagnostics list |
 | [pane_actions.go](pane_actions.md) | 375 | Pane management handlers |
 | [pane_rendering.go](pane_rendering.md) | 319 | Pane tree rendering |
+| [settings.go](settings.md) | 120 | Settings struct, load/save, cross-platform paths |
+| [settings_modal.go](settings_modal.md) | 400 | Settings modal UI with tabs, keyboard navigation |
 
 ## Key Types
 
@@ -31,6 +33,13 @@ Central application state containing:
 - LSP manager
 - Terminal instances
 - UI state (viewport, selection, etc.)
+- Settings (loaded from settings.toml)
+
+### Settings (settings.go)
+User-configurable options loaded from TOML:
+- `EditorSettings` - tab width, spaces, auto-indent, auto-pairs, scroll offset, soft wrap, format on save
+- `UISettings` - font size, theme, line numbers, explorer width
+- `LSPSettings` - enabled, auto-detect
 
 ### Action Constants (keybindings.go)
 All editor actions like `ActionMoveLeft`, `ActionEnterInsert`, etc.

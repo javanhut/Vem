@@ -140,6 +140,9 @@ const (
 	// Command history navigation
 	ActionCommandHistoryUp
 	ActionCommandHistoryDown
+
+	// Settings
+	ActionOpenSettings
 )
 
 type KeyBinding struct {
@@ -206,6 +209,8 @@ var modeKeybindings = map[mode][]KeyBinding{
 		{Modifiers: key.ModShift, Key: "k", Modes: nil, Action: ActionLSPHover},
 		// Undo
 		{Modifiers: 0, Key: "u", Modes: nil, Action: ActionUndo},
+		// Settings
+		{Modifiers: key.ModCtrl, Key: "m", Modes: nil, Action: ActionOpenSettings},
 	},
 	modeInsert: {
 		{Modifiers: 0, Key: key.NameEscape, Modes: nil, Action: ActionExitMode},
@@ -438,6 +443,9 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionToggleFullscreen:
 		s.toggleFullscreen()
+
+	case ActionOpenSettings:
+		s.openSettingsModal()
 
 	case ActionEnterInsert:
 		s.enterInsertMode()
