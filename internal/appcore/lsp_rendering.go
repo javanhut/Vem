@@ -530,10 +530,17 @@ func (s *appState) drawBorder(gtx layout.Context, x, y, width, height int, col c
 	rect.Pop()
 }
 
-// measureCharWidth returns the approximate width of a character.
+// measureCharWidth returns the width of a character using actual font measurement.
 func (s *appState) measureCharWidth(gtx layout.Context) int {
-	// Approximate character width for monospace font
-	return 8
+	testLabel := material.Body1(s.theme, "M")
+	testLabel.Font.Typeface = "JetBrainsMono"
+	testGtx := gtx
+	testGtx.Constraints = layout.Constraints{Max: image.Point{X: 1000, Y: 1000}}
+	testDims := testLabel.Layout(testGtx)
+	if testDims.Size.X == 0 {
+		return 8 // Fallback
+	}
+	return testDims.Size.X
 }
 
 // getCompletionIcon returns an icon character for a completion item kind.

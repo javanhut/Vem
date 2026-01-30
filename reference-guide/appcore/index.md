@@ -49,9 +49,9 @@ type KeyBinding struct {
 
 1. ~~**app.go:650** - `os.ReadFile()` loads entire file into memory~~ MITIGATED - Large files >5MB show warning, >50MB rejected
 2. ~~**keybindings.go:257** - `u` key not bound to undo in Normal mode~~ FIXED
-3. **pane_actions.go:16-48** - Debug print statements should be removed
-4. **pane_actions.go:349-350** - j/k inverted for vertical resize
-5. **lsp_rendering.go:533** - Hardcoded 8px character width
+3. ~~**pane_actions.go:16-48** - Debug print statements should be removed~~ FIXED
+4. ~~**pane_actions.go:349-350** - j/k inverted for vertical resize~~ FIXED
+5. ~~**lsp_rendering.go:533** - Hardcoded 8px character width~~ FIXED - Now uses actual font measurement
 
 ## Recent Fixes
 
@@ -62,6 +62,9 @@ type KeyBinding struct {
 - **Tab key stuck** - Fixed `skipNextEdit` timing race condition
 - **Format on save** - Added `:formatonsave` and `:format` commands
 - **Soft wrap** - Added `:wrap` command for dynamic text wrapping (enabled by default)
+- **Pane debug prints** - Removed debug print statements from pane_actions.go
+- **Pane resize j/k** - Fixed j/k inversion in pane resize mode (j=down, k=up per vim convention)
+- **Character width measurement** - Fixed hardcoded 8px in lsp_rendering.go, now uses actual font metrics
 
 ## Architecture
 

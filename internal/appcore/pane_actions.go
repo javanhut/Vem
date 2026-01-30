@@ -13,75 +13,39 @@ const paneResizeStep = 0.05
 
 // handleSplitVertical creates a vertical split (vertical divider - left|right).
 func (s *appState) handleSplitVertical() {
-	fmt.Printf("[PANE_SPLIT] Starting vertical split (left|right)\n")
-
 	if s.paneManager == nil {
 		s.status = "Pane manager not initialized"
-		fmt.Printf("[PANE_SPLIT] ERROR: Pane manager is nil\n")
 		return
 	}
-
-	fmt.Printf("[PANE_SPLIT] Current pane count: %d\n", s.paneManager.PaneCount())
-	fmt.Printf("[PANE_SPLIT] Current buffer count: %d\n", s.bufferMgr.BufferCount())
 
 	// Create a new empty buffer for the new pane
 	newBufferIndex := s.bufferMgr.CreateEmptyBuffer()
 
-	fmt.Printf("[PANE_SPLIT] Created new buffer, total buffers: %d\n", s.bufferMgr.BufferCount())
-	fmt.Printf("[PANE_SPLIT] New buffer index: %d\n", newBufferIndex)
-
 	// Split the active pane horizontally (creates vertical divider)
-	fmt.Printf("[PANE_SPLIT] Calling SplitHorizontal with buffer index %d\n", newBufferIndex)
 	if err := s.paneManager.SplitHorizontal(newBufferIndex); err != nil {
 		s.status = fmt.Sprintf("Split failed: %v", err)
-		fmt.Printf("[PANE_SPLIT] ERROR: Split failed: %v\n", err)
 	} else {
 		paneCount := s.paneManager.PaneCount()
 		s.status = fmt.Sprintf("Split vertical (│) - %d panes total | Use :e or Ctrl+P to open file", paneCount)
-		fmt.Printf("[PANE_SPLIT] SUCCESS: Vertical split created, now have %d panes\n", paneCount)
-
-		// Debug: Print all panes
-		allPanes := s.paneManager.AllPanes()
-		for i, p := range allPanes {
-			fmt.Printf("[PANE_SPLIT]   Pane %d: ID=%s BufferIndex=%d Active=%v\n", i, p.ID, p.BufferIndex, p.Active)
-		}
 	}
 }
 
 // handleSplitHorizontal creates a horizontal split (horizontal divider - top/bottom).
 func (s *appState) handleSplitHorizontal() {
-	fmt.Printf("[PANE_SPLIT] Starting horizontal split (top/bottom)\n")
-
 	if s.paneManager == nil {
 		s.status = "Pane manager not initialized"
-		fmt.Printf("[PANE_SPLIT] ERROR: Pane manager is nil\n")
 		return
 	}
-
-	fmt.Printf("[PANE_SPLIT] Current pane count: %d\n", s.paneManager.PaneCount())
-	fmt.Printf("[PANE_SPLIT] Current buffer count: %d\n", s.bufferMgr.BufferCount())
 
 	// Create a new empty buffer for the new pane
 	newBufferIndex := s.bufferMgr.CreateEmptyBuffer()
 
-	fmt.Printf("[PANE_SPLIT] Created new buffer, total buffers: %d\n", s.bufferMgr.BufferCount())
-	fmt.Printf("[PANE_SPLIT] New buffer index: %d\n", newBufferIndex)
-
 	// Split the active pane vertically (creates horizontal divider)
-	fmt.Printf("[PANE_SPLIT] Calling SplitVertical with buffer index %d\n", newBufferIndex)
 	if err := s.paneManager.SplitVertical(newBufferIndex); err != nil {
 		s.status = fmt.Sprintf("Split failed: %v", err)
-		fmt.Printf("[PANE_SPLIT] ERROR: Split failed: %v\n", err)
 	} else {
 		paneCount := s.paneManager.PaneCount()
 		s.status = fmt.Sprintf("Split horizontal (─) - %d panes total | Use :e or Ctrl+P to open file", paneCount)
-		fmt.Printf("[PANE_SPLIT] SUCCESS: Horizontal split created, now have %d panes\n", paneCount)
-
-		// Debug: Print all panes
-		allPanes := s.paneManager.AllPanes()
-		for i, p := range allPanes {
-			fmt.Printf("[PANE_SPLIT]   Pane %d: ID=%s BufferIndex=%d Active=%v\n", i, p.ID, p.BufferIndex, p.Active)
-		}
 	}
 }
 
@@ -139,25 +103,15 @@ func (s *appState) handlePaneFocusDown() {
 
 // handlePaneCycleNext cycles to the next pane.
 func (s *appState) handlePaneCycleNext() {
-	fmt.Printf("[PANE_CYCLE] Starting pane cycle\n")
-
 	if s.paneManager == nil {
-		fmt.Printf("[PANE_CYCLE] ERROR: Pane manager is nil\n")
 		return
 	}
 
 	paneCount := s.paneManager.PaneCount()
-	fmt.Printf("[PANE_CYCLE] Current pane count: %d\n", paneCount)
-
 	if paneCount <= 1 {
 		s.status = "Only one pane open"
-		fmt.Printf("[PANE_CYCLE] Only one pane, nothing to cycle\n")
 		return
 	}
-
-	// Get current active pane before cycling
-	oldActivePane := s.paneManager.ActivePane()
-	fmt.Printf("[PANE_CYCLE] Before cycle - Active pane: %s\n", oldActivePane.ID)
 
 	s.paneManager.CycleNextPane()
 
@@ -172,7 +126,6 @@ func (s *appState) handlePaneCycleNext() {
 		}
 	}
 
-	fmt.Printf("[PANE_CYCLE] After cycle - Active pane: %s (index %d/%d)\n", newActivePane.ID, activeIdx, paneCount)
 	s.status = fmt.Sprintf("Cycled to pane %d/%d", activeIdx, paneCount)
 }
 
@@ -310,7 +263,7 @@ func (s *appState) togglePaneResizeMode() {
 	}
 
 	s.paneResizeMode = true
-	s.status = "Resize panes: arrows or h/l/j(up)/k(down), Esc to exit"
+	s.status = "Resize panes: arrows or h/j/k/l, Esc to exit"
 }
 
 func (s *appState) handlePaneResizeKey(ev key.Event) bool {
@@ -346,15 +299,15 @@ func (s *appState) handlePaneResizeKey(ev key.Event) bool {
 			s.resizeActivePane(panes.DirRight)
 			return true
 		case 'j':
-			s.resizeActivePane(panes.DirUp)
+			s.resizeActivePane(panes.DirDown)
 			return true
 		case 'k':
-			s.resizeActivePane(panes.DirDown)
+			s.resizeActivePane(panes.DirUp)
 			return true
 		}
 	}
 
-	s.status = "Resize panes: arrows or h/l/j(up)/k(down), Esc to exit"
+	s.status = "Resize panes: arrows or h/j/k/l, Esc to exit"
 	return true
 }
 
