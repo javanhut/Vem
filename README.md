@@ -102,6 +102,38 @@ go build -o vem
 sudo install -m 755 vem /usr/local/bin/vem
 ```
 
+### Using ImLazy (Alternative to Make)
+
+If you prefer a modern task runner over Make, you can use [ImLazy](https://github.com/javanhut/ImLazy.git):
+
+```bash
+# Install ImLazy first (see ImLazy repo for installation)
+git clone https://github.com/javanhut/ImLazy.git
+cd ImLazy
+go install .
+
+# Then in the Vem directory
+cd /path/to/Vem
+imlazy              # Show available commands
+imlazy build        # Build for current platform
+imlazy install      # Install to system
+imlazy test         # Run tests
+```
+
+**Available ImLazy commands:**
+| Command | Description |
+|---------|-------------|
+| `imlazy build` | Build for current platform |
+| `imlazy build:linux` | Cross-compile for Linux |
+| `imlazy build:windows` | Cross-compile for Windows |
+| `imlazy build:darwin` | Cross-compile for macOS |
+| `imlazy install` | Install to system |
+| `imlazy uninstall` | Remove from system |
+| `imlazy test` | Run all tests |
+| `imlazy check:deps` | Check platform dependencies |
+| `imlazy deps:install` | Install Linux dependencies |
+| `imlazy clean` | Remove build artifacts |
+
 ## Quick Start
 
 ```bash

@@ -1,0 +1,102 @@
+# ImLazy configuration for ProjectVem
+# Cross-platform build, install, and dependency management
+
+[settings]
+default = "help"
+
+[variables]
+binary_name = "vem"
+
+[commands]
+
+# Help command
+[commands.help]
+desc = "Show available commands"
+run = ["""
+echo "ProjectVem Build System (imlazy)"
+echo ""
+echo "Available commands:"
+echo "  imlazy test          - Run all tests"
+echo "  imlazy build         - Build for current platform"
+echo "  imlazy build:linux   - Cross-compile for Linux"
+echo "  imlazy build:windows - Cross-compile for Windows"
+echo "  imlazy build:darwin  - Cross-compile for macOS"
+echo "  imlazy install       - Install to system"
+echo "  imlazy uninstall     - Remove from system"
+echo "  imlazy clean         - Remove build artifacts"
+echo "  imlazy check:go      - Check Go installation"
+echo "  imlazy check:deps    - Check all platform dependencies"
+echo "  imlazy deps:install  - Install Linux dependencies"
+echo ""
+echo "Note: Use 'make' for traditional Makefile targets"
+"""]
+
+# Testing
+[commands.test]
+desc = "Run all tests"
+run = ["go test ./..."]
+
+# Go check
+[commands."check:go"]
+desc = "Check Go installation and version"
+run = ["./scripts/check-go.sh"]
+alias = ["cgo"]
+
+# Dependency checks
+[commands."check:deps"]
+desc = "Check all platform dependencies"
+run = ["./scripts/check-deps.sh"]
+alias = ["cdeps"]
+
+# Install Linux dependencies
+[commands."deps:install"]
+desc = "Install Linux dependencies (apt/dnf/pacman/zypper/apk)"
+run = ["./scripts/install-linux-deps.sh"]
+alias = ["di"]
+
+# Build for current platform
+[commands.build]
+desc = "Build vem for current platform"
+dep = ["check:deps"]
+run = ["./scripts/build.sh"]
+alias = ["b"]
+
+# Cross-compile for Linux
+[commands."build:linux"]
+desc = "Cross-compile for Linux (amd64)"
+dep = ["check:go"]
+run = ["./scripts/build-cross.sh linux"]
+alias = ["bl"]
+
+# Cross-compile for Windows
+[commands."build:windows"]
+desc = "Cross-compile for Windows (amd64)"
+dep = ["check:go"]
+run = ["./scripts/build-cross.sh windows"]
+alias = ["bw"]
+
+# Cross-compile for macOS
+[commands."build:darwin"]
+desc = "Cross-compile for macOS (amd64 + arm64)"
+dep = ["check:go"]
+run = ["./scripts/build-cross.sh darwin"]
+alias = ["bd"]
+
+# Install to system
+[commands.install]
+desc = "Install vem to system"
+dep = ["build"]
+run = ["./scripts/install.sh"]
+alias = ["i"]
+
+# Uninstall from system
+[commands.uninstall]
+desc = "Remove vem from system"
+run = ["./scripts/uninstall.sh"]
+alias = ["u"]
+
+# Clean build artifacts
+[commands.clean]
+desc = "Remove build artifacts"
+run = ["./scripts/clean.sh"]
+alias = ["c"]

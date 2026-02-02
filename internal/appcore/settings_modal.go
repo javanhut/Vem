@@ -74,6 +74,9 @@ type settingsModalState struct {
 	themePreview  bool     // Whether preview mode is active
 	themeOriginal string   // Original theme before preview started
 
+	// Content scroll
+	contentList widget.List
+
 	// Action buttons
 	saveButton   widget.Clickable
 	cancelButton widget.Clickable
@@ -123,6 +126,9 @@ func (s *appState) initSettingsModal() {
 			break
 		}
 	}
+
+	// Content scroll list
+	s.settingsModal.contentList.List.Axis = layout.Vertical
 
 	// Reset to first tab and first item
 	s.settingsModal.selectedTab = tabGeneral
@@ -200,9 +206,11 @@ func (s *appState) drawSettingsModal(gtx layout.Context) layout.Dimensions {
 				return s.drawSettingsTabs(gtx)
 			}),
 
-			// Content area (flexible)
+			// Content area (flexible, clipped and scrollable)
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					// Clip content to prevent overflow
+					defer clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops).Pop()
 					return s.drawTabContent(gtx)
 				})
 			}),
@@ -228,6 +236,9 @@ func (s *appState) drawSettingsTabs(gtx layout.Context) layout.Dimensions {
 	for i, btn := range tabButtons {
 		if btn.Clicked(gtx) {
 			s.settingsModal.selectedTab = i
+			s.settingsModal.focusedItem = 0
+			s.settingsModal.contentList.List.Position.First = 0
+			s.settingsModal.contentList.List.Position.Offset = 0
 		}
 	}
 
@@ -286,109 +297,174 @@ func (s *appState) drawSettingsTabs(gtx layout.Context) layout.Dimensions {
 	return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
 }
 
-// drawTabContent renders the content for the selected tab.
+// drawTabContent renders the content for the selected tab with scrolling.
 func (s *appState) drawTabContent(gtx layout.Context) layout.Dimensions {
+	itemCount := s.getTabContentItemCount()
+
+	return material.List(s.theme, &s.settingsModal.contentList).Layout(gtx,
+		itemCount,
+		func(gtx layout.Context, index int) layout.Dimensions {
+			switch s.settingsModal.selectedTab {
+			case tabGeneral:
+				return s.drawGeneralTabItem(gtx, index)
+			case tabEditor:
+				return s.drawEditorTabItem(gtx, index)
+			case tabLSP:
+				return s.drawLSPTabItem(gtx, index)
+			default:
+				return s.drawGeneralTabItem(gtx, index)
+			}
+		},
+	)
+}
+
+// getTabContentItemCount returns the number of content items for the current tab.
+func (s *appState) getTabContentItemCount() int {
 	switch s.settingsModal.selectedTab {
 	case tabGeneral:
-		return s.drawGeneralTab(gtx)
+		return 3 // Section header, Font Size, Theme
 	case tabEditor:
-		return s.drawEditorTab(gtx)
+		return 10 // Section + 4 toggles, Section + 2 items, Section + 1 item
 	case tabLSP:
-		return s.drawLSPTab(gtx)
+		return 10 // Section + toggle + hint + toggle + hint + section + servers + section + diagnostics + button
 	default:
-		return s.drawGeneralTab(gtx)
+		return 1
 	}
 }
 
-// drawGeneralTab renders the General settings content.
-func (s *appState) drawGeneralTab(gtx layout.Context) layout.Dimensions {
+// drawGeneralTabItem renders a single item in the General tab.
+func (s *appState) drawGeneralTabItem(gtx layout.Context, index int) layout.Dimensions {
 	focused := s.settingsModal.focusedItem
 
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		// Section: Appearance
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Appearance")
-		}),
-
-		// Font Size stepper (item 0)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawNumberStepper(gtx, "Font Size",
-				&s.settingsModal.fontSizeValue,
-				&s.settingsModal.fontSizeMinus,
-				&s.settingsModal.fontSizePlus,
-				8, 32, focused == 0)
-		}),
-
-		// Theme selector (item 1)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawThemeSelector(gtx, focused == 1)
-		}),
-	)
+	switch index {
+	case 0:
+		return s.drawSectionHeader(gtx, "Appearance")
+	case 1:
+		return s.drawNumberStepper(gtx, "Font Size",
+			&s.settingsModal.fontSizeValue,
+			&s.settingsModal.fontSizeMinus,
+			&s.settingsModal.fontSizePlus,
+			8, 32, focused == 0)
+	case 2:
+		return s.drawThemeSelector(gtx, focused == 1)
+	default:
+		return layout.Dimensions{}
+	}
 }
 
-// drawEditorTab renders the Editor settings content.
-func (s *appState) drawEditorTab(gtx layout.Context) layout.Dimensions {
+// drawEditorTabItem renders a single item in the Editor tab.
+func (s *appState) drawEditorTabItem(gtx layout.Context, index int) layout.Dimensions {
 	focused := s.settingsModal.focusedItem
 
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		// Section: Behavior
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Behavior")
-		}),
+	switch index {
+	case 0:
+		return s.drawSectionHeader(gtx, "Behavior")
+	case 1:
+		return s.drawBoolSetting(gtx, &s.settingsModal.autoIndent, "Auto Indent", focused == 0)
+	case 2:
+		return s.drawBoolSetting(gtx, &s.settingsModal.autoPairs, "Auto Pairs", focused == 1)
+	case 3:
+		return s.drawBoolSetting(gtx, &s.settingsModal.softWrap, "Soft Wrap", focused == 2)
+	case 4:
+		return s.drawBoolSetting(gtx, &s.settingsModal.formatOnSave, "Format on Save", focused == 3)
+	case 5:
+		return s.drawSectionHeader(gtx, "Indentation")
+	case 6:
+		return s.drawBoolSetting(gtx, &s.settingsModal.useSpaces, "Use Spaces", focused == 4)
+	case 7:
+		return s.drawNumberStepper(gtx, "Tab Width",
+			&s.settingsModal.tabWidthValue,
+			&s.settingsModal.tabWidthMinus,
+			&s.settingsModal.tabWidthPlus,
+			2, 8, focused == 5)
+	case 8:
+		return s.drawSectionHeader(gtx, "Scrolling")
+	case 9:
+		return s.drawNumberStepper(gtx, "Scroll Offset",
+			&s.settingsModal.scrollOffsetValue,
+			&s.settingsModal.scrollOffsetMinus,
+			&s.settingsModal.scrollOffsetPlus,
+			0, 20, focused == 6)
+	default:
+		return layout.Dimensions{}
+	}
+}
 
-		// Auto Indent toggle (item 0)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.autoIndent, "Auto Indent", focused == 0)
-		}),
+// drawLSPTabItem renders a single item in the LSP tab.
+func (s *appState) drawLSPTabItem(gtx layout.Context, index int) layout.Dimensions {
+	focused := s.settingsModal.focusedItem
+	hintColor := color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
 
-		// Auto Pairs toggle (item 1)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.autoPairs, "Auto Pairs", focused == 1)
-		}),
+	switch index {
+	case 0:
+		return s.drawSectionHeader(gtx, "Language Server Protocol")
+	case 1:
+		return s.drawBoolSetting(gtx, &s.settingsModal.lspEnabled, "Enable LSP", focused == 0)
+	case 2:
+		return layout.Inset{Left: unit.Dp(4), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Caption(s.theme, "Connect to language servers for completions, diagnostics, etc.")
+			lbl.Color = hintColor
+			return lbl.Layout(gtx)
+		})
+	case 3:
+		return s.drawBoolSetting(gtx, &s.settingsModal.lspAutoDetect, "Auto Detect", focused == 1)
+	case 4:
+		return layout.Inset{Left: unit.Dp(4), Bottom: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			lbl := material.Caption(s.theme, "Automatically start language server based on file type")
+			lbl.Color = hintColor
+			return lbl.Layout(gtx)
+		})
+	case 5:
+		return s.drawSectionHeader(gtx, "Active Servers")
+	case 6:
+		return s.drawLSPServerStatus(gtx)
+	case 7:
+		return s.drawSectionHeader(gtx, "Diagnostics Summary")
+	case 8:
+		return s.drawDiagnosticsSummary(gtx)
+	case 9:
+		return s.drawStopAllButton(gtx)
+	default:
+		return layout.Dimensions{}
+	}
+}
 
-		// Soft Wrap toggle (item 2)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.softWrap, "Soft Wrap", focused == 2)
-		}),
+// drawStopAllButton renders the Stop All Servers button.
+func (s *appState) drawStopAllButton(gtx layout.Context) layout.Dimensions {
+	// Handle click
+	if s.settingsModal.lspStopAllBtn.Clicked(gtx) {
+		if s.lspManager != nil {
+			s.lspManager.StopAll()
+			s.status = "All language servers stopped"
+		}
+	}
 
-		// Format on Save toggle (item 3)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.formatOnSave, "Format on Save", focused == 3)
-		}),
-
-		// Section: Indentation
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Indentation")
-		}),
-
-		// Use Spaces toggle (item 4)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.useSpaces, "Use Spaces", focused == 4)
-		}),
-
-		// Tab Width stepper (item 5)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawNumberStepper(gtx, "Tab Width",
-				&s.settingsModal.tabWidthValue,
-				&s.settingsModal.tabWidthMinus,
-				&s.settingsModal.tabWidthPlus,
-				2, 8, focused == 5)
-		}),
-
-		// Section: Scrolling
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Scrolling")
-		}),
-
-		// Scroll Offset stepper (item 6)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawNumberStepper(gtx, "Scroll Offset",
-				&s.settingsModal.scrollOffsetValue,
-				&s.settingsModal.scrollOffsetMinus,
-				&s.settingsModal.scrollOffsetPlus,
-				0, 20, focused == 6)
-		}),
-	)
+	return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return s.settingsModal.lspStopAllBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Background{}.Layout(gtx,
+				func(gtx layout.Context) layout.Dimensions {
+					rr := gtx.Dp(unit.Dp(4))
+					rect := clip.RRect{
+						Rect: image.Rectangle{Max: gtx.Constraints.Min},
+						NE:   rr, NW: rr, SE: rr, SW: rr,
+					}.Push(gtx.Ops)
+					paint.Fill(gtx.Ops, color.NRGBA{R: 0x8b, G: 0x00, B: 0x00, A: 0xff}) // Dark red
+					rect.Pop()
+					return layout.Dimensions{Size: gtx.Constraints.Min}
+				},
+				func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{
+						Top: unit.Dp(6), Bottom: unit.Dp(6),
+						Left: unit.Dp(12), Right: unit.Dp(12),
+					}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						lbl := material.Caption(s.theme, "Stop All Servers")
+						lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+						return lbl.Layout(gtx)
+					})
+				},
+			)
+		})
+	})
 }
 
 // drawBoolSetting renders a consistent row layout for boolean switches with optional focus highlight.
@@ -429,105 +505,6 @@ func (s *appState) drawBoolSetting(gtx layout.Context, boolWidget *widget.Bool, 
 			},
 		)
 	})
-}
-
-// drawLSPTab renders the LSP settings content.
-func (s *appState) drawLSPTab(gtx layout.Context) layout.Dimensions {
-	hintColor := color.NRGBA{R: 0x6d, G: 0x7d, B: 0x9d, A: 0xff}
-	focused := s.settingsModal.focusedItem
-
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		// Section: Language Server Protocol
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Language Server Protocol")
-		}),
-
-		// LSP Enabled toggle (item 0)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.lspEnabled, "Enable LSP", focused == 0)
-		}),
-
-		// Help text for Enable LSP
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Left: unit.Dp(4), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Caption(s.theme, "Connect to language servers for completions, diagnostics, etc.")
-				lbl.Color = hintColor
-				return lbl.Layout(gtx)
-			})
-		}),
-
-		// Auto Detect toggle (item 1)
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawBoolSetting(gtx, &s.settingsModal.lspAutoDetect, "Auto Detect", focused == 1)
-		}),
-
-		// Help text for Auto Detect
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Left: unit.Dp(4), Bottom: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Caption(s.theme, "Automatically start language server based on file type")
-				lbl.Color = hintColor
-				return lbl.Layout(gtx)
-			})
-		}),
-
-		// Section: Active Servers
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Active Servers")
-		}),
-
-		// Server status list
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawLSPServerStatus(gtx)
-		}),
-
-		// Section: Diagnostics
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawSectionHeader(gtx, "Diagnostics Summary")
-		}),
-
-		// Diagnostics summary
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return s.drawDiagnosticsSummary(gtx)
-		}),
-
-		// Stop All button
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			// Handle click
-			if s.settingsModal.lspStopAllBtn.Clicked(gtx) {
-				if s.lspManager != nil {
-					s.lspManager.StopAll()
-					s.status = "All language servers stopped"
-				}
-			}
-
-			return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				return s.settingsModal.lspStopAllBtn.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Background{}.Layout(gtx,
-						func(gtx layout.Context) layout.Dimensions {
-							rr := gtx.Dp(unit.Dp(4))
-							rect := clip.RRect{
-								Rect: image.Rectangle{Max: gtx.Constraints.Min},
-								NE:   rr, NW: rr, SE: rr, SW: rr,
-							}.Push(gtx.Ops)
-							paint.Fill(gtx.Ops, color.NRGBA{R: 0x8b, G: 0x00, B: 0x00, A: 0xff}) // Dark red
-							rect.Pop()
-							return layout.Dimensions{Size: gtx.Constraints.Min}
-						},
-						func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{
-								Top: unit.Dp(6), Bottom: unit.Dp(6),
-								Left: unit.Dp(12), Right: unit.Dp(12),
-							}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								lbl := material.Caption(s.theme, "Stop All Servers")
-								lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-								return lbl.Layout(gtx)
-							})
-						},
-					)
-				})
-			})
-		}),
-	)
 }
 
 // drawSectionHeader renders a section header with styled text.
@@ -962,9 +939,11 @@ func (s *appState) handleSettingsModalKey(ev key.Event) {
 		s.saveAndCloseSettings()
 		return
 	case key.NameTab:
-		// Cycle tabs and reset focus
+		// Cycle tabs and reset focus and scroll
 		s.settingsModal.selectedTab = (s.settingsModal.selectedTab + 1) % 3
 		s.settingsModal.focusedItem = 0
+		s.settingsModal.contentList.List.Position.First = 0
+		s.settingsModal.contentList.List.Position.Offset = 0
 		return
 	case key.NameDownArrow:
 		if s.settingsModal.focusedItem < maxItems-1 {
@@ -992,12 +971,18 @@ func (s *appState) handleSettingsModalKey(ev key.Event) {
 	case "1":
 		s.settingsModal.selectedTab = tabGeneral
 		s.settingsModal.focusedItem = 0
+		s.settingsModal.contentList.List.Position.First = 0
+		s.settingsModal.contentList.List.Position.Offset = 0
 	case "2":
 		s.settingsModal.selectedTab = tabEditor
 		s.settingsModal.focusedItem = 0
+		s.settingsModal.contentList.List.Position.First = 0
+		s.settingsModal.contentList.List.Position.Offset = 0
 	case "3":
 		s.settingsModal.selectedTab = tabLSP
 		s.settingsModal.focusedItem = 0
+		s.settingsModal.contentList.List.Position.First = 0
+		s.settingsModal.contentList.List.Position.Offset = 0
 	case "j":
 		if s.settingsModal.focusedItem < maxItems-1 {
 			s.settingsModal.focusedItem++
