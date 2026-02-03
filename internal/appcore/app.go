@@ -81,15 +81,16 @@ const (
 )
 
 var (
-	highlightColor    = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x55}
-	selectionColor    = color.NRGBA{R: 0x1c, G: 0x39, B: 0x60, A: 0x99}
-	background        = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
-	statusBg          = color.NRGBA{R: 0x12, G: 0x17, B: 0x22, A: 0xff}
-	headerColor       = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
-	cursorColor       = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-	focusBorder       = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
-	searchMatchColor  = color.NRGBA{R: 0xff, G: 0xff, B: 0x00, A: 0x77}
-	currentMatchColor = color.NRGBA{R: 0xff, G: 0xa5, B: 0x00, A: 0xaa}
+	highlightColor          = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x55}
+	highlightColorSelection = color.NRGBA{R: 0x2b, G: 0x50, B: 0x8a, A: 0x30} // Subtler during selection
+	selectionColor          = color.NRGBA{R: 0x1c, G: 0x39, B: 0x60, A: 0x99}
+	background              = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff}
+	statusBg                = color.NRGBA{R: 0x12, G: 0x17, B: 0x22, A: 0xff}
+	headerColor             = color.NRGBA{R: 0xa1, G: 0xc6, B: 0xff, A: 0xff}
+	cursorColor             = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	focusBorder             = color.NRGBA{R: 0x6d, G: 0xb3, B: 0xff, A: 0xff}
+	searchMatchColor        = color.NRGBA{R: 0xff, G: 0xff, B: 0x00, A: 0x77}
+	currentMatchColor       = color.NRGBA{R: 0xff, G: 0xa5, B: 0x00, A: 0xaa}
 
 	// Pane colors
 	activePaneBg   = color.NRGBA{R: 0x1a, G: 0x1f, B: 0x2e, A: 0xff} // Same as background (active is brighter)
@@ -1151,8 +1152,20 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 	dims := layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx, flexChildren...)
 	call := macro.Stop()
 
-	// Draw backgrounds
+	// Draw backgrounds in proper layer order: cursor line (back) → selection (mid) → search (front)
 	if showOverlays {
+		// Layer 1: Cursor line highlight (always draw, subtler during selection)
+		if index == cursorLine {
+			hlColor := highlightColor
+			if s.visualMode == visualModeChar {
+				hlColor = highlightColorSelection // Subtler during character selection
+			}
+			rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
+			paint.Fill(gtx.Ops, hlColor)
+			rect.Pop()
+		}
+
+		// Layer 2: Selection highlight
 		if s.visualMode == visualModeChar {
 			s.drawCharSelection(gtx, index, dims.Size.Y)
 		} else if hasSel && index >= selStart && index <= selEnd {
@@ -1161,12 +1174,7 @@ func (s *appState) drawBufferLine(gtx layout.Context, index int, cursorLine int,
 			rect.Pop()
 		}
 
-		if index == cursorLine && s.visualMode != visualModeChar {
-			rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
-			paint.Fill(gtx.Ops, highlightColor)
-			rect.Pop()
-		}
-
+		// Layer 3: Search highlights (topmost)
 		if s.searchActive && len(s.searchMatches) > 0 {
 			s.drawSearchHighlights(gtx, index, dims.Size.Y)
 		}
@@ -1324,23 +1332,34 @@ func (s *appState) drawBufferLineWrapped(gtx layout.Context, index int, lineText
 			dims := layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceEnd}.Layout(gtx, flexChildren...)
 			call := macro.Stop()
 
-			// Draw backgrounds for this visual line
+			// Draw backgrounds in proper layer order: cursor line (back) → selection (mid) → search (front)
 			if showOverlays {
-				// Cursor line highlight
-				if index == cursorLine && s.visualMode != visualModeChar {
+				// Layer 1: Cursor line highlight (always draw, subtler during selection)
+				if index == cursorLine {
 					cursorInLine := cursorCol >= visualLine.runeStart && cursorCol < visualLine.runeEnd
 					if visualLine.isFirst || cursorInLine || (visualLineIdx == len(visualLines)-1 && cursorCol >= visualLine.runeEnd) {
+						hlColor := highlightColor
+						if s.visualMode == visualModeChar {
+							hlColor = highlightColorSelection // Subtler during character selection
+						}
 						rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
-						paint.Fill(gtx.Ops, highlightColor)
+						paint.Fill(gtx.Ops, hlColor)
 						rect.Pop()
 					}
 				}
 
-				// Line selection for visual mode
-				if hasSel && index >= selStart && index <= selEnd && s.visualMode != visualModeChar {
+				// Layer 2: Selection highlight
+				if s.visualMode == visualModeChar {
+					s.drawCharSelectionWrapped(gtx, index, visualLine.runeStart, visualLine.runeEnd, gutterWidth, dims.Size.Y)
+				} else if hasSel && index >= selStart && index <= selEnd {
 					rect := clip.Rect{Max: image.Pt(gtx.Constraints.Max.X, dims.Size.Y)}.Push(gtx.Ops)
 					paint.Fill(gtx.Ops, selectionColor)
 					rect.Pop()
+				}
+
+				// Layer 3: Search highlights (topmost) - handled per visual line for wrapped text
+				if s.searchActive && len(s.searchMatches) > 0 {
+					s.drawSearchHighlightsWrapped(gtx, index, visualLine.runeStart, visualLine.runeEnd, gutterWidth, dims.Size.Y)
 				}
 			}
 
@@ -1469,6 +1488,129 @@ func (s *appState) drawCharSelection(gtx layout.Context, lineIdx int, lineHeight
 	}.Push(gtx.Ops)
 	paint.Fill(gtx.Ops, selectionColor)
 	rect.Pop()
+}
+
+// drawCharSelectionWrapped handles character selection highlighting for a single visual line
+// within a soft-wrapped buffer line. It only draws the portion of selection that falls within
+// the visual line's rune range [visualRuneStart, visualRuneEnd).
+func (s *appState) drawCharSelectionWrapped(gtx layout.Context, lineIdx int, visualRuneStart int, visualRuneEnd int, gutterWidth int, lineHeight int) {
+	startLine, startCol, endLine, endCol, ok := s.visualSelectionRangeChar()
+	if !ok {
+		return
+	}
+
+	// Check if this line is in the selection range
+	if lineIdx < startLine || lineIdx > endLine {
+		return
+	}
+
+	lineContent := s.activeBuffer().Line(lineIdx)
+	runes := []rune(lineContent)
+
+	// Calculate selection range for the full buffer line
+	selStart := 0
+	selEnd := len(runes)
+
+	if lineIdx == startLine {
+		selStart = startCol
+		if selStart > len(runes) {
+			selStart = len(runes)
+		}
+	}
+	if lineIdx == endLine {
+		selEnd = endCol
+		if selEnd > len(runes) {
+			selEnd = len(runes)
+		}
+	}
+
+	// Clamp selection to this visual line's range
+	if selStart < visualRuneStart {
+		selStart = visualRuneStart
+	}
+	if selEnd > visualRuneEnd {
+		selEnd = visualRuneEnd
+	}
+
+	// Nothing to select on this visual line
+	if selStart >= selEnd {
+		return
+	}
+
+	// Calculate positions relative to visual line start
+	visualPrefix := string(runes[visualRuneStart:selStart])
+	prefixWidth := s.measureTextWidth(gtx, visualPrefix)
+
+	selected := string(runes[selStart:selEnd])
+	selectedWidth := s.measureTextWidth(gtx, selected)
+
+	// Draw highlight rectangle
+	x := gutterWidth + prefixWidth
+	rect := clip.Rect{
+		Min: image.Pt(x, 0),
+		Max: image.Pt(x+selectedWidth, lineHeight),
+	}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, selectionColor)
+	rect.Pop()
+}
+
+// drawSearchHighlightsWrapped handles search match highlighting for a single visual line
+// within a soft-wrapped buffer line. It only draws matches that fall within the visual line's
+// rune range [visualRuneStart, visualRuneEnd).
+func (s *appState) drawSearchHighlightsWrapped(gtx layout.Context, lineIdx int, visualRuneStart int, visualRuneEnd int, gutterWidth int, lineHeight int) {
+	lineContent := s.activeBuffer().Line(lineIdx)
+	runes := []rune(lineContent)
+
+	for i, match := range s.searchMatches {
+		if match.Line != lineIdx {
+			continue
+		}
+
+		matchStart := match.Col
+		matchEnd := match.Col + match.Len
+
+		// Check if match overlaps with this visual line
+		if matchEnd <= visualRuneStart || matchStart >= visualRuneEnd {
+			continue // Match doesn't overlap with this visual line
+		}
+
+		// Clamp match to visual line bounds
+		drawStart := matchStart
+		if drawStart < visualRuneStart {
+			drawStart = visualRuneStart
+		}
+		drawEnd := matchEnd
+		if drawEnd > visualRuneEnd {
+			drawEnd = visualRuneEnd
+		}
+
+		// Guard against out of bounds
+		if drawStart >= len(runes) || drawEnd > len(runes) {
+			continue
+		}
+
+		// Calculate position relative to visual line start
+		visualPrefix := string(runes[visualRuneStart:drawStart])
+		prefixWidth := s.measureTextWidth(gtx, visualPrefix)
+
+		matchText := string(runes[drawStart:drawEnd])
+		matchWidth := s.measureTextWidth(gtx, matchText)
+
+		// Determine highlight color (current match vs other matches)
+		highlightCol := searchMatchColor
+		if i == s.currentMatchIdx {
+			highlightCol = currentMatchColor
+		}
+
+		// Draw highlight rectangle
+		x := gutterWidth + prefixWidth
+		rect := clip.Rect{
+			Min: image.Pt(x, 0),
+			Max: image.Pt(x+matchWidth, lineHeight),
+		}.Push(gtx.Ops)
+		paint.Fill(gtx.Ops, highlightCol)
+		rect.Pop()
+	}
 }
 
 func (s *appState) drawStatusBar(gtx layout.Context) layout.Dimensions {
