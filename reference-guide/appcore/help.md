@@ -1,8 +1,8 @@
 # help.go
 
 **Path:** `/home/javanhut/Development/Vem/internal/appcore/help.go`
-**Lines:** 289
-**Purpose:** Generate help text from keybindings
+**Lines:** ~305
+**Purpose:** Generate help text from keybindings with OS-specific modifier display
 
 ## Overview
 
@@ -12,21 +12,40 @@ Generates formatted help text including:
 - Command list
 - Special sequences (gg, dd, etc.)
 
+**OS-Specific Display:** On macOS, shows "Cmd" and "Option" instead of "Ctrl" and "Alt".
+
 ## Code Blocks
 
-### Lines 1-8: Package and Imports
+### Lines 1-24: Package, Imports, and OS Detection
 
 ```go
 package appcore
 import (
     "fmt"
+    "runtime"
     "strings"
 
     "gioui.org/io/key"
 )
+
+// OS-specific modifier key display names
+var (
+    modCtrlDisplay string
+    modAltDisplay  string
+)
+
+func init() {
+    if runtime.GOOS == "darwin" {
+        modCtrlDisplay = "Cmd"
+        modAltDisplay = "Option"
+    } else {
+        modCtrlDisplay = "Ctrl"
+        modAltDisplay = "Alt"
+    }
+}
 ```
 
-### Lines 10-63: generateHelpText
+### Lines 26-78: generateHelpText
 
 Generates complete help text:
 1. Header with title
@@ -35,31 +54,31 @@ Generates complete help text:
 4. Commands section
 5. Special sequences section
 
-### Lines 65-92: appendGlobalKeybindings
+### Lines 80-107: appendGlobalKeybindings
 
-Lists global keybindings:
+Lists global keybindings using `modCtrlDisplay` and `modAltDisplay` for OS-appropriate display:
 
-| Keys | Description |
-|------|-------------|
-| Ctrl+T | Toggle file explorer |
-| Ctrl+H | Focus file explorer |
-| Ctrl+L | Focus editor |
-| Ctrl+F | Open fuzzy finder |
-| Ctrl+U | Undo last edit |
-| Ctrl+C | Copy current line |
-| Ctrl+P | Paste from clipboard |
-| Ctrl+Shift+R | Resize panes |
-| Ctrl+X | Close pane/buffer |
-| Ctrl+` | Open/toggle terminal |
-| Alt+h/j/k/l | Focus pane left/down/up/right |
-| Shift+Tab | Cycle to next pane |
-| Shift+Enter | Toggle fullscreen |
+| Keys (Linux/Windows) | Keys (macOS) | Description |
+|----------------------|--------------|-------------|
+| Ctrl+T | Cmd+T | Toggle file explorer |
+| Ctrl+H | Cmd+H | Focus file explorer |
+| Ctrl+L | Cmd+L | Focus editor |
+| Ctrl+F | Cmd+F | Open fuzzy finder |
+| Ctrl+U | Cmd+U | Undo last edit |
+| Ctrl+C | Cmd+C | Copy current line |
+| Ctrl+P | Cmd+P | Paste from clipboard |
+| Ctrl+Shift+R | Cmd+Shift+R | Resize panes |
+| Ctrl+X | Cmd+X | Close pane/buffer |
+| Ctrl+` | Cmd+` | Open/toggle terminal |
+| Alt+h/j/k/l | Option+h/j/k/l | Focus pane left/down/up/right |
+| Shift+Tab | Shift+Tab | Cycle to next pane |
+| Shift+Enter | Shift+Enter | Toggle fullscreen |
 
-### Lines 94-107: appendModeKeybindings
+### Lines 109-122: appendModeKeybindings
 
 Iterates mode keybindings from `modeKeybindings` map and formats each.
 
-### Lines 109-137: appendCommands
+### Lines 124-152: appendCommands
 
 Lists command-mode commands:
 
@@ -83,32 +102,47 @@ Lists command-mode commands:
 | :term | Open terminal |
 | :help | Show help |
 
-### Lines 139-163: appendSpecialSequences
+### Lines 154-178: appendSpecialSequences
 
-Lists multi-key sequences:
+Lists multi-key sequences (uses `modCtrlDisplay` for split commands):
 
-| Sequence | Description |
-|----------|-------------|
-| gg | Jump to first line |
-| G | Jump to last line |
-| <count>G | Jump to line |
-| <count>j/k | Move lines |
-| dd | Delete line |
-| zz | Center cursor |
-| zt | Cursor to top |
-| zb | Cursor to bottom |
-| Ctrl+S v | Split vertically |
-| Ctrl+S h | Split horizontally |
-| Ctrl+S = | Equalize panes |
-| Ctrl+S o | Zoom pane |
+| Sequence (Linux/Windows) | Sequence (macOS) | Description |
+|--------------------------|------------------|-------------|
+| gg | gg | Jump to first line |
+| G | G | Jump to last line |
+| <count>G | <count>G | Jump to line |
+| <count>j/k | <count>j/k | Move lines |
+| dd | dd | Delete line |
+| zz | zz | Center cursor |
+| zt | zt | Cursor to top |
+| zb | zb | Cursor to bottom |
+| Ctrl+S v | Cmd+S v | Split vertically |
+| Ctrl+S h | Cmd+S h | Split horizontally |
+| Ctrl+S = | Cmd+S = | Equalize panes |
+| Ctrl+S o | Cmd+S o | Zoom pane |
 
-### Lines 165-215: formatKeybinding / formatKeyName
+### Lines 180-202: formatKeybinding
 
-Formatting utilities:
-- `formatKeybinding()` - Formats full keybinding with modifiers
-- `formatKeyName()` - Converts key.Name to display string
+Formats a KeyBinding for display using OS-specific modifier names:
 
-### Lines 217-288: actionDescription
+```go
+if binding.Modifiers.Contain(key.ModCtrl) {
+    parts = append(parts, modCtrlDisplay)  // "Cmd" on macOS, "Ctrl" elsewhere
+}
+if binding.Modifiers.Contain(key.ModAlt) {
+    parts = append(parts, modAltDisplay)   // "Option" on macOS, "Alt" elsewhere
+}
+```
+
+### Lines 204-230: formatKeyName
+
+Converts key.Name to display string:
+- `key.NameEscape` → "Esc"
+- `key.NameReturn` → "Enter"
+- Arrow keys → "←", "→", "↑", "↓"
+- etc.
+
+### Lines 232-303: actionDescription
 
 Returns human-readable descriptions for all actions:
 - Navigation actions (move left/right/up/down)
@@ -131,6 +165,7 @@ None identified.
 - Called when `:help` command is executed
 - Help text displayed in new buffer
 - Uses keybindings.go definitions
+- Uses `runtime.GOOS` for OS detection
 
 ---
-*Last Updated: Reference guide creation*
+*Last Updated: Added OS-specific modifier display (Cmd/Option for macOS)*

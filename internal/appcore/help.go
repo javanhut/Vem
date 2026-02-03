@@ -2,10 +2,27 @@ package appcore
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"gioui.org/io/key"
 )
+
+// OS-specific modifier key display names
+var (
+	modCtrlDisplay string
+	modAltDisplay  string
+)
+
+func init() {
+	if runtime.GOOS == "darwin" {
+		modCtrlDisplay = "Cmd"
+		modAltDisplay = "Option"
+	} else {
+		modCtrlDisplay = "Ctrl"
+		modAltDisplay = "Alt"
+	}
+}
 
 // generateHelpText creates formatted help text from keybindings
 func generateHelpText() string {
@@ -68,20 +85,20 @@ func appendGlobalKeybindings(sb *strings.Builder) {
 		keys string
 		desc string
 	}{
-		{"Ctrl+T", "Toggle file explorer"},
-		{"Ctrl+H", "Focus file explorer"},
-		{"Ctrl+L", "Focus editor"},
-		{"Ctrl+F", "Open fuzzy finder"},
-		{"Ctrl+U", "Undo last edit"},
-		{"Ctrl+C", "Copy current line (NORMAL mode)"},
-		{"Ctrl+P", "Paste from clipboard"},
-		{"Ctrl+Shift+R", "Resize panes (arrows or h/l/j(up)/k(down), Esc to exit)"},
-		{"Ctrl+X", "Close pane/buffer"},
-		{"Ctrl+`", "Open/toggle terminal"},
-		{"Alt+h", "Focus pane left"},
-		{"Alt+j", "Focus pane down"},
-		{"Alt+k", "Focus pane up"},
-		{"Alt+l", "Focus pane right"},
+		{modCtrlDisplay + "+T", "Toggle file explorer"},
+		{modCtrlDisplay + "+H", "Focus file explorer"},
+		{modCtrlDisplay + "+L", "Focus editor"},
+		{modCtrlDisplay + "+F", "Open fuzzy finder"},
+		{modCtrlDisplay + "+U", "Undo last edit"},
+		{modCtrlDisplay + "+C", "Copy current line (NORMAL mode)"},
+		{modCtrlDisplay + "+P", "Paste from clipboard"},
+		{modCtrlDisplay + "+Shift+R", "Resize panes (arrows or h/l/j(up)/k(down), Esc to exit)"},
+		{modCtrlDisplay + "+X", "Close pane/buffer"},
+		{modCtrlDisplay + "+`", "Open/toggle terminal"},
+		{modAltDisplay + "+h", "Focus pane left"},
+		{modAltDisplay + "+j", "Focus pane down"},
+		{modAltDisplay + "+k", "Focus pane up"},
+		{modAltDisplay + "+l", "Focus pane right"},
 		{"Shift+Tab", "Cycle to next pane"},
 		{"Shift+Enter", "Toggle fullscreen (NORMAL mode)"},
 	}
@@ -151,10 +168,10 @@ func appendSpecialSequences(sb *strings.Builder) {
 		{"zz", "Center cursor in viewport"},
 		{"zt", "Cursor to top of viewport"},
 		{"zb", "Cursor to bottom of viewport"},
-		{"Ctrl+S v", "Split vertically"},
-		{"Ctrl+S h", "Split horizontally"},
-		{"Ctrl+S =", "Equalize panes"},
-		{"Ctrl+S o", "Zoom/unzoom pane"},
+		{modCtrlDisplay + "+S v", "Split vertically"},
+		{modCtrlDisplay + "+S h", "Split horizontally"},
+		{modCtrlDisplay + "+S =", "Equalize panes"},
+		{modCtrlDisplay + "+S o", "Zoom/unzoom pane"},
 	}
 
 	for _, s := range sequences {
@@ -166,15 +183,15 @@ func appendSpecialSequences(sb *strings.Builder) {
 func formatKeybinding(binding KeyBinding) string {
 	var parts []string
 
-	// Format modifiers
+	// Format modifiers (use OS-specific display names)
 	if binding.Modifiers.Contain(key.ModCtrl) {
-		parts = append(parts, "Ctrl")
+		parts = append(parts, modCtrlDisplay)
 	}
 	if binding.Modifiers.Contain(key.ModShift) {
 		parts = append(parts, "Shift")
 	}
 	if binding.Modifiers.Contain(key.ModAlt) {
-		parts = append(parts, "Alt")
+		parts = append(parts, modAltDisplay)
 	}
 
 	// Format key name
