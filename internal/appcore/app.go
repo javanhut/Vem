@@ -19,6 +19,7 @@ import (
 	"gioui.org/font/gofont"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
+	"gioui.org/io/pointer"
 	"gioui.org/io/system"
 	"gioui.org/layout"
 	"gioui.org/op"
@@ -41,6 +42,8 @@ import (
 	"github.com/javanhut/vem/internal/terminal"
 )
 
+var pointerDebug = os.Getenv("VEM_DEBUG_POINTER") != ""
+
 type mode string
 
 type visualModeType int
@@ -61,6 +64,13 @@ type FuzzyMatch struct {
 	FilePath string
 	Score    int
 	Indices  []int
+}
+
+type contextMenuItem struct {
+	label    string
+	action   string
+	enabled  bool
+	shortcut string
 }
 
 const (
@@ -279,6 +289,19 @@ type appState struct {
 
 	// Settings modal state
 	settingsModal settingsModalState
+
+	// Mouse support
+	bufferPointerTag  bool          // Tag for buffer pointer events
+	dragStart         image.Point   // Track drag start position
+	isDragging        bool          // Track if currently dragging
+	lastClickTime     time.Time     // For double-click detection
+	lastClickPos      image.Point   // Position of last click
+
+	// Context menu
+	contextMenuActive bool          // Whether context menu is visible
+	contextMenuPos    image.Point   // Position of context menu
+	contextMenuIndex  int           // Selected item in context menu
+	contextMenuItems  []contextMenuItem
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -699,6 +722,11 @@ func (s *appState) layout(gtx layout.Context) layout.Dimensions {
 		s.drawLeaderBar(gtx)
 	}
 
+	// Draw context menu overlay on top if active
+	if s.contextMenuActive {
+		s.drawContextMenu(gtx)
+	}
+
 	return dims
 }
 
@@ -1037,6 +1065,19 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 		Bottom: unit.Dp(8),
 		Left:   unit.Dp(16),
 	}
+
+	// Calculate gutter width for mouse position conversion
+	gutter := fmt.Sprintf("%4d  ", 1)
+	gutterWidth := s.measureTextWidth(gtx, expandTabs(gutter, tabWidth))
+	insetLeft := gtx.Dp(inset.Left)
+
+	// Register for mouse events in the buffer area
+	bufferArea := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
+	event.Op(gtx.Ops, &s.bufferPointerTag)
+	bufferArea.Pop()
+
+	// Process mouse events for click and drag
+	s.handleBufferMouseEvents(gtx, gutterWidth, insetLeft)
 
 	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
@@ -2084,6 +2125,13 @@ func (s *appState) handleKey(ev key.Event) {
 		return
 	}
 
+	// Context menu intercepts all keys when active
+	if s.contextMenuActive {
+		if s.handleContextMenuKey(string(ev.Name)) {
+			return
+		}
+	}
+
 	// Handle terminal input if in terminal mode
 	if s.mode == modeTerminal {
 		s.handleTerminalKey(ev)
@@ -2551,6 +2599,552 @@ func (s *appState) measureLineHeight(gtx layout.Context) int {
 	dims := label.Layout(measureGtx)
 	macro.Stop()
 	return dims.Size.Y
+}
+
+// pixelToBufferPos converts pixel coordinates to buffer position (line, col).
+// It accounts for gutter width, scroll offset, and soft-wrapped lines.
+func (s *appState) pixelToBufferPos(gtx layout.Context, x, y int, gutterWidth int, insetLeft int) (line, col int) {
+	buf := s.activeBuffer()
+	lineHeight := s.cachedLineHeight
+	if lineHeight <= 0 {
+		lineHeight = gtx.Dp(unit.Dp(20))
+	}
+
+	// Account for inset (padding)
+	adjustedY := y - gtx.Dp(unit.Dp(8)) // Top inset
+
+	// Calculate visual line from Y position
+	visualLine := adjustedY / lineHeight
+	if visualLine < 0 {
+		visualLine = 0
+	}
+
+	// If soft wrap is enabled, we need to map visual lines to buffer lines
+	if s.softWrapEnabled {
+		return s.pixelToBufferPosWrapped(gtx, x, visualLine, gutterWidth, insetLeft)
+	}
+
+	// Simple case: no soft wrap, visual line = buffer line (with scroll offset)
+	bufferLine := s.viewportTopLine + visualLine
+	if bufferLine >= buf.LineCount() {
+		bufferLine = buf.LineCount() - 1
+	}
+	if bufferLine < 0 {
+		bufferLine = 0
+	}
+
+	// Calculate column from X position
+	lineText := buf.Line(bufferLine)
+	adjustedX := x - insetLeft - gutterWidth
+	if adjustedX < 0 {
+		adjustedX = 0
+	}
+	col = s.pixelToColumn(gtx, lineText, adjustedX)
+
+	return bufferLine, col
+}
+
+// pixelToBufferPosWrapped handles click position conversion when soft wrap is enabled.
+func (s *appState) pixelToBufferPosWrapped(gtx layout.Context, x int, visualLine int, gutterWidth int, insetLeft int) (line, col int) {
+	buf := s.activeBuffer()
+	bufferLines := buf.LineCount()
+
+	// Calculate available width for text (after gutter)
+	availableWidth := gtx.Constraints.Max.X - gutterWidth - insetLeft - gtx.Dp(unit.Dp(16)) // Right inset
+	if availableWidth < 100 {
+		availableWidth = 100
+	}
+
+	// Walk through buffer lines, counting visual lines
+	currentVisualLine := 0
+	for bufLine := s.viewportTopLine; bufLine < bufferLines; bufLine++ {
+		lineText := buf.Line(bufLine)
+
+		// Calculate how many visual lines this buffer line spans
+		// Use pixel-based measurement for accuracy (matching drawBufferLineWrapped)
+		visualLinesForBufLine := s.countVisualLines(gtx, lineText, availableWidth)
+
+		for wrapIdx := 0; wrapIdx < visualLinesForBufLine; wrapIdx++ {
+			if currentVisualLine == visualLine {
+				// Found the target visual line
+				adjustedX := x - insetLeft - gutterWidth
+				if adjustedX < 0 {
+					adjustedX = 0
+				}
+
+				// Calculate the starting rune position for this wrap segment
+				segmentStartRune := s.getWrapSegmentStartRune(gtx, lineText, availableWidth, wrapIdx)
+
+				// Get the text for this segment
+				runes := []rune(lineText)
+				segmentEnd := len(runes)
+				if wrapIdx < visualLinesForBufLine-1 {
+					// Not the last segment, find where this segment ends
+					segmentEnd = s.getWrapSegmentStartRune(gtx, lineText, availableWidth, wrapIdx+1)
+				}
+				segmentText := string(runes[segmentStartRune:segmentEnd])
+
+				// Calculate the column within this segment
+				segmentCol := s.pixelToColumn(gtx, segmentText, adjustedX)
+
+				// Calculate actual column in the buffer line
+				actualCol := segmentStartRune + segmentCol
+				lineLen := len(runes)
+				if actualCol > lineLen {
+					actualCol = lineLen
+				}
+				return bufLine, actualCol
+			}
+			currentVisualLine++
+		}
+	}
+
+	// If we reached the end, return the last position
+	lastLine := bufferLines - 1
+	if lastLine < 0 {
+		lastLine = 0
+	}
+	return lastLine, utf8.RuneCountInString(buf.Line(lastLine))
+}
+
+// countVisualLines returns the number of visual lines a buffer line spans when soft-wrapped.
+func (s *appState) countVisualLines(gtx layout.Context, lineText string, availableWidth int) int {
+	if lineText == "" {
+		return 1
+	}
+
+	// Expand tabs and measure to find wrap points
+	expandedText := expandTabs(lineText, tabWidth)
+	totalWidth := s.measureTextWidth(gtx, expandedText)
+
+	if totalWidth <= availableWidth {
+		return 1
+	}
+
+	// Need to wrap - count segments by measuring incrementally
+	runes := []rune(lineText)
+	visualLines := 1
+	currentWidth := 0
+
+	for _, r := range runes {
+		var charText string
+		if r == '\t' {
+			charText = strings.Repeat(" ", tabWidth)
+		} else {
+			charText = string(r)
+		}
+		charWidth := s.measureTextWidth(gtx, charText)
+
+		if currentWidth+charWidth > availableWidth && currentWidth > 0 {
+			visualLines++
+			currentWidth = charWidth
+		} else {
+			currentWidth += charWidth
+		}
+	}
+
+	return visualLines
+}
+
+// getWrapSegmentStartRune returns the starting rune position for a given wrap segment.
+func (s *appState) getWrapSegmentStartRune(gtx layout.Context, lineText string, availableWidth int, segmentIdx int) int {
+	if segmentIdx == 0 || lineText == "" {
+		return 0
+	}
+
+	runes := []rune(lineText)
+	currentSegment := 0
+	currentWidth := 0
+
+	for i, r := range runes {
+		var charText string
+		if r == '\t' {
+			charText = strings.Repeat(" ", tabWidth)
+		} else {
+			charText = string(r)
+		}
+		charWidth := s.measureTextWidth(gtx, charText)
+
+		if currentWidth+charWidth > availableWidth && currentWidth > 0 {
+			currentSegment++
+			if currentSegment == segmentIdx {
+				return i
+			}
+			currentWidth = charWidth
+		} else {
+			currentWidth += charWidth
+		}
+	}
+
+	return len(runes)
+}
+
+// pixelToColumn converts an X pixel coordinate to a column in the given text.
+func (s *appState) pixelToColumn(gtx layout.Context, lineText string, x int) int {
+	if x <= 0 || lineText == "" {
+		return 0
+	}
+
+	// Expand tabs for accurate measurement
+	expandedText := expandTabs(lineText, tabWidth)
+	runes := []rune(expandedText)
+
+	// Binary search for the column
+	lo, hi := 0, len(runes)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		prefix := string(runes[:mid])
+		width := s.measureTextWidth(gtx, prefix)
+		if width < x {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	// Fine-tune: check if we're closer to lo or lo-1
+	if lo > 0 {
+		prevWidth := s.measureTextWidth(gtx, string(runes[:lo-1]))
+		currWidth := s.measureTextWidth(gtx, string(runes[:lo]))
+		if x-prevWidth < currWidth-x {
+			lo = lo - 1
+		}
+	}
+
+	// Convert from expanded column to original column (accounting for tabs)
+	return s.expandedColToOriginalCol(lineText, lo)
+}
+
+// expandedColToOriginalCol converts a column in tab-expanded text back to original text column.
+func (s *appState) expandedColToOriginalCol(originalText string, expandedCol int) int {
+	runes := []rune(originalText)
+	expandedIdx := 0
+	for i, r := range runes {
+		if expandedIdx >= expandedCol {
+			return i
+		}
+		if r == '\t' {
+			// Tab expands to tabWidth spaces
+			expandedIdx += tabWidth - (expandedIdx % tabWidth)
+		} else {
+			expandedIdx++
+		}
+	}
+	return len(runes)
+}
+
+// handleBufferMouseEvents processes mouse events in the buffer area using pointer filter.
+func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, insetLeft int) {
+	// Don't handle mouse events in certain modes
+	if s.mode == modeCommand || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeTerminal {
+		return
+	}
+
+	// Process pointer events using filter
+	for {
+		ev, ok := gtx.Source.Event(pointer.Filter{
+			Target: &s.bufferPointerTag,
+			Kinds:  pointer.Press | pointer.Release | pointer.Drag | pointer.Move,
+		})
+		if !ok {
+			break
+		}
+
+		pev, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+
+		if pointerDebug {
+			s.status = fmt.Sprintf("Pointer: %v btn=%v at (%.0f, %.0f)", pev.Kind, pev.Buttons, pev.Position.X, pev.Position.Y)
+		}
+
+		s.handlePointerEvent(gtx, pev, gutterWidth, insetLeft)
+	}
+}
+
+// handlePointerEvent processes a pointer event for buffer interaction.
+func (s *appState) handlePointerEvent(gtx layout.Context, ev pointer.Event, gutterWidth, insetLeft int) {
+	pos := image.Pt(int(ev.Position.X), int(ev.Position.Y))
+
+	switch ev.Kind {
+	case pointer.Press:
+		// Check which button was pressed
+		if ev.Buttons.Contain(pointer.ButtonSecondary) {
+			// Right-click: show context menu
+			s.showContextMenu(gtx, pos, gutterWidth, insetLeft)
+			return
+		}
+
+		if ev.Buttons.Contain(pointer.ButtonPrimary) {
+			// Close context menu if open
+			if s.contextMenuActive {
+				s.contextMenuActive = false
+				return
+			}
+
+			line, col := s.pixelToBufferPos(gtx, pos.X, pos.Y, gutterWidth, insetLeft)
+
+			// Position cursor at click point
+			buf := s.activeBuffer()
+			buf.SetCursor(line, col)
+
+			// Exit any existing visual mode on click
+			if s.visualMode != visualModeNone {
+				s.exitVisualMode()
+			}
+
+			// Track drag start position
+			s.dragStart = pos
+			s.isDragging = false
+			s.lastClickPos = pos
+			s.lastClickTime = gtx.Now
+
+			// Reset caret blink on click
+			s.caretReset = true
+		}
+
+	case pointer.Drag:
+		if ev.Buttons.Contain(pointer.ButtonPrimary) {
+			line, col := s.pixelToBufferPos(gtx, pos.X, pos.Y, gutterWidth, insetLeft)
+
+			if !s.isDragging {
+				// Start visual mode from drag start position
+				startLine, startCol := s.pixelToBufferPos(gtx, s.dragStart.X, s.dragStart.Y, gutterWidth, insetLeft)
+				s.visualStartLine = startLine
+				s.visualStartCol = startCol
+				s.visualMode = visualModeChar
+				s.mode = modeVisual
+				s.isDragging = true
+			}
+
+			// Update cursor to current drag position
+			buf := s.activeBuffer()
+			buf.SetCursor(line, col)
+		}
+
+	case pointer.Release:
+		s.isDragging = false
+		// Keep visual mode active if selection exists
+	}
+}
+
+// showContextMenu displays the right-click context menu at the given position.
+func (s *appState) showContextMenu(gtx layout.Context, pos image.Point, gutterWidth, insetLeft int) {
+	// Position cursor at right-click location
+	line, col := s.pixelToBufferPos(gtx, pos.X, pos.Y, gutterWidth, insetLeft)
+	buf := s.activeBuffer()
+	buf.SetCursor(line, col)
+
+	// Check if LSP is available for this buffer
+	lspAvailable := s.lspManager != nil && s.lspManager.HasServerForFile(buf.FilePath())
+	hasSelection := s.visualMode != visualModeNone
+
+	// Build context menu items
+	s.contextMenuItems = []contextMenuItem{
+		{label: "Copy", action: "copy", enabled: hasSelection, shortcut: "y"},
+		{label: "Cut", action: "cut", enabled: hasSelection, shortcut: "d"},
+		{label: "Paste", action: "paste", enabled: true, shortcut: "p"},
+		{label: "", action: "", enabled: false, shortcut: ""}, // Separator
+		{label: "Go to Definition", action: "goto_definition", enabled: lspAvailable, shortcut: "gd"},
+		{label: "Find References", action: "find_references", enabled: lspAvailable, shortcut: "gr"},
+		{label: "Rename Symbol", action: "rename", enabled: lspAvailable, shortcut: ":lsprename"},
+		{label: "", action: "", enabled: false, shortcut: ""}, // Separator
+		{label: "Format Document", action: "format", enabled: lspAvailable, shortcut: ":fmt"},
+	}
+
+	s.contextMenuPos = pos
+	s.contextMenuIndex = 0
+	s.contextMenuActive = true
+}
+
+// executeContextMenuItem executes the selected context menu item.
+func (s *appState) executeContextMenuItem(index int) {
+	if index < 0 || index >= len(s.contextMenuItems) {
+		return
+	}
+
+	item := s.contextMenuItems[index]
+	if !item.enabled || item.action == "" {
+		return
+	}
+
+	s.contextMenuActive = false
+
+	switch item.action {
+	case "copy":
+		s.copyVisualSelection()
+	case "cut":
+		s.copyVisualSelection()
+		s.deleteVisualSelection()
+	case "paste":
+		s.pasteAtCursor()
+	case "goto_definition":
+		s.handleLSPGotoDefinition()
+	case "find_references":
+		s.handleLSPReferences()
+	case "rename":
+		// Enter command mode with pre-filled :lsprename command
+		s.mode = modeCommand
+		s.cmdText = ":lsprename "
+		s.status = "Enter new name after :lsprename"
+	case "format":
+		s.handleLSPFormat()
+	}
+}
+
+// drawContextMenu renders the right-click context menu overlay.
+func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
+	if !s.contextMenuActive || len(s.contextMenuItems) == 0 {
+		return layout.Dimensions{}
+	}
+
+	// Menu styling
+	menuBg := color.NRGBA{R: 40, G: 44, B: 52, A: 245}
+	menuBorder := color.NRGBA{R: 70, G: 75, B: 85, A: 255}
+	itemHover := color.NRGBA{R: 60, G: 65, B: 75, A: 255}
+	textColor := color.NRGBA{R: 220, G: 220, B: 220, A: 255}
+	textDisabled := color.NRGBA{R: 120, G: 120, B: 120, A: 255}
+	shortcutColor := color.NRGBA{R: 150, G: 150, B: 160, A: 255}
+	separatorColor := color.NRGBA{R: 70, G: 75, B: 85, A: 255}
+
+	itemHeight := gtx.Dp(unit.Dp(28))
+	menuPadding := gtx.Dp(unit.Dp(4))
+	itemPadding := gtx.Dp(unit.Dp(12))
+	menuWidth := gtx.Dp(unit.Dp(200))
+
+	// Calculate menu height
+	menuHeight := menuPadding * 2
+	for _, item := range s.contextMenuItems {
+		if item.action == "" {
+			menuHeight += gtx.Dp(unit.Dp(9)) // Separator height
+		} else {
+			menuHeight += itemHeight
+		}
+	}
+
+	// Position menu (ensure it stays on screen)
+	menuX := s.contextMenuPos.X
+	menuY := s.contextMenuPos.Y
+	if menuX+menuWidth > gtx.Constraints.Max.X {
+		menuX = gtx.Constraints.Max.X - menuWidth
+	}
+	if menuY+menuHeight > gtx.Constraints.Max.Y {
+		menuY = gtx.Constraints.Max.Y - menuHeight
+	}
+
+	// Draw menu background with shadow
+	defer op.Offset(image.Pt(menuX, menuY)).Push(gtx.Ops).Pop()
+
+	// Shadow
+	shadowRect := clip.Rect{
+		Min: image.Pt(4, 4),
+		Max: image.Pt(menuWidth+4, menuHeight+4),
+	}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, color.NRGBA{R: 0, G: 0, B: 0, A: 80})
+	shadowRect.Pop()
+
+	// Background
+	bgRect := clip.Rect{Max: image.Pt(menuWidth, menuHeight)}.Push(gtx.Ops)
+	paint.Fill(gtx.Ops, menuBg)
+	bgRect.Pop()
+
+	// Border
+	borderPath := clip.Stroke{
+		Path:  clip.Rect{Max: image.Pt(menuWidth, menuHeight)}.Path(),
+		Width: float32(gtx.Dp(unit.Dp(1))),
+	}.Op()
+	paint.FillShape(gtx.Ops, menuBorder, borderPath)
+
+	// Draw menu items
+	yOffset := menuPadding
+	for i, item := range s.contextMenuItems {
+		if item.action == "" {
+			// Draw separator
+			sepY := yOffset + gtx.Dp(unit.Dp(4))
+			defer op.Offset(image.Pt(itemPadding, sepY)).Push(gtx.Ops).Pop()
+			sepRect := clip.Rect{Max: image.Pt(menuWidth-itemPadding*2, gtx.Dp(unit.Dp(1)))}.Push(gtx.Ops)
+			paint.Fill(gtx.Ops, separatorColor)
+			sepRect.Pop()
+			yOffset += gtx.Dp(unit.Dp(9))
+			continue
+		}
+
+		itemY := yOffset
+
+		// Draw hover highlight
+		if i == s.contextMenuIndex && item.enabled {
+			defer op.Offset(image.Pt(0, itemY)).Push(gtx.Ops).Pop()
+			hoverRect := clip.Rect{Max: image.Pt(menuWidth, itemHeight)}.Push(gtx.Ops)
+			paint.Fill(gtx.Ops, itemHover)
+			hoverRect.Pop()
+		}
+
+		// Draw item label
+		labelColor := textColor
+		if !item.enabled {
+			labelColor = textDisabled
+		}
+
+		labelOp := op.Offset(image.Pt(itemPadding, itemY+gtx.Dp(unit.Dp(6)))).Push(gtx.Ops)
+		paint.ColorOp{Color: labelColor}.Add(gtx.Ops)
+		widget := material.Body1(s.theme, item.label)
+		widget.Color = labelColor
+		widget.Layout(gtx)
+		labelOp.Pop()
+
+		// Draw shortcut
+		if item.shortcut != "" {
+			shortcutWidth := s.measureTextWidth(gtx, item.shortcut)
+			shortcutX := menuWidth - itemPadding - shortcutWidth
+			shortcutOp := op.Offset(image.Pt(shortcutX, itemY+gtx.Dp(unit.Dp(6)))).Push(gtx.Ops)
+			paint.ColorOp{Color: shortcutColor}.Add(gtx.Ops)
+			shortcutWidget := material.Body1(s.theme, item.shortcut)
+			shortcutWidget.Color = shortcutColor
+			shortcutWidget.Layout(gtx)
+			shortcutOp.Pop()
+		}
+
+		yOffset += itemHeight
+	}
+
+	return layout.Dimensions{Size: image.Pt(menuWidth, menuHeight)}
+}
+
+// handleContextMenuKey handles keyboard input for the context menu.
+func (s *appState) handleContextMenuKey(name string) bool {
+	if !s.contextMenuActive {
+		return false
+	}
+
+	switch name {
+	case "Escape":
+		s.contextMenuActive = false
+		return true
+	case "↑", "K":
+		// Move selection up, skip separators and disabled items
+		for i := s.contextMenuIndex - 1; i >= 0; i-- {
+			if s.contextMenuItems[i].action != "" && s.contextMenuItems[i].enabled {
+				s.contextMenuIndex = i
+				break
+			}
+		}
+		return true
+	case "↓", "J":
+		// Move selection down, skip separators and disabled items
+		for i := s.contextMenuIndex + 1; i < len(s.contextMenuItems); i++ {
+			if s.contextMenuItems[i].action != "" && s.contextMenuItems[i].enabled {
+				s.contextMenuIndex = i
+				break
+			}
+		}
+		return true
+	case "⏎":
+		s.executeContextMenuItem(s.contextMenuIndex)
+		return true
+	}
+
+	return false
 }
 
 func (s *appState) updateCaretBlink(gtx layout.Context) {
@@ -3123,11 +3717,15 @@ func (s *appState) copyVisualSelection() {
 			return
 		}
 		// Store in system clipboard
-		s.writeToSystemClipboard(text)
+		systemOk := s.writeToSystemClipboard(text)
 		// Store as a single line in internal clipboard
 		s.clipLines = []string{text}
 		s.clipboardIsLine = false // Character-wise copy is not line mode
-		s.status = fmt.Sprintf("Copied %d character(s)", len(text))
+		if systemOk {
+			s.status = fmt.Sprintf("Copied %d chars to clipboard", len(text))
+		} else {
+			s.status = fmt.Sprintf("Copied %d chars (internal only)", len(text))
+		}
 	} else if s.visualMode == visualModeLine {
 		// Line-wise copy
 		start, end, ok := s.visualSelectionRange()
@@ -3142,11 +3740,15 @@ func (s *appState) copyVisualSelection() {
 		}
 		// Store in system clipboard with newline to indicate line mode
 		text := strings.Join(lines, "\n") + "\n"
-		s.writeToSystemClipboard(text)
+		systemOk := s.writeToSystemClipboard(text)
 		// Store in internal clipboard
 		s.clipLines = append([]string(nil), lines...)
 		s.clipboardIsLine = true // Line-wise copy is line mode
-		s.status = fmt.Sprintf("Copied %d line(s)", len(lines))
+		if systemOk {
+			s.status = fmt.Sprintf("Copied %d lines to clipboard", len(lines))
+		} else {
+			s.status = fmt.Sprintf("Copied %d lines (internal only)", len(lines))
+		}
 	} else {
 		s.status = "No selection to copy"
 	}
@@ -3155,7 +3757,8 @@ func (s *appState) copyVisualSelection() {
 func (s *appState) pasteClipboard() {
 	// Try system clipboard first
 	text, ok := s.readFromSystemClipboard()
-	if !ok || text == "" {
+	fromSystem := ok && text != ""
+	if !fromSystem {
 		// Fallback to internal clipboard
 		if len(s.clipLines) == 0 {
 			s.status = "Clipboard empty"
@@ -3182,7 +3785,11 @@ func (s *appState) pasteClipboard() {
 		// Insert clipboard text at cursor position
 		buf.InsertText(text)
 		s.exitVisualMode()
-		s.setCursorStatus(fmt.Sprintf("Pasted %d character(s)", len(text)))
+		if fromSystem {
+			s.setCursorStatus(fmt.Sprintf("Pasted %d chars from clipboard", len(text)))
+		} else {
+			s.setCursorStatus(fmt.Sprintf("Pasted %d chars (internal)", len(text)))
+		}
 	} else if s.visualMode == visualModeLine {
 		// Line-wise paste
 		start, _, ok := s.visualSelectionRange()
@@ -3193,7 +3800,11 @@ func (s *appState) pasteClipboard() {
 		lines := strings.Split(text, "\n")
 		s.activeBuffer().InsertLines(start, lines)
 		s.exitVisualMode()
-		s.setCursorStatus(fmt.Sprintf("Inserted %d line(s)", len(lines)))
+		if fromSystem {
+			s.setCursorStatus(fmt.Sprintf("Pasted %d lines from clipboard", len(lines)))
+		} else {
+			s.setCursorStatus(fmt.Sprintf("Pasted %d lines (internal)", len(lines)))
+		}
 	} else {
 		s.status = "Select destination in VISUAL mode"
 	}
@@ -3281,6 +3892,14 @@ func (s *appState) pasteAtCursor() {
 		isLineMode = strings.HasSuffix(text, "\n")
 	}
 
+	// Prepare source info for status message
+	sourceInfo := ""
+	if usingSystemClipboard {
+		sourceInfo = " from clipboard"
+	} else {
+		sourceInfo = " (internal)"
+	}
+
 	if isLineMode {
 		// Line-based paste: insert as new line below cursor (like Vim's 'p')
 		// Remove trailing newline since we'll insert as lines
@@ -3294,16 +3913,16 @@ func (s *appState) pasteAtCursor() {
 		// Move cursor to start of pasted content
 		buf.MoveToLine(insertPos)
 
-		s.status = fmt.Sprintf("Pasted %d line(s) below", len(lines))
+		s.status = fmt.Sprintf("Pasted %d line(s)%s", len(lines), sourceInfo)
 	} else {
 		// Character-based paste: insert at cursor position
 		buf.InsertText(text)
 
 		lines := strings.Split(text, "\n")
 		if len(lines) > 1 {
-			s.status = fmt.Sprintf("Pasted %d lines", len(lines))
+			s.status = fmt.Sprintf("Pasted %d lines%s", len(lines), sourceInfo)
 		} else {
-			s.status = fmt.Sprintf("Pasted %d characters", len(text))
+			s.status = fmt.Sprintf("Pasted %d chars%s", len(text), sourceInfo)
 		}
 	}
 }

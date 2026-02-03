@@ -257,6 +257,45 @@ New status components:
 11. **Soft Wrap** - `:wrap` toggle for dynamic text wrapping to viewport width
 12. **Tab Key Fix** - Fixed `skipNextEdit` timing race to prevent double key presses
 13. **Leader Bar** - Which-key style popup with custom keybindings (see `leader.md`)
+14. **Mouse Support** - Click-to-position cursor and drag-to-select with visual mode integration
+
+### Mouse Support Implementation
+- **Imports**: `gioui.org/io/event`, `gioui.org/io/pointer`
+- **New state fields**: `bufferPointerTag`, `dragStart`, `isDragging`, `lastClickTime`, `lastClickPos`
+- **Click handling**: Left-click positions cursor, exits visual mode if active
+- **Drag selection**: Left-dragging enters character-wise visual mode
+- **Right-click**: Opens context menu with common actions
+- **Soft wrap aware**: Mouse position conversion handles wrapped lines
+- **Pointer registration**: Uses `event.Op()` and `pointer.Filter` for direct pointer event handling in `drawBuffer()`
+- **Key functions**:
+  - `pixelToBufferPos()` - Converts pixel coordinates to buffer line/column
+  - `pixelToBufferPosWrapped()` - Handles soft-wrapped line conversion
+  - `pixelToColumn()` - Binary search for column from X position
+  - `handleBufferMouseEvents()` - Processes pointer events via filter
+  - `handlePointerEvent()` - Handles Press/Drag/Release events
+
+### Right-Click Context Menu
+- **State fields**: `contextMenuActive`, `contextMenuPos`, `contextMenuIndex`, `contextMenuItems`
+- **Type**: `contextMenuItem` struct with `label`, `action`, `enabled`, `shortcut`
+- **Menu items** (enabled based on context):
+  - Copy (y) - enabled when selection exists
+  - Cut (d) - enabled when selection exists
+  - Paste (p) - always enabled
+  - Go to Definition (gd) - enabled when LSP available
+  - Find References (gr) - enabled when LSP available
+  - Rename Symbol (:lsprename) - enabled when LSP available
+  - Format Document (:fmt) - enabled when LSP available
+- **Key functions**:
+  - `showContextMenu()` - Builds and displays context menu
+  - `drawContextMenu()` - Renders menu overlay with shadow, border, hover state
+  - `handleContextMenuKey()` - Handles Up/Down/Enter/Escape navigation
+  - `executeContextMenuItem()` - Executes selected action
+
+### Enhanced Clipboard Feedback
+- `copyVisualSelection()` - Now shows "Copied X chars to clipboard" or "(internal only)"
+- `copyCurrentLine()` - Shows "Copied line X (Y chars)" or "(internal only)"
+- `pasteAtCursor()` - Shows "Pasted X chars from clipboard" or "(internal)"
+- `pasteClipboard()` - Shows source info (clipboard vs internal)
 
 ### New Commands
 | Command | Description |
@@ -284,6 +323,19 @@ leaderBarBindings     []LeaderBinding  // All loaded bindings
 leaderBarMatches      []LeaderBinding  // Bindings matching current sequence
 leaderBarIndex        int      // Selected item in popup
 lastSpaceTime         time.Time // For double-space detection
+
+// Mouse support
+bufferPointerTag  bool          // Tag for pointer event routing
+dragStart         image.Point   // Track drag start position
+isDragging        bool          // Track if currently dragging
+lastClickTime     time.Time     // For double-click detection
+lastClickPos      image.Point   // Position of last click
+
+// Context menu
+contextMenuActive bool             // Whether context menu is visible
+contextMenuPos    image.Point      // Position of context menu
+contextMenuIndex  int              // Selected item in context menu
+contextMenuItems  []contextMenuItem // Menu items
 ```
 
 ### Command History Functions
@@ -319,5 +371,16 @@ lastSpaceTime         time.Time // For double-space detection
 | `invalidateSyntaxCache()` | Clears syntax cache for active buffer on content change |
 | `updateHighlighterCacheOnBufferClose()` | Updates highlighter indices when a buffer is closed |
 
+### Mouse Support Bug Fix
+- **Problem**: Mouse clicks/drags worked in settings menu but not in buffer area
+- **Root Cause**: Double registration and event consumption conflict
+  1. Gestures were registered in TWO places (top-level `layout()` AND `drawBuffer()`)
+  2. Events were consumed at top-level in `processTopLevelMouseEvents()` before `handleBufferMouseEvents()` could process them
+- **Solution**:
+  1. Removed top-level gesture registration and `processTopLevelMouseEvents()` function
+  2. Replaced `gesture.Click`/`gesture.Drag` with direct `pointer.Filter` approach
+  3. Uses `event.Op()` for handler registration and `gtx.Source.Event(pointer.Filter{})` for event processing
+  4. Added right-click context menu support with `pointer.ButtonSecondary` detection
+
 ---
-*Last Updated: After syntax highlighter cache fix*
+*Last Updated: After mouse click/drag fix and context menu addition*
