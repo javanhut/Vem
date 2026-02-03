@@ -725,6 +725,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				s.status = "Ready"
 			}
 		case key.Event:
+			// Debug logging for macOS input issues (enabled via VEM_DEBUG_DARWIN=1)
+			s.debugKeyEvent(e)
+
 			// Platform-specific modifier event handling
 			// (Windows uses temporal tracking, Unix uses Press/Release events)
 			if s.handleModifierEvent(e) {
@@ -771,6 +774,9 @@ func (s *appState) handleEvents(gtx layout.Context) {
 				}
 			}
 		case key.EditEvent:
+			// Debug logging for macOS input issues (enabled via VEM_DEBUG_DARWIN=1)
+			s.debugEditEvent(e)
+
 			if e.Text == "" {
 				continue
 			}
@@ -4203,6 +4209,10 @@ func (s *appState) printableKey(ev key.Event) (rune, bool) {
 	if r == ';' && ev.Modifiers.Contain(key.ModShift) {
 		r = ':'
 	}
+
+	// Debug logging for macOS input issues (enabled via VEM_DEBUG_DARWIN=1)
+	s.debugPrintableKey(ev, r, true)
+
 	return r, true
 }
 
