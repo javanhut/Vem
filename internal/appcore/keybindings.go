@@ -58,6 +58,7 @@ const (
 	// Clipboard (Normal mode)
 	ActionCopyLine
 	ActionPaste
+	ActionSelectAll
 
 	// Explorer
 	ActionOpenNode
@@ -164,6 +165,7 @@ var globalKeybindings = []KeyBinding{
 	// Clipboard operations
 	{Modifiers: key.ModCtrl, Key: "c", Modes: []mode{modeNormal}, Action: ActionCopyLine},
 	{Modifiers: key.ModCtrl, Key: "p", Modes: nil, Action: ActionPaste},
+	{Modifiers: key.ModCtrl, Key: "a", Modes: nil, Action: ActionSelectAll},
 
 	// Pane navigation (Alt+hjkl)
 	{Modifiers: key.ModAlt, Key: "h", Modes: nil, Action: ActionPaneFocusLeft},
@@ -660,6 +662,8 @@ func (s *appState) executeAction(action Action, ev key.Event) {
 
 	case ActionPaste:
 		s.pasteAtCursor()
+	case ActionSelectAll:
+		s.selectAll()
 
 	case ActionOpenNode:
 		s.openSelectedNode()

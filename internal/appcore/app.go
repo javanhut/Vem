@@ -305,6 +305,7 @@ type appState struct {
 	contextMenuPos    image.Point
 	contextMenuIndex  int
 	contextMenuItems  []contextMenuItem
+	contextMenuTag    bool // Tag for context menu pointer events
 }
 
 func Run(w *app.Window, filePaths []string) error {
@@ -2969,12 +2970,20 @@ func (s *appState) showContextMenu(gtx layout.Context, pos image.Point, gutterWi
 	// Check if LSP is available for this buffer
 	lspAvailable := s.lspManager != nil && s.lspManager.HasServerForFile(buf.FilePath())
 	hasSelection := s.visualMode != visualModeNone
+	copyShortcut := s.shortcutForAction(ActionCopySelection, modeVisual)
+	cutShortcut := s.shortcutForAction(ActionDeleteSelection, modeVisual)
+	pasteShortcut := s.shortcutForAction(ActionPaste, s.mode)
+	if hasSelection {
+		pasteShortcut = s.shortcutForAction(ActionPasteClipboard, modeVisual)
+	}
+	selectAllShortcut := s.shortcutForAction(ActionSelectAll, s.mode)
 
 	// Build context menu items
 	s.contextMenuItems = []contextMenuItem{
-		{label: "Copy", action: "copy", enabled: hasSelection, shortcut: "y"},
-		{label: "Cut", action: "cut", enabled: hasSelection, shortcut: "d"},
-		{label: "Paste", action: "paste", enabled: true, shortcut: "p"},
+		{label: "Copy", action: "copy", enabled: hasSelection, shortcut: copyShortcut},
+		{label: "Cut", action: "cut", enabled: hasSelection, shortcut: cutShortcut},
+		{label: "Paste", action: "paste", enabled: true, shortcut: pasteShortcut},
+		{label: "Select All", action: "select_all", enabled: true, shortcut: selectAllShortcut},
 		{label: "", action: "", enabled: false, shortcut: ""}, // Separator
 		{label: "Go to Definition", action: "goto_definition", enabled: lspAvailable, shortcut: "gd"},
 		{label: "Find References", action: "find_references", enabled: lspAvailable, shortcut: "gr"},
@@ -2984,7 +2993,7 @@ func (s *appState) showContextMenu(gtx layout.Context, pos image.Point, gutterWi
 	}
 
 	s.contextMenuPos = pos
-	s.contextMenuIndex = 0
+	s.contextMenuIndex = s.firstEnabledContextMenuIndex()
 	s.contextMenuActive = true
 }
 
@@ -3008,7 +3017,13 @@ func (s *appState) executeContextMenuItem(index int) {
 		s.copyVisualSelection()
 		s.deleteVisualSelection()
 	case "paste":
-		s.pasteAtCursor()
+		if s.visualMode != visualModeNone {
+			s.pasteClipboard()
+		} else {
+			s.pasteAtCursor()
+		}
+	case "select_all":
+		s.selectAll()
 	case "goto_definition":
 		s.handleLSPGotoDefinition()
 	case "find_references":
@@ -3021,6 +3036,116 @@ func (s *appState) executeContextMenuItem(index int) {
 	case "format":
 		s.handleLSPFormat()
 	}
+}
+
+func (s *appState) firstEnabledContextMenuIndex() int {
+	for i, item := range s.contextMenuItems {
+		if item.action != "" && item.enabled {
+			return i
+		}
+	}
+	return 0
+}
+
+func (s *appState) shortcutForAction(action Action, modes ...mode) string {
+	preferred := modes
+	if len(preferred) == 0 {
+		preferred = []mode{s.mode}
+	}
+
+	for _, m := range preferred {
+		if bindings, ok := modeKeybindings[m]; ok {
+			for _, b := range bindings {
+				if b.Action == action {
+					return formatKeybinding(b)
+				}
+			}
+		}
+		for _, b := range globalKeybindings {
+			if b.Action == action && bindingAppliesToMode(b, m) {
+				return formatKeybinding(b)
+			}
+		}
+	}
+
+	for _, bindings := range modeKeybindings {
+		for _, b := range bindings {
+			if b.Action == action {
+				return formatKeybinding(b)
+			}
+		}
+	}
+	for _, b := range globalKeybindings {
+		if b.Action == action {
+			return formatKeybinding(b)
+		}
+	}
+	return ""
+}
+
+func bindingAppliesToMode(binding KeyBinding, m mode) bool {
+	if len(binding.Modes) == 0 {
+		return true
+	}
+	for _, modeBinding := range binding.Modes {
+		if modeBinding == m {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appState) handleContextMenuPointer(gtx layout.Context, menuPadding, itemHeight, separatorHeight int) {
+	if !s.contextMenuActive {
+		return
+	}
+
+	for {
+		ev, ok := gtx.Source.Event(pointer.Filter{
+			Target: &s.contextMenuTag,
+			Kinds:  pointer.Move | pointer.Press | pointer.Enter | pointer.Leave,
+		})
+		if !ok {
+			break
+		}
+		pev, ok := ev.(pointer.Event)
+		if !ok {
+			continue
+		}
+
+		switch pev.Kind {
+		case pointer.Move, pointer.Enter:
+			index := s.contextMenuIndexAt(int(pev.Position.Y), menuPadding, itemHeight, separatorHeight)
+			if index >= 0 && index < len(s.contextMenuItems) && s.contextMenuItems[index].enabled {
+				s.contextMenuIndex = index
+			}
+		case pointer.Press:
+			if !pev.Buttons.Contain(pointer.ButtonPrimary) {
+				continue
+			}
+			index := s.contextMenuIndexAt(int(pev.Position.Y), menuPadding, itemHeight, separatorHeight)
+			if index >= 0 && index < len(s.contextMenuItems) && s.contextMenuItems[index].enabled {
+				s.executeContextMenuItem(index)
+			}
+		case pointer.Leave:
+			// Keep current selection.
+		}
+	}
+}
+
+func (s *appState) contextMenuIndexAt(y, menuPadding, itemHeight, separatorHeight int) int {
+	yOffset := menuPadding
+	for i, item := range s.contextMenuItems {
+		if item.action == "" {
+			yOffset += separatorHeight
+			continue
+		}
+		if y >= yOffset && y < yOffset+itemHeight {
+			return i
+		}
+		yOffset += itemHeight
+	}
+	return -1
 }
 
 // drawContextMenu renders the right-click context menu overlay.
@@ -3041,16 +3166,42 @@ func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
 	itemHeight := gtx.Dp(unit.Dp(28))
 	menuPadding := gtx.Dp(unit.Dp(4))
 	itemPadding := gtx.Dp(unit.Dp(12))
-	menuWidth := gtx.Dp(unit.Dp(200))
+	separatorHeight := gtx.Dp(unit.Dp(9))
+	minMenuWidth := gtx.Dp(unit.Dp(200))
+	gapWidth := gtx.Dp(unit.Dp(24))
 
 	// Calculate menu height
 	menuHeight := menuPadding * 2
 	for _, item := range s.contextMenuItems {
 		if item.action == "" {
-			menuHeight += gtx.Dp(unit.Dp(9)) // Separator height
+			menuHeight += separatorHeight // Separator height
 		} else {
 			menuHeight += itemHeight
 		}
+	}
+
+	// Calculate menu width based on content to keep items inside the box
+	menuWidth := minMenuWidth
+	for _, item := range s.contextMenuItems {
+		if item.action == "" {
+			continue
+		}
+		labelWidth := s.measureTextWidth(gtx, item.label)
+		width := itemPadding*2 + labelWidth
+		if item.shortcut != "" {
+			shortcutWidth := s.measureTextWidth(gtx, item.shortcut)
+			width += gapWidth + shortcutWidth
+		}
+		if width > menuWidth {
+			menuWidth = width
+		}
+	}
+	maxMenuWidth := gtx.Constraints.Max.X - gtx.Dp(unit.Dp(16))
+	if maxMenuWidth > 0 && menuWidth > maxMenuWidth {
+		menuWidth = maxMenuWidth
+	}
+	if menuWidth < minMenuWidth {
+		menuWidth = minMenuWidth
 	}
 
 	// Position menu (ensure it stays on screen)
@@ -3061,6 +3212,12 @@ func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
 	}
 	if menuY+menuHeight > gtx.Constraints.Max.Y {
 		menuY = gtx.Constraints.Max.Y - menuHeight
+	}
+	if menuX < 0 {
+		menuX = 0
+	}
+	if menuY < 0 {
+		menuY = 0
 	}
 
 	// Draw menu background with shadow
@@ -3073,6 +3230,9 @@ func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
 	}.Push(gtx.Ops)
 	paint.Fill(gtx.Ops, color.NRGBA{R: 0, G: 0, B: 0, A: 80})
 	shadowRect.Pop()
+
+	menuClip := clip.Rect{Max: image.Pt(menuWidth, menuHeight)}.Push(gtx.Ops)
+	event.Op(gtx.Ops, &s.contextMenuTag)
 
 	// Background
 	bgRect := clip.Rect{Max: image.Pt(menuWidth, menuHeight)}.Push(gtx.Ops)
@@ -3092,11 +3252,12 @@ func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
 		if item.action == "" {
 			// Draw separator
 			sepY := yOffset + gtx.Dp(unit.Dp(4))
-			defer op.Offset(image.Pt(itemPadding, sepY)).Push(gtx.Ops).Pop()
+			sepStack := op.Offset(image.Pt(itemPadding, sepY)).Push(gtx.Ops)
 			sepRect := clip.Rect{Max: image.Pt(menuWidth-itemPadding*2, gtx.Dp(unit.Dp(1)))}.Push(gtx.Ops)
 			paint.Fill(gtx.Ops, separatorColor)
 			sepRect.Pop()
-			yOffset += gtx.Dp(unit.Dp(9))
+			sepStack.Pop()
+			yOffset += separatorHeight
 			continue
 		}
 
@@ -3104,10 +3265,11 @@ func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
 
 		// Draw hover highlight
 		if i == s.contextMenuIndex && item.enabled {
-			defer op.Offset(image.Pt(0, itemY)).Push(gtx.Ops).Pop()
+			hoverStack := op.Offset(image.Pt(0, itemY)).Push(gtx.Ops)
 			hoverRect := clip.Rect{Max: image.Pt(menuWidth, itemHeight)}.Push(gtx.Ops)
 			paint.Fill(gtx.Ops, itemHover)
 			hoverRect.Pop()
+			hoverStack.Pop()
 		}
 
 		// Draw item label
@@ -3137,6 +3299,9 @@ func (s *appState) drawContextMenu(gtx layout.Context) layout.Dimensions {
 
 		yOffset += itemHeight
 	}
+
+	s.handleContextMenuPointer(gtx, menuPadding, itemHeight, separatorHeight)
+	menuClip.Pop()
 
 	return layout.Dimensions{Size: image.Pt(menuWidth, menuHeight)}
 }
@@ -3705,6 +3870,25 @@ func (s *appState) visualSelectionRangeChar() (startLine, startCol, endLine, end
 	}
 	// Selection goes forward
 	return s.visualStartLine, s.visualStartCol, curLine, curCol, true
+}
+
+func (s *appState) selectAll() {
+	buf := s.activeBuffer()
+	lineCount := buf.LineCount()
+	if lineCount <= 0 {
+		return
+	}
+
+	lastLine := lineCount - 1
+	lastCol := utf8.RuneCountInString(buf.Line(lastLine))
+
+	s.visualMode = visualModeChar
+	s.visualStartLine = 0
+	s.visualStartCol = 0
+	buf.SetCursor(lastLine, lastCol)
+	s.mode = modeVisual
+	s.isDragging = false
+	s.status = fmt.Sprintf("Selected %d line(s)", lineCount)
 }
 
 func (s *appState) deleteVisualSelection() {
