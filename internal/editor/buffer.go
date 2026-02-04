@@ -253,6 +253,85 @@ func (b *Buffer) InsertText(text string) {
 	b.markModified()
 }
 
+// ReplaceCharRange replaces the text in the specified character range with new text.
+// The replacement is saved as a single undo step.
+func (b *Buffer) ReplaceCharRange(startLine, startCol, endLine, endCol int, text string) {
+	// Check if buffer is read-only
+	if b.readOnly {
+		return
+	}
+	if len(b.lines) == 0 {
+		b.lines = []string{""}
+	}
+
+	// Normalize range order
+	if startLine > endLine || (startLine == endLine && startCol > endCol) {
+		startLine, endLine = endLine, startLine
+		startCol, endCol = endCol, startCol
+	}
+
+	// Clamp lines
+	if startLine < 0 {
+		startLine = 0
+	}
+	if endLine >= len(b.lines) {
+		endLine = len(b.lines) - 1
+	}
+	if startLine >= len(b.lines) {
+		return
+	}
+
+	// Clamp columns
+	if startCol < 0 {
+		startCol = 0
+	}
+	if endCol < 0 {
+		endCol = 0
+	}
+	startLineLen := runeCount(b.lines[startLine])
+	if startCol > startLineLen {
+		startCol = startLineLen
+	}
+	endLineLen := runeCount(b.lines[endLine])
+	if endCol > endLineLen {
+		endCol = endLineLen
+	}
+
+	// Save state once for the whole replace operation
+	b.saveState("replace char range")
+
+	leftLine := b.lines[startLine]
+	rightLine := b.lines[endLine]
+	left, _ := splitAtRune(leftLine, startCol)
+	_, right := splitAtRune(rightLine, endCol)
+
+	segments := strings.Split(text, "\n")
+	if len(segments) == 1 {
+		newLine := left + segments[0] + right
+		newLines := make([]string, 0, len(b.lines)-(endLine-startLine))
+		newLines = append(newLines, b.lines[:startLine]...)
+		newLines = append(newLines, newLine)
+		newLines = append(newLines, b.lines[endLine+1:]...)
+		b.lines = newLines
+		b.cursor.Line = startLine
+		b.cursor.Col = runeCount(left) + runeCount(segments[0])
+	} else {
+		segments[0] = left + segments[0]
+		segments[len(segments)-1] = segments[len(segments)-1] + right
+		newLines := make([]string, 0, len(b.lines)-(endLine-startLine)+len(segments))
+		newLines = append(newLines, b.lines[:startLine]...)
+		newLines = append(newLines, segments...)
+		newLines = append(newLines, b.lines[endLine+1:]...)
+		b.lines = newLines
+		b.cursor.Line = startLine + len(segments) - 1
+		rightLen := runeCount(right)
+		lastLen := runeCount(segments[len(segments)-1])
+		b.cursor.Col = lastLen - rightLen
+	}
+
+	b.markModified()
+}
+
 // DeleteBackward deletes the rune before the cursor (backspace semantics).
 // When invoked at the start of a line, it merges with the previous line.
 func (b *Buffer) DeleteBackward() bool {

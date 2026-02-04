@@ -292,13 +292,13 @@ type appState struct {
 	settingsModal settingsModalState
 
 	// Mouse support
-	bufferClick      gesture.Click // For left-click detection in buffer area
-	bufferDrag       gesture.Drag  // For drag detection in buffer area
-	rightClickTag    bool          // Tag for right-click detection
-	dragStart        image.Point   // Track drag start position
-	isDragging       bool          // Track if currently dragging
-	lastClickTime    time.Time     // For double-click detection
-	lastClickPos     image.Point   // Position of last click
+	bufferClick   gesture.Click // For left-click detection in buffer area
+	bufferDrag    gesture.Drag  // For drag detection in buffer area
+	rightClickTag bool          // Tag for right-click detection
+	dragStart     image.Point   // Track drag start position
+	isDragging    bool          // Track if currently dragging
+	lastClickTime time.Time     // For double-click detection
+	lastClickPos  image.Point   // Position of last click
 
 	// Context menu
 	contextMenuActive bool // Whether context menu is visible
@@ -1017,8 +1017,11 @@ func (s *appState) drawTabBar(gtx layout.Context) layout.Dimensions {
 	return layout.Dimensions{Size: image.Pt(gtx.Constraints.Max.X, tabHeight)}
 }
 
-func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dimensions {
+func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) (layout.Dimensions, bool) {
 	buf := s.activeBuffer()
+	if buf == nil {
+		return layout.Dimensions{}, false
+	}
 	lines := buf.LineCount()
 	cursorLine := buf.Cursor().Line
 	selStart, selEnd, hasSel := s.visualSelectionRange()
@@ -1094,7 +1097,7 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 	bufferArea.Pop()
 
 	// Process mouse events for click and drag
-	s.handleBufferMouseEvents(gtx, gutterWidth, insetLeft)
+	activated := s.handleBufferMouseEvents(gtx, gutterWidth, insetLeft)
 
 	if showOverlays {
 		overlayLineHeight := s.cachedLineHeight
@@ -1122,7 +1125,7 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 		}
 	}
 
-	return dims
+	return dims, activated
 }
 
 // drawBufferLine renders a single line with syntax highlighting.
@@ -2845,10 +2848,11 @@ func (s *appState) expandedColToOriginalCol(originalText string, expandedCol int
 }
 
 // handleBufferMouseEvents processes mouse events in the buffer area using gesture handlers.
-func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, insetLeft int) {
+func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, insetLeft int) bool {
+	activated := false
 	// Don't handle mouse events in certain modes
 	if s.mode == modeCommand || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeTerminal {
-		return
+		return activated
 	}
 
 	// Debug: show hover/pressed state
@@ -2881,6 +2885,7 @@ func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, inse
 		if pev.Kind == pointer.Press && pev.Buttons.Contain(pointer.ButtonSecondary) {
 			pos := image.Pt(int(pev.Position.X), int(pev.Position.Y))
 			s.showContextMenu(gtx, pos, gutterWidth, insetLeft)
+			activated = true
 		}
 	}
 
@@ -2922,6 +2927,7 @@ func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, inse
 
 			// Reset caret blink on click
 			s.caretReset = true
+			activated = true
 		}
 	}
 
@@ -2940,6 +2946,9 @@ func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, inse
 
 		switch ev.Kind {
 		case pointer.Drag:
+			if !activated {
+				activated = true
+			}
 			if !s.isDragging {
 				// Start visual mode from drag start position
 				startLine, startCol := s.pixelToBufferPos(gtx, s.dragStart.X, s.dragStart.Y, gutterWidth, insetLeft)
@@ -2958,6 +2967,7 @@ func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, inse
 			// Keep visual mode active if selection exists
 		}
 	}
+	return activated
 }
 
 // showContextMenu displays the right-click context menu at the given position.
@@ -3994,10 +4004,8 @@ func (s *appState) pasteClipboard() {
 			return
 		}
 		buf := s.activeBuffer()
-		// Delete the selected range (this positions cursor at startLine, startCol)
-		buf.DeleteCharRange(startLine, startCol, endLine, endCol)
-		// Insert clipboard text at cursor position
-		buf.InsertText(text)
+		// Replace the selected range with clipboard text as a single undo step
+		buf.ReplaceCharRange(startLine, startCol, endLine, endCol, text)
 		s.exitVisualMode()
 		if fromSystem {
 			s.setCursorStatus(fmt.Sprintf("Pasted %d chars from clipboard", len(text)))
@@ -5328,9 +5336,9 @@ func isWideRune(r rune) bool {
 
 // wrapLineSegment represents a segment of a wrapped line
 type wrapLineSegment struct {
-	text     string // The text for this segment
-	runeStart int   // Starting rune index in the original line
-	runeEnd   int   // Ending rune index (exclusive)
+	text      string // The text for this segment
+	runeStart int    // Starting rune index in the original line
+	runeEnd   int    // Ending rune index (exclusive)
 }
 
 // wrapLine splits a line into segments that fit within maxVisualWidth.
