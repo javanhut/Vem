@@ -17,6 +17,7 @@ import (
 	"gioui.org/app"
 	"gioui.org/font"
 	"gioui.org/font/gofont"
+	"gioui.org/gesture"
 	"gioui.org/io/event"
 	"gioui.org/io/key"
 	"gioui.org/io/pointer"
@@ -291,16 +292,18 @@ type appState struct {
 	settingsModal settingsModalState
 
 	// Mouse support
-	bufferPointerTag  bool          // Tag for buffer pointer events
-	dragStart         image.Point   // Track drag start position
-	isDragging        bool          // Track if currently dragging
-	lastClickTime     time.Time     // For double-click detection
-	lastClickPos      image.Point   // Position of last click
+	bufferClick      gesture.Click // For left-click detection in buffer area
+	bufferDrag       gesture.Drag  // For drag detection in buffer area
+	rightClickTag    bool          // Tag for right-click detection
+	dragStart        image.Point   // Track drag start position
+	isDragging       bool          // Track if currently dragging
+	lastClickTime    time.Time     // For double-click detection
+	lastClickPos     image.Point   // Position of last click
 
 	// Context menu
-	contextMenuActive bool          // Whether context menu is visible
-	contextMenuPos    image.Point   // Position of context menu
-	contextMenuIndex  int           // Selected item in context menu
+	contextMenuActive bool // Whether context menu is visible
+	contextMenuPos    image.Point
+	contextMenuIndex  int
 	contextMenuItems  []contextMenuItem
 }
 
@@ -1073,17 +1076,24 @@ func (s *appState) drawBuffer(gtx layout.Context, showOverlays bool) layout.Dime
 
 	// Register for mouse events in the buffer area
 	bufferArea := clip.Rect{Max: gtx.Constraints.Max}.Push(gtx.Ops)
-	event.Op(gtx.Ops, &s.bufferPointerTag)
-	bufferArea.Pop()
 
-	// Process mouse events for click and drag
-	s.handleBufferMouseEvents(gtx, gutterWidth, insetLeft)
+	s.bufferClick.Add(gtx.Ops)
+	s.bufferDrag.Add(gtx.Ops)
+	// Also register for right-click detection (secondary button)
+	event.Op(gtx.Ops, &s.rightClickTag)
 
+	pass := pointer.PassOp{}.Push(gtx.Ops)
 	dims := inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return s.listPosition.Layout(gtx, lines, func(gtx layout.Context, index int) layout.Dimensions {
 			return s.drawBufferLine(gtx, index, cursorLine, cursorCol, selStart, selEnd, hasSel, showOverlays)
 		})
 	})
+	pass.Pop()
+
+	bufferArea.Pop()
+
+	// Process mouse events for click and drag
+	s.handleBufferMouseEvents(gtx, gutterWidth, insetLeft)
 
 	if showOverlays {
 		overlayLineHeight := s.cachedLineHeight
@@ -2833,56 +2843,65 @@ func (s *appState) expandedColToOriginalCol(originalText string, expandedCol int
 	return len(runes)
 }
 
-// handleBufferMouseEvents processes mouse events in the buffer area using pointer filter.
+// handleBufferMouseEvents processes mouse events in the buffer area using gesture handlers.
 func (s *appState) handleBufferMouseEvents(gtx layout.Context, gutterWidth, insetLeft int) {
 	// Don't handle mouse events in certain modes
 	if s.mode == modeCommand || s.mode == modeSearch || s.mode == modeFuzzyFinder || s.mode == modeTerminal {
 		return
 	}
 
-	// Process pointer events using filter
+	// Debug: show hover/pressed state
+	if pointerDebug {
+		if s.bufferClick.Hovered() {
+			s.status = "Mouse: HOVERED"
+		}
+		if s.bufferClick.Pressed() {
+			s.status = "Mouse: PRESSED"
+		}
+	}
+
+	// Process right-click events (for context menu)
 	for {
 		ev, ok := gtx.Source.Event(pointer.Filter{
-			Target: &s.bufferPointerTag,
-			Kinds:  pointer.Press | pointer.Release | pointer.Drag | pointer.Move,
+			Target: &s.rightClickTag,
+			Kinds:  pointer.Press,
 		})
 		if !ok {
 			break
 		}
-
 		pev, ok := ev.(pointer.Event)
 		if !ok {
 			continue
 		}
-
 		if pointerDebug {
-			s.status = fmt.Sprintf("Pointer: %v btn=%v at (%.0f, %.0f)", pev.Kind, pev.Buttons, pev.Position.X, pev.Position.Y)
+			s.status = fmt.Sprintf("RightClick: %v btn=%v at (%.0f, %.0f)", pev.Kind, pev.Buttons, pev.Position.X, pev.Position.Y)
 		}
-
-		s.handlePointerEvent(gtx, pev, gutterWidth, insetLeft)
-	}
-}
-
-// handlePointerEvent processes a pointer event for buffer interaction.
-func (s *appState) handlePointerEvent(gtx layout.Context, ev pointer.Event, gutterWidth, insetLeft int) {
-	pos := image.Pt(int(ev.Position.X), int(ev.Position.Y))
-
-	switch ev.Kind {
-	case pointer.Press:
-		// Check which button was pressed
-		if ev.Buttons.Contain(pointer.ButtonSecondary) {
-			// Right-click: show context menu
+		// Check for secondary button (right-click)
+		if pev.Kind == pointer.Press && pev.Buttons.Contain(pointer.ButtonSecondary) {
+			pos := image.Pt(int(pev.Position.X), int(pev.Position.Y))
 			s.showContextMenu(gtx, pos, gutterWidth, insetLeft)
-			return
+		}
+	}
+
+	// Process click events (left-click via gesture.Click)
+	for {
+		ev, ok := s.bufferClick.Update(gtx.Source)
+		if !ok {
+			break
+		}
+		if pointerDebug {
+			s.status = fmt.Sprintf("Click: %v at (%d, %d)", ev.Kind, ev.Position.X, ev.Position.Y)
 		}
 
-		if ev.Buttons.Contain(pointer.ButtonPrimary) {
+		// Handle left-click
+		if ev.Kind == gesture.KindPress {
 			// Close context menu if open
 			if s.contextMenuActive {
 				s.contextMenuActive = false
-				return
+				continue
 			}
 
+			pos := image.Pt(ev.Position.X, ev.Position.Y)
 			line, col := s.pixelToBufferPos(gtx, pos.X, pos.Y, gutterWidth, insetLeft)
 
 			// Position cursor at click point
@@ -2903,11 +2922,23 @@ func (s *appState) handlePointerEvent(gtx layout.Context, ev pointer.Event, gutt
 			// Reset caret blink on click
 			s.caretReset = true
 		}
+	}
 
-	case pointer.Drag:
-		if ev.Buttons.Contain(pointer.ButtonPrimary) {
-			line, col := s.pixelToBufferPos(gtx, pos.X, pos.Y, gutterWidth, insetLeft)
+	// Process drag events
+	for {
+		ev, ok := s.bufferDrag.Update(gtx.Metric, gtx.Source, gesture.Both)
+		if !ok {
+			break
+		}
+		if pointerDebug {
+			s.status = fmt.Sprintf("Drag: %v at (%.0f, %.0f)", ev.Kind, ev.Position.X, ev.Position.Y)
+		}
 
+		pos := image.Pt(int(ev.Position.X), int(ev.Position.Y))
+		line, col := s.pixelToBufferPos(gtx, pos.X, pos.Y, gutterWidth, insetLeft)
+
+		switch ev.Kind {
+		case pointer.Drag:
 			if !s.isDragging {
 				// Start visual mode from drag start position
 				startLine, startCol := s.pixelToBufferPos(gtx, s.dragStart.X, s.dragStart.Y, gutterWidth, insetLeft)
@@ -2917,15 +2948,14 @@ func (s *appState) handlePointerEvent(gtx layout.Context, ev pointer.Event, gutt
 				s.mode = modeVisual
 				s.isDragging = true
 			}
-
 			// Update cursor to current drag position
 			buf := s.activeBuffer()
 			buf.SetCursor(line, col)
-		}
 
-	case pointer.Release:
-		s.isDragging = false
-		// Keep visual mode active if selection exists
+		case pointer.Release:
+			s.isDragging = false
+			// Keep visual mode active if selection exists
+		}
 	}
 }
 
